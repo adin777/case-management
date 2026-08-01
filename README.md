@@ -1,69 +1,72 @@
 # Case Management
 
-Generic, RTL-first case-management and workflow platform implemented as a modular monolith.
+מערכת Case Management מקומית, בעברית וב־RTL, המבוססת על React, FastAPI ו־SQLite. אין צורך ב־Docker, PostgreSQL, MinIO או Mailpit להפעלה המקומית.
 
-## Architecture
+## התקנה ראשונה ב־Windows
 
-- React 19 + TypeScript + Vite frontend
-- FastAPI + SQLAlchemy 2 + PostgreSQL backend
-- Versioned dynamic forms with typed case-field values
-- JWT authentication and backend-enforced RBAC
-- MinIO object storage and Mailpit development mail server
-
-See `docs/architecture/overview.md` and `docs/adr/` for the design record.
-
-## Prerequisites and startup
-
-Install Docker Desktop, then copy `.env.example` to `.env` and run:
+דרישות: Windows 10/11, Python 3.12 ומעלה, Node.js 22 ומעלה ו־npm.
 
 ```powershell
-docker compose up --build
+cd C:\projects\Case_Management
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
 ```
 
-The API applies Alembic migrations and development seed data on startup. Seed passwords are **development-only**.
+הסקריפט יוצר virtual environment, מתקין dependencies, מריץ Alembic ו־Seed ומתקין את ה־frontend.
 
-| Service | URL |
-|---|---|
-| Web app | http://localhost:3000 |
-| API | http://localhost:8000 |
-| Swagger | http://localhost:8000/docs |
-| MinIO console | http://localhost:9001 |
-| Mailpit | http://localhost:8025 |
-
-Development users: `admin@example.com` / `Admin123!`, `requester@example.com` / `Requester123!`, and `agent@example.com` / `Agent123!`.
-
-Stop with `docker compose down`; remove local development volumes with `docker compose down -v`.
-
-## Development commands
+## הפעלה
 
 ```powershell
-# Backend
-cd apps/api
-python -m venv .venv
-.venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\alembic upgrade head
-.venv\Scripts\pytest
-.venv\Scripts\ruff check .
-.venv\Scripts\mypy app
+powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
+```
 
-# Frontend
-cd apps/web
-npm install
+המערכת תיפתח ב־http://localhost:3000. ה־API זמין ב־http://localhost:8000 ו־Swagger ב־http://localhost:8000/docs.
+
+**Do not open apps/web/index.html directly.** זוהי אפליקציית Vite ויש להפעיל אותה דרך הסקריפט.
+
+עצירה:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\stop-local.ps1
+```
+
+## בסיס הנתונים וגיבוי
+
+הנתונים נשמרים באופן קבוע בקובץ `data\case_management.db`. כאשר המערכת סגורה ניתן לגבות אותה באמצעות העתקת הקובץ למיקום בטוח. ההפעלה אינה מוחקת נתונים.
+
+איפוס מפורש של נתוני Development, עם בקשת אישור:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\reset-development-data.ps1
+```
+
+Migration `0001` הוחלפה בשלב היסוד ב־migration מפורשת וניידת ל־SQLite; אין בסיס נתונים קודם שנדרש לשמר.
+
+## משתמשי Development
+
+- `admin@example.com` / `Admin123!`
+- `requester@example.com` / `Requester123!`
+- `agent@example.com` / `Agent123!`
+
+סיסמאות אלה מיועדות לפיתוח מקומי בלבד.
+
+## בדיקות
+
+```powershell
+cd apps\api
+.\.venv\Scripts\ruff.exe format --check .
+.\.venv\Scripts\ruff.exe check .
+.\.venv\Scripts\mypy.exe app
+.\.venv\Scripts\pytest.exe
+.\.venv\Scripts\alembic.exe upgrade head
+.\.venv\Scripts\alembic.exe check
+
+cd ..\web
 npm run lint
 npm run typecheck
 npm test
 npm run build
 ```
 
-Create a migration with `alembic revision --autogenerate -m "description"`; validate with `alembic upgrade head`.
+PostgreSQL נשאר יעד עתידי אופציונלי: `pip install -e ".[postgres]"`. Docker Compose נשמר עבור deployment מלא, אך אינו חלק מזרימת ההפעלה המקומית.
 
-## Repository layout
-
-- `apps/api`: FastAPI application, migrations, seed and tests
-- `apps/web`: responsive RTL React application
-- `docs`: architecture, product notes and ADRs
-- `infrastructure`: container configuration
-- `scripts`: Windows-friendly operational helpers
-- `.github/workflows`: pull-request CI
-
-Future roadmap: configurable workflow/approvals, automation, notifications, reporting, SLA, and integrations.
+ראו `docs/architecture/overview.md` ו־`docs/adr/` להחלטות הארכיטקטורה.

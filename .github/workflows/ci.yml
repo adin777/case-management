@@ -4,15 +4,8 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env: {POSTGRES_DB: case_management, POSTGRES_USER: case_management, POSTGRES_PASSWORD: case_management_dev}
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U case_management" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://case_management:case_management_dev@localhost:5432/case_management
+      DATABASE_URL: sqlite:///./test-ci.db
       JWT_SECRET: ci-secret
       ENVIRONMENT: development
     steps:
