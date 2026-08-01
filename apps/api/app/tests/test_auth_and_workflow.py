@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app.database.session import SessionLocal
 from app.main import app
-from app.modules.api import TRANSITIONS
-from app.modules.models import CaseStatus
+from app.modules.api import TRANSITIONS, password_hash
+from app.modules.models import CaseStatus, EnvironmentMembership, User
 
 client = TestClient(app)
 
@@ -20,6 +22,52 @@ def test_invalid_login() -> None:
         client.post("/api/auth/login", json={"email": "admin@example.com", "password": "wrong"}).status_code
         == 401
     )
+
+
+def test_inactive_user_cannot_login() -> None:
+    with SessionLocal() as db:
+        user = User(
+            email="inactive@example.com",
+            display_name="Inactive",
+            password_hash=password_hash.hash("Inactive123!"),
+            is_active=False,
+        )
+        db.add(user)
+        db.commit()
+    assert (
+        client.post(
+            "/api/auth/login", json={"email": "inactive@example.com", "password": "Inactive123!"}
+        ).status_code
+        == 401
+    )
+
+
+def test_registration_hashes_password_and_assigns_requester() -> None:
+    response = client.post(
+        "/api/auth/register",
+        json={"display_name": "New Requester", "email": "new.requester@example.com", "password": "Secure123"},
+    )
+    assert response.status_code == 201
+    assert response.json()["access_token"] and response.json()["refresh_token"]
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == "new.requester@example.com"))
+        assert user is not None and user.is_active and not user.is_system_admin
+        assert user.password_hash != "Secure123" and password_hash.verify("Secure123", user.password_hash)
+        membership = db.scalar(select(EnvironmentMembership).where(EnvironmentMembership.user_id == user.id))
+        assert membership is not None
+
+
+def test_registration_rejects_duplicate_and_weak_password() -> None:
+    duplicate = client.post(
+        "/api/auth/register",
+        json={"display_name": "Duplicate", "email": "new.requester@example.com", "password": "Secure123"},
+    )
+    assert duplicate.status_code == 409
+    weak = client.post(
+        "/api/auth/register",
+        json={"display_name": "Weak", "email": "weak@example.com", "password": "password"},
+    )
+    assert weak.status_code == 422
 
 
 def test_anonymous_access_is_blocked() -> None:

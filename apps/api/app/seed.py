@@ -1,3 +1,4 @@
+from pwdlib.exceptions import PwdlibError
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -64,6 +65,15 @@ def run() -> None:
                 )
                 db.add(user)
                 db.flush()
+            else:
+                user.is_active = True
+                user.is_system_admin = is_admin
+                try:
+                    password_is_valid = password_hash.verify(password, user.password_hash)
+                except PwdlibError:
+                    password_is_valid = False
+                if not password_is_valid:
+                    user.password_hash = password_hash.hash(password)
             users[email] = user
         env = db.scalar(select(Environment).where(Environment.code == "IT"))
         if not env:

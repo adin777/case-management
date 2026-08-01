@@ -1,3 +1,5 @@
+import logging
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -35,6 +37,7 @@ from app.modules.models import (
 )
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 oauth = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 password_hash = PasswordHash.recommended()
 DB = Annotated[Session, Depends(get_db)]
@@ -66,6 +69,12 @@ TRANSITIONS = {
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class RegisterIn(BaseModel):
+    display_name: str = Field(min_length=2, max_length=200)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=200)
 
 
 class TokenOut(BaseModel):
@@ -350,6 +359,55 @@ def login(data: LoginIn, db: DB) -> TokenOut:
     return TokenOut(
         access_token=issue(user, "access", timedelta(minutes=settings.access_token_minutes)),
         refresh_token=issue(user, "refresh", timedelta(days=settings.refresh_token_days), token_id),
+    )
+
+
+@router.post("/auth/register", response_model=TokenOut, status_code=201)
+def register(data: RegisterIn, db: DB) -> TokenOut:
+    # TODO: Production registration will use email verification and a one-time password setup link.
+    if not re.search(r"[A-Za-z]", data.password) or not re.search(r"\d", data.password):
+        raise HTTPException(422, "Password must contain at least one letter and one number")
+    if db.scalar(select(User.id).where(func.lower(User.email) == data.email.lower())):
+        raise HTTPException(409, "Unable to register with this email address")
+    user = User(
+        email=data.email.lower(),
+        display_name=data.display_name,
+        password_hash=password_hash.hash(data.password),
+        is_active=True,
+        is_system_admin=False,
+    )
+    db.add(user)
+    db.flush()
+    active_environments = list(db.scalars(select(Environment).where(Environment.is_active.is_(True))))
+    if len(active_environments) == 1:
+        requester_role = db.scalar(select(Role).where(Role.code == "requester"))
+        if requester_role:
+            db.add(
+                EnvironmentMembership(
+                    environment_id=active_environments[0].id,
+                    user_id=user.id,
+                    role_id=requester_role.id,
+                )
+            )
+    else:
+        logger.warning(
+            "New user %s was not assigned automatically: active environment count is %s",
+            user.id,
+            len(active_environments),
+        )
+    audit(db, user, "user", user.id, "registered", after={"auto_membership": len(active_environments) == 1})
+    refresh_id = uuid.uuid4()
+    db.add(
+        RefreshToken(
+            id=refresh_id,
+            user_id=user.id,
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_days),
+        )
+    )
+    db.commit()
+    return TokenOut(
+        access_token=issue(user, "access", timedelta(minutes=settings.access_token_minutes)),
+        refresh_token=issue(user, "refresh", timedelta(days=settings.refresh_token_days), refresh_id),
     )
 
 
