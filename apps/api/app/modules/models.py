@@ -61,9 +61,10 @@ class User(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String(500))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_system_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class Group(Base):
+class Group(TimestampMixin, Base):
     __tablename__ = "groups"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(200), unique=True)
@@ -75,6 +76,8 @@ class GroupMember(Base):
     __tablename__ = "group_members"
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    added_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
 
 
 class Role(Base):
@@ -82,7 +85,34 @@ class Role(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(80), unique=True)
     name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text)
+    scope: Mapped[str] = mapped_column(String(20), default="environment")
     permissions: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    code: Mapped[str] = mapped_column(String(120), primary_key=True)
+    description: Mapped[str | None] = mapped_column(Text)
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    permission_code: Mapped[str] = mapped_column(
+        ForeignKey("permissions.code", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class GroupEnvironmentRole(Base):
+    __tablename__ = "group_environment_roles"
+    environment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("environments.id", ondelete="CASCADE"), primary_key=True
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True
+    )
+    role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id"), primary_key=True)
 
 
 class Environment(TimestampMixin, Base):
@@ -162,6 +192,8 @@ class Case(TimestampMixin, Base):
         Enum(CaseStatus, native_enum=False), default=CaseStatus.submitted
     )
     priority: Mapped[str] = mapped_column(String(30), default="normal")
+    priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("priority_definitions.id"))
+    sub_priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sub_priority_definitions.id"))
     reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
@@ -231,3 +263,82 @@ class CaseNumberCounter(Base):
     __tablename__ = "case_number_counters"
     year: Mapped[int] = mapped_column(Integer, primary_key=True)
     next_value: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class UserFieldDefinition(TimestampMixin, Base):
+    __tablename__ = "user_field_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(80), unique=True)
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str] = mapped_column(String(200))
+    field_type: Mapped[str] = mapped_column(String(40))
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    options_json: Mapped[list | dict] = mapped_column(JSON, default=list)
+    default_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+    validation_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class UserFieldValue(Base):
+    __tablename__ = "user_field_values"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    field_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_field_definitions.id", ondelete="CASCADE"), primary_key=True
+    )
+    value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+
+
+class EnvironmentUserField(Base):
+    __tablename__ = "environment_user_fields"
+    environment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("environments.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_field_definition_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_field_definitions.id", ondelete="CASCADE"), primary_key=True
+    )
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_editable_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_editable_by_environment_admin: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AutomationRule(TimestampMixin, Base):
+    __tablename__ = "automation_rules"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"))
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    trigger_type: Mapped[str] = mapped_column(String(60))
+    conditions_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    actions_json: Mapped[list] = mapped_column(JSON, default=list)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+
+
+class PriorityDefinition(Base):
+    __tablename__ = "priority_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
+    code: Mapped[str] = mapped_column(String(40))
+    label_he: Mapped[str] = mapped_column(String(100))
+    color: Mapped[str] = mapped_column(String(20), default="#64748b")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("environment_id", "code"),)
+
+
+class SubPriorityDefinition(Base):
+    __tablename__ = "sub_priority_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    priority_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("priority_definitions.id", ondelete="CASCADE")
+    )
+    code: Mapped[str] = mapped_column(String(40))
+    label_he: Mapped[str] = mapped_column(String(100))
+    color: Mapped[str] = mapped_column(String(20), default="#64748b")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("priority_id", "code"),)

@@ -4,10 +4,14 @@ $Api = Join-Path $Root "apps\api"
 $Web = Join-Path $Root "apps\web"
 $Python = Join-Path $Api ".venv\Scripts\python.exe"
 if (-not (Test-Path $Python)) { throw "Local environment is missing. Run scripts\setup-local.ps1 first." }
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm was not found in PATH. Install Node.js and run setup-local.ps1." }
+$NodeCommand = Get-Command node -ErrorAction SilentlyContinue
+$Node = if ($NodeCommand) { $NodeCommand.Source } else { Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" }
+if (-not (Test-Path $Node)) { throw "Node.js was not found. Install Node.js and run setup-local.ps1." }
+$Vite = Join-Path $Web "node_modules\vite\bin\vite.js"
+if (-not (Test-Path $Vite)) { throw "Frontend dependencies are missing. Run scripts\setup-local.ps1 first." }
 
 $ApiCommand = "`$Host.UI.RawUI.WindowTitle='Case Management API'; Set-Location '$Api'; & '$Python' -m uvicorn app.main:app --host localhost --port 8000"
-$WebCommand = "`$Host.UI.RawUI.WindowTitle='Case Management Web'; Set-Location '$Web'; npm run dev -- --host localhost --port 3000"
+$WebCommand = "`$Host.UI.RawUI.WindowTitle='Case Management Web - localhost:3000'; Set-Location '$Web'; & '$Node' '$Vite' --host localhost --port 3000"
 $ApiProcess = Start-Process powershell -PassThru -ArgumentList "-NoExit", "-Command", $ApiCommand
 $WebProcess = Start-Process powershell -PassThru -ArgumentList "-NoExit", "-Command", $WebCommand
 @{api=$ApiProcess.Id;web=$WebProcess.Id} | ConvertTo-Json | Set-Content (Join-Path $Root "data\local-processes.json")

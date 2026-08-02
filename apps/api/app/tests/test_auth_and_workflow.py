@@ -109,11 +109,15 @@ def test_complete_case_flow_and_internal_comment_filtering() -> None:
     admin_headers = login_headers("admin@example.com", "Admin123!")
     requester_headers = login_headers("requester@example.com", "Requester123!")
     agent_headers = login_headers("agent@example.com", "Agent123!")
+    envadmin_headers = login_headers("envadmin@example.com", "EnvAdmin123!")
     environment = client.get("/api/environments", headers=requester_headers).json()[0]
     request_type = client.get(
         f"/api/request-types?environment_id={environment['id']}", headers=requester_headers
     ).json()[0]
     form = client.get(f"/api/forms/{request_type['form_version_id']}", headers=requester_headers).json()
+    priority = client.get(
+        f"/api/environments/{environment['id']}/priorities", headers=requester_headers
+    ).json()[1]
     values = []
     for field in form["fields"]:
         value = "Headquarters"
@@ -128,6 +132,7 @@ def test_complete_case_flow_and_internal_comment_filtering() -> None:
             "request_type_id": request_type["id"],
             "title": "Integration test request",
             "description": "Persistent SQLite case",
+            "priority_id": priority["id"],
             "values": values,
         },
     )
@@ -141,7 +146,7 @@ def test_complete_case_flow_and_internal_comment_filtering() -> None:
     agent = next(user for user in users if user["email"] == "agent@example.com")
     assigned = client.post(
         f"/api/cases/{case['id']}/assign",
-        headers=agent_headers,
+        headers=envadmin_headers,
         json={"assignee_id": agent["id"], "version": case["version"]},
     )
     assert assigned.status_code == 200
@@ -151,18 +156,23 @@ def test_complete_case_flow_and_internal_comment_filtering() -> None:
         json={"status": "in_progress"},
     )
     assert transitioned.status_code == 200
-    assert (
-        client.post(
-            f"/api/cases/{case['id']}/comments",
-            headers=agent_headers,
-            json={"body": "Internal diagnostic", "visibility": "internal"},
-        ).status_code
-        == 201
-    )
+    assert client.post(
+        f"/api/cases/{case['id']}/manager-comments",
+        headers=agent_headers,
+        json={"body": "Internal diagnostic"},
+    ).status_code == 403
+    assert client.post(
+        f"/api/cases/{case['id']}/manager-comments",
+        headers=envadmin_headers,
+        json={"body": "Manager diagnostic"},
+    ).status_code == 201
     requester_detail = client.get(f"/api/cases/{case['id']}", headers=requester_headers).json()
     assert all(comment["visibility"] == "public" for comment in requester_detail["comments"])
-    agent_detail = client.get(f"/api/cases/{case['id']}", headers=agent_headers).json()
-    assert any(comment["visibility"] == "internal" for comment in agent_detail["comments"])
+    assert client.get(f"/api/cases/{case['id']}/manager-comments", headers=agent_headers).status_code == 403
+    manager_comments = client.get(
+        f"/api/cases/{case['id']}/manager-comments", headers=envadmin_headers
+    ).json()
+    assert manager_comments[0]["body"] == "Manager diagnostic"
 
 
 def test_published_form_is_immutable_and_can_be_cloned() -> None:

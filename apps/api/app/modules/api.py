@@ -29,9 +29,14 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    GroupEnvironmentRole,
+    GroupMember,
+    PriorityDefinition,
     RefreshToken,
     RequestType,
     Role,
+    RolePermission,
+    SubPriorityDefinition,
     User,
     Visibility,
 )
@@ -42,17 +47,26 @@ oauth = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 password_hash = PasswordHash.recommended()
 DB = Annotated[Session, Depends(get_db)]
 ALL_PERMISSIONS = [
+    "system.users.read", "system.users.create", "system.users.update", "system.users.disable",
+    "system.users.reset_password", "system.groups.read", "system.groups.manage", "system.roles.read",
+    "system.roles.manage", "system.fields.read", "system.fields.manage", "system.environments.create",
+    "system.environments.manage",
     "environment.read",
     "environment.manage",
+    "environment.users.manage", "environment.groups.manage", "environment.fields.manage",
+    "environment.request_types.manage", "environment.forms.manage", "environment.rules.manage",
+    "environment.audit.read",
     "request_type.read",
     "request_type.manage",
     "case.create",
-    "case.read",
+    "case.read", "case.read_own", "case.read_participating", "case.read_environment",
     "case.update",
     "case.assign",
+    "case.change_status",
     "case.comment",
     "case.internal_comment",
     "case.manage_participants",
+    "comment.public.read", "comment.public.create", "comment.manager.read", "comment.manager.create",
 ]
 TRANSITIONS = {
     CaseStatus.draft: {CaseStatus.submitted, CaseStatus.cancelled},
@@ -167,8 +181,11 @@ class CaseIn(BaseModel):
     environment_id: uuid.UUID
     request_type_id: uuid.UUID
     title: str = Field(min_length=3, max_length=300)
-    description: str | None = None
+    description: str = Field(min_length=1)
     priority: str = "normal"
+    priority_id: uuid.UUID
+    sub_priority_id: uuid.UUID | None = None
+    participant_ids: list[uuid.UUID] = Field(default_factory=list)
     values: list[ValueIn] = Field(default_factory=list)
 
 
@@ -204,6 +221,8 @@ class CaseOut(BaseModel):
     description: str | None
     status: CaseStatus
     priority: str
+    priority_id: uuid.UUID | None
+    sub_priority_id: uuid.UUID | None
     reporter_id: uuid.UUID
     requester_id: uuid.UUID
     assignee_id: uuid.UUID | None
@@ -211,6 +230,7 @@ class CaseOut(BaseModel):
     version: int
     comments: list[CommentOut] = Field(default_factory=list)
     values: list[CaseValueOut] = Field(default_factory=list)
+    permissions: dict[str, bool] = Field(default_factory=dict)
     model_config = {"from_attributes": True}
 
 
@@ -251,7 +271,7 @@ class CommentIn(BaseModel):
 
 class ParticipantIn(BaseModel):
     user_id: uuid.UUID
-    participant_type: str = Field(pattern="^(watcher|mentioned|collaborator)$")
+    participant_type: str = Field(default="participant", pattern="^(participant|watcher|collaborator)$")
 
 
 class TransitionIn(BaseModel):
@@ -289,17 +309,22 @@ Current = Annotated[User, Depends(current_user)]
 def permissions(db: Session, user: User, environment_id: uuid.UUID) -> set[str]:
     if user.is_system_admin:
         return set(ALL_PERMISSIONS)
-    return set(
-        db.scalars(
-            select(Role.permissions)
-            .join(EnvironmentMembership, EnvironmentMembership.role_id == Role.id)
-            .where(
-                EnvironmentMembership.environment_id == environment_id,
-                EnvironmentMembership.user_id == user.id,
-            )
-        ).one_or_none()
-        or []
-    )
+    role_ids = set(db.scalars(select(EnvironmentMembership.role_id).where(
+        EnvironmentMembership.environment_id == environment_id,
+        EnvironmentMembership.user_id == user.id,
+    )))
+    group_ids = select(GroupMember.group_id).where(GroupMember.user_id == user.id)
+    role_ids.update(db.scalars(select(GroupEnvironmentRole.role_id).where(
+        GroupEnvironmentRole.environment_id == environment_id,
+        GroupEnvironmentRole.group_id.in_(group_ids),
+    )))
+    result: set[str] = set()
+    for role in db.scalars(select(Role).where(Role.id.in_(role_ids))):
+        result.update(role.permissions or [])
+    result.update(db.scalars(select(RolePermission.permission_code).where(
+        RolePermission.role_id.in_(role_ids)
+    )))
+    return result
 
 
 def require(db: Session, user: User, env: uuid.UUID, permission: str) -> None:
@@ -336,7 +361,9 @@ def case_access(db: Session, user: User, item: Case) -> None:
         or item.reporter_id == user.id
     ):
         return
-    participant = db.get(CaseParticipant, (item.id, user.id, "collaborator"))
+    participant = db.scalar(select(CaseParticipant).where(
+        CaseParticipant.case_id == item.id, CaseParticipant.user_id == user.id
+    ))
     if participant:
         return
     raise HTTPException(403, "Case is not visible to this user")
@@ -347,6 +374,7 @@ def login(data: LoginIn, db: DB) -> TokenOut:
     user = db.scalar(select(User).where(func.lower(User.email) == data.email.lower()))
     if not user or not password_hash.verify(data.password, user.password_hash) or not user.is_active:
         raise HTTPException(401, "Invalid credentials")
+    user.last_login_at = datetime.now(UTC)
     token_id = uuid.uuid4()
     db.add(
         RefreshToken(
@@ -749,6 +777,14 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     form = db.get(FormDefinition, rt.form_version_id)
     if not form:
         raise HTTPException(409, "Published form no longer exists")
+    if data.priority_id:
+        priority = db.get(PriorityDefinition, data.priority_id)
+        if not priority or priority.environment_id != data.environment_id or not priority.is_active:
+            raise HTTPException(422, "Priority does not belong to the selected environment")
+    if data.sub_priority_id:
+        sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
+        if not sub_priority or sub_priority.priority_id != data.priority_id or not sub_priority.is_active:
+            raise HTTPException(422, "Sub-priority does not belong to the selected priority")
     provided = {v.field_definition_id: v.value for v in data.values}
     missing = [f.label_he for f in form.fields if f.is_required and provided.get(f.id) in (None, "")]
     if missing:
@@ -767,11 +803,16 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         form_definition_id=form.id,
         reporter_id=user.id,
         requester_id=user.id,
-        **data.model_dump(exclude={"values"}),
+        **data.model_dump(exclude={"values", "participant_ids"}),
     )
     db.add(item)
     db.flush()
     item.values = [typed_value(item.id, f, provided.get(f.id)) for f in form.fields if f.id in provided]
+    for participant_id in set(data.participant_ids):
+        participant_user = db.get(User, participant_id)
+        if participant_id != user.id and participant_user:
+            db.add(CaseParticipant(case_id=item.id, user_id=participant_id,
+                                   participant_type="participant", added_by=user.id))
     audit(db, user, "case", item.id, "created", after={"status": item.status.value})
     db.commit()
     return item
@@ -819,10 +860,21 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
         c
         for c in item.comments
         if c.visibility == Visibility.public
-        or "case.internal_comment" in permissions(db, user, item.environment_id)
+        or "comment.manager.read" in permissions(db, user, item.environment_id)
     ]
+    granted = permissions(db, user, item.environment_id)
     return CaseOut.model_validate(item).model_copy(
-        update={"comments": [CommentOut.model_validate(c) for c in visible_comments]}
+        update={
+            "comments": [CommentOut.model_validate(c) for c in visible_comments],
+            "permissions": {
+                "can_edit": "case.update" in granted,
+                "can_assign": "case.assign" in granted,
+                "can_change_status": "case.change_status" in granted or "case.update" in granted,
+                "can_manage_participants": "case.manage_participants" in granted,
+                "can_read_manager_comments": "comment.manager.read" in granted,
+                "can_create_manager_comments": "comment.manager.create" in granted,
+            },
+        }
     )
 
 
