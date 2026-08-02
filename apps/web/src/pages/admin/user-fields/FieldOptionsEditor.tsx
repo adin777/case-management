@@ -1,0 +1,3 @@
+import { Chip, Stack, TextField, Typography } from '@mui/material';
+import { normalizeOptionLabels } from './fieldValidation';
+export function FieldOptionsEditor({ value, onChange, error }: { value: string; onChange: (value: string) => void; error?: string }) { const options = normalizeOptionLabels(value); return <Stack spacing={1}><TextField label="ערכים לבחירה" value={value} onChange={(event) => onChange(event.target.value)} error={Boolean(error)} helperText={error || 'יש להפריד ערכים בפסיקים; רווחים, ערכים ריקים וכפילויות יוסרו'} multiline /><Stack direction="row" gap={.5} flexWrap="wrap">{options.map((option) => <Chip key={option} label={option} />)}</Stack>{options.length > 0 && <Typography variant="caption">{options.length} אפשרויות נפרדות</Typography>}</Stack>; }

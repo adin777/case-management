@@ -1,8 +1,9 @@
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 
 from app.modules.api import DB, Current, audit, case_access, password_hash, require
@@ -28,6 +29,7 @@ from app.modules.models import (
 )
 
 router = APIRouter(prefix="/api", tags=["governance"])
+logger = logging.getLogger(__name__)
 
 
 class UserCreate(BaseModel):
@@ -55,6 +57,19 @@ class GroupIn(BaseModel):
     description: str | None = None
     is_active: bool = True
 
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("יש להזין שם קבוצה הכולל לפחות שני תווים")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
 
 class GroupMemberIn(BaseModel):
     user_id: uuid.UUID
@@ -73,19 +88,53 @@ class RoleIn(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
 
+class UserFieldOptionIn(BaseModel):
+    value: str = Field(min_length=1, max_length=100)
+    label_he: str = Field(min_length=1, max_length=200)
+    label_en: str = ""
+    is_active: bool = True
+    sort_order: int = 0
+
+
 class UserFieldIn(BaseModel):
     key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    label_he: str
-    label_en: str
+    label_he: str = Field(min_length=1)
+    label_en: str = ""
     field_type: str = Field(
         pattern="^(short_text|long_text|number|date|boolean|single_select|multi_select|user|email|phone)$"
     )
     is_required: bool = False
     is_active: bool = True
-    options_json: list | dict = Field(default_factory=list)
+    options_json: list[UserFieldOptionIn] = Field(default_factory=list)
     default_value_json: Any = None
     validation_json: dict = Field(default_factory=dict)
     sort_order: int = 0
+    environment_ids: list[uuid.UUID] = Field(default_factory=list)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("label_he", "label_en")
+    @classmethod
+    def normalize_labels(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "UserFieldIn":
+        if self.field_type == "single_select" and len(self.options_json) < 1:
+            raise ValueError("יש להזין לפחות ערך אחד עבור שדה בחירה")
+        if self.field_type == "multi_select" and len(self.options_json) < 2:
+            raise ValueError("יש להזין לפחות שני ערכים עבור שדה בחירה מרובה")
+        if self.field_type not in {"single_select", "multi_select"}:
+            self.options_json = []
+        if not self.label_en:
+            self.label_en = self.label_he
+        values = [option.value for option in self.options_json]
+        if len(values) != len(set(values)):
+            raise ValueError("ערכי הבחירה חייבים להיות ייחודיים")
+        return self
 
 
 class EnvironmentFieldIn(BaseModel):
@@ -132,7 +181,9 @@ class AutomationRuleIn(BaseModel):
     name: str
     description: str | None = None
     is_active: bool = True
-    trigger_type: str = Field(pattern="^(case_created|case_status_changed|case_priority_changed|participant_added)$")
+    trigger_type: str = Field(
+        pattern="^(case_created|case_status_changed|case_priority_changed|participant_added)$"
+    )
     conditions_json: dict = Field(default_factory=dict)
     actions_json: list[dict[str, Any]] = Field(default_factory=list)
     priority: int = 0
@@ -178,9 +229,7 @@ def list_users(
 ) -> list[dict[str, Any]]:
     query = select(User).order_by(User.display_name)
     if search:
-        query = query.where(
-            or_(User.display_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%"))
-        )
+        query = query.where(or_(User.display_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%")))
     if environment_id and not user.is_system_admin:
         require(db, user, environment_id, "environment.users.manage")
         query = query.join(EnvironmentMembership).where(
@@ -300,12 +349,27 @@ def list_groups(db: DB, user: Current) -> list[dict[str, Any]]:
 @router.post("/groups", status_code=201)
 def create_group(data: GroupIn, db: DB, user: Current) -> dict[str, Any]:
     system_admin(user)
-    item = Group(**data.model_dump())
-    db.add(item)
-    db.flush()
-    audit(db, user, "group", item.id, "created")
-    db.commit()
-    return {"id": item.id, **data.model_dump(), "member_count": 0}
+    if db.scalar(select(Group.id).where(func.lower(Group.name) == data.name.lower())):
+        raise HTTPException(409, "כבר קיימת קבוצת משתמשים בשם זה")
+    try:
+        item = Group(**data.model_dump())
+        db.add(item)
+        db.flush()
+        audit(db, user, "group", item.id, "created")
+        db.commit()
+        return {
+            "id": item.id,
+            "name": item.name,
+            "description": item.description,
+            "is_active": item.is_active,
+            "member_count": 0,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error while creating user group")
+        db.rollback()
+        raise
 
 
 @router.get("/groups/{group_id}")
@@ -315,10 +379,17 @@ def get_group(group_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     if not item:
         raise HTTPException(404, "Group not found")
     members = db.execute(
-        select(User.id, User.display_name, User.email).join(GroupMember).where(GroupMember.group_id == group_id)
+        select(User.id, User.display_name, User.email)
+        .join(GroupMember)
+        .where(GroupMember.group_id == group_id)
     ).all()
-    return {"id": item.id, "name": item.name, "description": item.description, "is_active": item.is_active,
-            "members": [{"id": r[0], "display_name": r[1], "email": r[2]} for r in members]}
+    return {
+        "id": item.id,
+        "name": item.name,
+        "description": item.description,
+        "is_active": item.is_active,
+        "members": [{"id": r[0], "display_name": r[1], "email": r[2]} for r in members],
+    }
 
 
 @router.patch("/groups/{group_id}")
@@ -377,13 +448,23 @@ def list_permissions(db: DB, user: Current) -> list[dict[str, Any]]:
 @router.get("/roles")
 def list_roles(db: DB, user: Current) -> list[dict[str, Any]]:
     system_admin(user)
-    return [{"id": r.id, "code": r.code, "name": r.name, "description": r.description,
-             "scope": r.scope, "permissions": sorted(permissions_for_role(db, r))}
-            for r in db.scalars(select(Role).order_by(Role.name))]
+    return [
+        {
+            "id": r.id,
+            "code": r.code,
+            "name": r.name,
+            "description": r.description,
+            "scope": r.scope,
+            "permissions": sorted(permissions_for_role(db, r)),
+        }
+        for r in db.scalars(select(Role).order_by(Role.name))
+    ]
 
 
 def permissions_for_role(db: DB, role: Role) -> set[str]:
-    normalized = set(db.scalars(select(RolePermission.permission_code).where(RolePermission.role_id == role.id)))
+    normalized = set(
+        db.scalars(select(RolePermission.permission_code).where(RolePermission.role_id == role.id))
+    )
     return normalized | set(role.permissions or [])
 
 
@@ -393,8 +474,13 @@ def create_role(data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
     unknown = set(data.permissions) - set(db.scalars(select(Permission.code)))
     if unknown:
         raise HTTPException(422, f"Unknown permissions: {', '.join(sorted(unknown))}")
-    item = Role(code=data.code, name=data.name, description=data.description, scope=data.scope,
-                permissions=data.permissions)
+    item = Role(
+        code=data.code,
+        name=data.name,
+        description=data.description,
+        scope=data.scope,
+        permissions=data.permissions,
+    )
     db.add(item)
     db.flush()
     for code in data.permissions:
@@ -410,8 +496,14 @@ def get_role(role_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     item = db.get(Role, role_id)
     if not item:
         raise HTTPException(404, "Role not found")
-    return {"id": item.id, "code": item.code, "name": item.name, "description": item.description,
-            "scope": item.scope, "permissions": sorted(permissions_for_role(db, item))}
+    return {
+        "id": item.id,
+        "code": item.code,
+        "name": item.name,
+        "description": item.description,
+        "scope": item.scope,
+        "permissions": sorted(permissions_for_role(db, item)),
+    }
 
 
 @router.patch("/roles/{role_id}")
@@ -421,7 +513,11 @@ def update_role(role_id: uuid.UUID, data: RoleIn, db: DB, user: Current) -> dict
     if not item:
         raise HTTPException(404, "Role not found")
     item.code, item.name, item.description, item.scope, item.permissions = (
-        data.code, data.name, data.description, data.scope, data.permissions
+        data.code,
+        data.name,
+        data.description,
+        data.scope,
+        data.permissions,
     )
     db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
     for code in data.permissions:
@@ -432,28 +528,82 @@ def update_role(role_id: uuid.UUID, data: RoleIn, db: DB, user: Current) -> dict
 
 
 def user_field_dict(item: UserFieldDefinition) -> dict[str, Any]:
-    return {"id": item.id, "key": item.key, "label_he": item.label_he, "label_en": item.label_en,
-            "field_type": item.field_type, "is_required": item.is_required, "is_active": item.is_active,
-            "options_json": item.options_json, "default_value_json": item.default_value_json,
-            "validation_json": item.validation_json, "sort_order": item.sort_order}
+    return {
+        "id": item.id,
+        "key": item.key,
+        "label_he": item.label_he,
+        "label_en": item.label_en,
+        "field_type": item.field_type,
+        "is_required": item.is_required,
+        "is_active": item.is_active,
+        "options_json": item.options_json,
+        "default_value_json": item.default_value_json,
+        "validation_json": item.validation_json,
+        "sort_order": item.sort_order,
+    }
+
+
+def validate_environments(db: DB, environment_ids: list[uuid.UUID]) -> list[Environment]:
+    unique_ids = list(dict.fromkeys(environment_ids))
+    environments = list(db.scalars(select(Environment).where(Environment.id.in_(unique_ids))))
+    found = {item.id for item in environments}
+    missing = [str(item) for item in unique_ids if item not in found]
+    inactive = [item.name_he for item in environments if not item.is_active]
+    if missing:
+        raise HTTPException(
+            422, {"field": "environment_ids", "message": f"הסביבות הבאות אינן קיימות: {', '.join(missing)}"}
+        )
+    if inactive:
+        raise HTTPException(
+            422,
+            {
+                "field": "environment_ids",
+                "message": f"לא ניתן לשייך שדה לסביבה לא פעילה: {', '.join(inactive)}",
+            },
+        )
+    return environments
 
 
 @router.get("/user-fields")
 def list_user_fields(db: DB, user: Current) -> list[dict[str, Any]]:
     system_admin(user)
-    return [user_field_dict(item) for item in db.scalars(
-        select(UserFieldDefinition).order_by(UserFieldDefinition.sort_order))]
+    result = []
+    for item in db.scalars(select(UserFieldDefinition).order_by(UserFieldDefinition.sort_order)):
+        environment_ids = list(
+            db.scalars(
+                select(EnvironmentUserField.environment_id).where(
+                    EnvironmentUserField.user_field_definition_id == item.id
+                )
+            )
+        )
+        result.append({**user_field_dict(item), "environment_ids": environment_ids})
+    return result
 
 
 @router.post("/user-fields", status_code=201)
 def create_user_field(data: UserFieldIn, db: DB, user: Current) -> dict[str, Any]:
     system_admin(user)
-    item = UserFieldDefinition(**data.model_dump())
+    environments = validate_environments(db, data.environment_ids)
+    payload = data.model_dump(exclude={"environment_ids"})
+    payload["options_json"] = [option.model_dump() for option in data.options_json]
+    item = UserFieldDefinition(**payload)
     db.add(item)
     db.flush()
+    for environment in environments:
+        db.add(
+            EnvironmentUserField(
+                environment_id=environment.id,
+                user_field_definition_id=item.id,
+                is_visible=True,
+                is_required=False,
+                is_editable_by_user=False,
+                is_editable_by_environment_admin=True,
+                sort_order=item.sort_order,
+            )
+        )
     audit(db, user, "user_field", item.id, "created")
     db.commit()
-    return user_field_dict(item)
+    return {**user_field_dict(item), "environment_ids": [environment.id for environment in environments]}
 
 
 @router.patch("/user-fields/{field_id}")
@@ -462,24 +612,57 @@ def update_user_field(field_id: uuid.UUID, data: UserFieldIn, db: DB, user: Curr
     item = db.get(UserFieldDefinition, field_id)
     if not item:
         raise HTTPException(404, "User field not found")
-    for key, value in data.model_dump().items():
+    if item.field_type != data.field_type and db.scalar(
+        select(UserFieldValue.user_id).where(UserFieldValue.field_id == field_id).limit(1)
+    ):
+        raise HTTPException(409, "לא ניתן לשנות סוג שדה לאחר שנשמרו בו ערכים")
+    environments = validate_environments(db, data.environment_ids)
+    payload = data.model_dump(exclude={"environment_ids"})
+    payload["options_json"] = [option.model_dump() for option in data.options_json]
+    for key, value in payload.items():
         setattr(item, key, value)
+    selected_ids = {environment.id for environment in environments}
+    existing = {
+        row.environment_id: row
+        for row in db.scalars(
+            select(EnvironmentUserField).where(EnvironmentUserField.user_field_definition_id == field_id)
+        )
+    }
+    for environment_id, row in existing.items():
+        if environment_id not in selected_ids:
+            db.delete(row)
+    for environment in environments:
+        if environment.id not in existing:
+            db.add(
+                EnvironmentUserField(
+                    environment_id=environment.id,
+                    user_field_definition_id=item.id,
+                    is_visible=True,
+                    is_required=False,
+                    is_editable_by_user=False,
+                    is_editable_by_environment_admin=True,
+                    sort_order=item.sort_order,
+                )
+            )
     audit(db, user, "user_field", item.id, "updated")
     db.commit()
-    return user_field_dict(item)
+    return {**user_field_dict(item), "environment_ids": list(selected_ids)}
 
 
 @router.get("/users/{user_id}/field-values")
 def field_values(user_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     if not user.is_system_admin and user.id != user_id:
         raise HTTPException(403, "Not permitted")
-    return {str(row.field_id): row.value_json for row in db.scalars(
-        select(UserFieldValue).where(UserFieldValue.user_id == user_id)
-    )}
+    return {
+        str(row.field_id): row.value_json
+        for row in db.scalars(select(UserFieldValue).where(UserFieldValue.user_id == user_id))
+    }
 
 
 @router.put("/users/{user_id}/field-values")
-def save_field_values(user_id: uuid.UUID, values: dict[uuid.UUID, Any], db: DB, user: Current) -> dict[str, bool]:
+def save_field_values(
+    user_id: uuid.UUID, values: dict[uuid.UUID, Any], db: DB, user: Current
+) -> dict[str, bool]:
     if not user.is_system_admin and user.id != user_id:
         raise HTTPException(403, "Not permitted")
     for field_id, value in values.items():
@@ -491,26 +674,41 @@ def save_field_values(user_id: uuid.UUID, values: dict[uuid.UUID, Any], db: DB, 
 @router.get("/environments/{environment_id}/user-fields")
 def environment_fields(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.fields.manage")
-    selected = {row.user_field_definition_id: row for row in db.scalars(
-        select(EnvironmentUserField).where(EnvironmentUserField.environment_id == environment_id)
-    )}
+    selected = {
+        row.user_field_definition_id: row
+        for row in db.scalars(
+            select(EnvironmentUserField).where(EnvironmentUserField.environment_id == environment_id)
+        )
+    }
     result = []
-    for field in db.scalars(select(UserFieldDefinition).where(
-        UserFieldDefinition.is_active.is_(True)).order_by(UserFieldDefinition.sort_order)):
+    for field in db.scalars(
+        select(UserFieldDefinition)
+        .where(UserFieldDefinition.is_active.is_(True))
+        .order_by(UserFieldDefinition.sort_order)
+    ):
         selection = selected.get(field.id)
-        result.append({"definition": user_field_dict(field), "selection": None if not selection else {
-            "user_field_definition_id": selection.user_field_definition_id,
-            "is_visible": selection.is_visible, "is_required": selection.is_required,
-            "is_editable_by_user": selection.is_editable_by_user,
-            "is_editable_by_environment_admin": selection.is_editable_by_environment_admin,
-            "sort_order": selection.sort_order,
-        }})
+        result.append(
+            {
+                "definition": user_field_dict(field),
+                "selection": None
+                if not selection
+                else {
+                    "user_field_definition_id": selection.user_field_definition_id,
+                    "is_visible": selection.is_visible,
+                    "is_required": selection.is_required,
+                    "is_editable_by_user": selection.is_editable_by_user,
+                    "is_editable_by_environment_admin": selection.is_editable_by_environment_admin,
+                    "sort_order": selection.sort_order,
+                },
+            }
+        )
     return result
 
 
 @router.put("/environments/{environment_id}/user-fields")
-def set_environment_fields(environment_id: uuid.UUID, rows: list[EnvironmentFieldIn], db: DB,
-                           user: Current) -> list[dict[str, Any]]:
+def set_environment_fields(
+    environment_id: uuid.UUID, rows: list[EnvironmentFieldIn], db: DB, user: Current
+) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.fields.manage")
     db.execute(delete(EnvironmentUserField).where(EnvironmentUserField.environment_id == environment_id))
     for row in rows:
@@ -523,19 +721,31 @@ def set_environment_fields(environment_id: uuid.UUID, rows: list[EnvironmentFiel
 @router.get("/environments/{environment_id}/memberships")
 def list_memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.users.manage")
-    rows = db.execute(select(EnvironmentMembership, User, Group, Role)
+    rows = db.execute(
+        select(EnvironmentMembership, User, Group, Role)
         .outerjoin(User, EnvironmentMembership.user_id == User.id)
         .outerjoin(Group, EnvironmentMembership.group_id == Group.id)
         .join(Role, EnvironmentMembership.role_id == Role.id)
-        .where(EnvironmentMembership.environment_id == environment_id)).all()
-    return [{"id": m.id, "user_id": m.user_id, "user_name": u.display_name if u else None,
-             "group_id": m.group_id, "group_name": g.name if g else None,
-             "role_id": m.role_id, "role_name": r.name} for m, u, g, r in rows]
+        .where(EnvironmentMembership.environment_id == environment_id)
+    ).all()
+    return [
+        {
+            "id": m.id,
+            "user_id": m.user_id,
+            "user_name": u.display_name if u else None,
+            "group_id": m.group_id,
+            "group_name": g.name if g else None,
+            "role_id": m.role_id,
+            "role_name": r.name,
+        }
+        for m, u, g, r in rows
+    ]
 
 
 @router.post("/environments/{environment_id}/memberships", status_code=201)
-def create_membership(environment_id: uuid.UUID, data: MembershipCreate, db: DB,
-                      user: Current) -> dict[str, Any]:
+def create_membership(
+    environment_id: uuid.UUID, data: MembershipCreate, db: DB, user: Current
+) -> dict[str, Any]:
     require(db, user, environment_id, "environment.users.manage")
     if bool(data.user_id) == bool(data.group_id):
         raise HTTPException(422, "Exactly one of user_id or group_id is required")
@@ -548,8 +758,9 @@ def create_membership(environment_id: uuid.UUID, data: MembershipCreate, db: DB,
 
 
 @router.patch("/environments/{environment_id}/memberships/{membership_id}")
-def update_membership(environment_id: uuid.UUID, membership_id: uuid.UUID, data: MembershipPatch,
-                      db: DB, user: Current) -> dict[str, bool]:
+def update_membership(
+    environment_id: uuid.UUID, membership_id: uuid.UUID, data: MembershipPatch, db: DB, user: Current
+) -> dict[str, bool]:
     require(db, user, environment_id, "environment.users.manage")
     item = db.get(EnvironmentMembership, membership_id)
     if not item or item.environment_id != environment_id:
@@ -575,22 +786,45 @@ def remove_membership(environment_id: uuid.UUID, membership_id: uuid.UUID, db: D
 def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.read")
     result = []
-    for row in db.scalars(select(PriorityDefinition).where(
-        PriorityDefinition.environment_id == environment_id).order_by(PriorityDefinition.sort_order)):
-        children = list(db.scalars(select(SubPriorityDefinition).where(
-            SubPriorityDefinition.priority_id == row.id).order_by(SubPriorityDefinition.sort_order)))
-        result.append({"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
-                       "sort_order": row.sort_order, "is_active": row.is_active,
-                       "sub_priorities": [{"id": child.id, "priority_id": child.priority_id,
-                           "code": child.code, "label_he": child.label_he, "color": child.color,
-                           "sort_order": child.sort_order, "is_active": child.is_active}
-                           for child in children]})
+    for row in db.scalars(
+        select(PriorityDefinition)
+        .where(PriorityDefinition.environment_id == environment_id)
+        .order_by(PriorityDefinition.sort_order)
+    ):
+        children = list(
+            db.scalars(
+                select(SubPriorityDefinition)
+                .where(SubPriorityDefinition.priority_id == row.id)
+                .order_by(SubPriorityDefinition.sort_order)
+            )
+        )
+        result.append(
+            {
+                "id": row.id,
+                "code": row.code,
+                "label_he": row.label_he,
+                "color": row.color,
+                "sort_order": row.sort_order,
+                "is_active": row.is_active,
+                "sub_priorities": [
+                    {
+                        "id": child.id,
+                        "priority_id": child.priority_id,
+                        "code": child.code,
+                        "label_he": child.label_he,
+                        "color": child.color,
+                        "sort_order": child.sort_order,
+                        "is_active": child.is_active,
+                    }
+                    for child in children
+                ],
+            }
+        )
     return result
 
 
 @router.post("/environments/{environment_id}/priorities", status_code=201, response_model=None)
-def create_priority(environment_id: uuid.UUID, data: PriorityIn, db: DB,
-                    user: Current) -> PriorityDefinition:
+def create_priority(environment_id: uuid.UUID, data: PriorityIn, db: DB, user: Current) -> PriorityDefinition:
     require(db, user, environment_id, "environment.manage")
     item = PriorityDefinition(environment_id=environment_id, **data.model_dump())
     db.add(item)
@@ -599,8 +833,9 @@ def create_priority(environment_id: uuid.UUID, data: PriorityIn, db: DB,
 
 
 @router.patch("/environments/{environment_id}/priorities/{priority_id}", response_model=None)
-def update_priority(environment_id: uuid.UUID, priority_id: uuid.UUID, data: PriorityIn,
-                    db: DB, user: Current) -> PriorityDefinition:
+def update_priority(
+    environment_id: uuid.UUID, priority_id: uuid.UUID, data: PriorityIn, db: DB, user: Current
+) -> PriorityDefinition:
     require(db, user, environment_id, "environment.manage")
     item = db.get(PriorityDefinition, priority_id)
     if not item or item.environment_id != environment_id:
@@ -612,8 +847,9 @@ def update_priority(environment_id: uuid.UUID, priority_id: uuid.UUID, data: Pri
 
 
 @router.post("/priorities/{priority_id}/sub-priorities", status_code=201, response_model=None)
-def create_sub_priority(priority_id: uuid.UUID, data: SubPriorityIn, db: DB,
-                        user: Current) -> SubPriorityDefinition:
+def create_sub_priority(
+    priority_id: uuid.UUID, data: SubPriorityIn, db: DB, user: Current
+) -> SubPriorityDefinition:
     parent = db.get(PriorityDefinition, priority_id)
     if not parent:
         raise HTTPException(404, "Priority not found")
@@ -625,15 +861,23 @@ def create_sub_priority(priority_id: uuid.UUID, data: SubPriorityIn, db: DB,
 
 
 def automation_dict(item: AutomationRule) -> dict[str, Any]:
-    return {"id": item.id, "environment_id": item.environment_id, "name": item.name,
-            "description": item.description, "is_active": item.is_active,
-            "trigger_type": item.trigger_type, "conditions_json": item.conditions_json,
-            "actions_json": item.actions_json, "priority": item.priority}
+    return {
+        "id": item.id,
+        "environment_id": item.environment_id,
+        "name": item.name,
+        "description": item.description,
+        "is_active": item.is_active,
+        "trigger_type": item.trigger_type,
+        "conditions_json": item.conditions_json,
+        "actions_json": item.actions_json,
+        "priority": item.priority,
+    }
 
 
 @router.get("/automation-rules")
-def list_automation_rules(db: DB, user: Current,
-                          environment_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
+def list_automation_rules(
+    db: DB, user: Current, environment_id: uuid.UUID | None = None
+) -> list[dict[str, Any]]:
     if environment_id:
         require(db, user, environment_id, "environment.rules.manage")
     else:
@@ -657,8 +901,9 @@ def create_automation_rule(data: AutomationRuleIn, db: DB, user: Current) -> dic
 
 
 @router.patch("/automation-rules/{rule_id}")
-def update_automation_rule(rule_id: uuid.UUID, data: AutomationRuleIn, db: DB,
-                           user: Current) -> dict[str, Any]:
+def update_automation_rule(
+    rule_id: uuid.UUID, data: AutomationRuleIn, db: DB, user: Current
+) -> dict[str, Any]:
     item = db.get(AutomationRule, rule_id)
     if not item:
         raise HTTPException(404, "Automation rule not found")
@@ -675,9 +920,14 @@ def update_automation_rule(rule_id: uuid.UUID, data: AutomationRuleIn, db: DB,
 
 def comment_dict(db: DB, item: Comment) -> dict[str, Any]:
     author = db.get(User, item.author_id)
-    return {"id": item.id, "author_id": item.author_id,
-            "author_name": author.display_name if author else "משתמש", "body": item.body,
-            "visibility": item.visibility, "created_at": item.created_at}
+    return {
+        "id": item.id,
+        "author_id": item.author_id,
+        "author_name": author.display_name if author else "משתמש",
+        "body": item.body,
+        "visibility": item.visibility,
+        "created_at": item.created_at,
+    }
 
 
 @router.get("/cases/{case_id}/public-comments")
@@ -686,13 +936,18 @@ def public_comments(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str,
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    return [comment_dict(db, row) for row in db.scalars(select(Comment).where(
-        Comment.case_id == case_id, Comment.visibility == Visibility.public).order_by(Comment.created_at))]
+    return [
+        comment_dict(db, row)
+        for row in db.scalars(
+            select(Comment)
+            .where(Comment.case_id == case_id, Comment.visibility == Visibility.public)
+            .order_by(Comment.created_at)
+        )
+    ]
 
 
 @router.post("/cases/{case_id}/public-comments", status_code=201)
-def create_public_comment(case_id: uuid.UUID, data: CommentIn, db: DB,
-                          user: Current) -> dict[str, Any]:
+def create_public_comment(case_id: uuid.UUID, data: CommentIn, db: DB, user: Current) -> dict[str, Any]:
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
@@ -711,13 +966,18 @@ def manager_comments(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "comment.manager.read")
-    return [comment_dict(db, row) for row in db.scalars(select(Comment).where(
-        Comment.case_id == case_id, Comment.visibility == Visibility.internal).order_by(Comment.created_at))]
+    return [
+        comment_dict(db, row)
+        for row in db.scalars(
+            select(Comment)
+            .where(Comment.case_id == case_id, Comment.visibility == Visibility.internal)
+            .order_by(Comment.created_at)
+        )
+    ]
 
 
 @router.post("/cases/{case_id}/manager-comments", status_code=201)
-def create_manager_comment(case_id: uuid.UUID, data: CommentIn, db: DB,
-                           user: Current) -> dict[str, Any]:
+def create_manager_comment(case_id: uuid.UUID, data: CommentIn, db: DB, user: Current) -> dict[str, Any]:
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")

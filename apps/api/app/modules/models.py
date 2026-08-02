@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -70,6 +71,7 @@ class Group(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), unique=True)
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    __table_args__ = (Index("ux_groups_name_ci", func.lower(name), unique=True),)
 
 
 class GroupMember(Base):
@@ -109,9 +111,7 @@ class GroupEnvironmentRole(Base):
     environment_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("environments.id", ondelete="CASCADE"), primary_key=True
     )
-    group_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True
-    )
+    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
     role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id"), primary_key=True)
 
 
@@ -333,9 +333,7 @@ class PriorityDefinition(Base):
 class SubPriorityDefinition(Base):
     __tablename__ = "sub_priority_definitions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    priority_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("priority_definitions.id", ondelete="CASCADE")
-    )
+    priority_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("priority_definitions.id", ondelete="CASCADE"))
     code: Mapped[str] = mapped_column(String(40))
     label_he: Mapped[str] = mapped_column(String(100))
     color: Mapped[str] = mapped_column(String(20), default="#64748b")
