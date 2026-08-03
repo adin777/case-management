@@ -1,0 +1,17 @@
+import { useEffect, useState } from 'react';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, Stack, TextField } from '@mui/material';
+import { DynamicField } from '../../../components/DynamicField';
+import type { Case, Form, Priority, User } from '../../../types';
+
+const valueOf = (value: Case['values'][number]) => value.value_text ?? value.value_number ?? value.value_boolean ?? value.value_date ?? value.value_datetime ?? value.value_user_id ?? value.value_json ?? '';
+
+export function CaseEditDialog({ open, item, form, priorities, users, onClose, onSave }: { open: boolean; item: Case; form?: Form; priorities: Priority[]; users: User[]; onClose: () => void; onSave: (payload: object) => Promise<void> }) {
+  const [title, setTitle] = useState(item.title);
+  const [description, setDescription] = useState(item.description || '');
+  const [priorityId, setPriorityId] = useState(item.priority_id || '');
+  const [subPriorityId, setSubPriorityId] = useState(item.sub_priority_id || '');
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const selectedPriority = priorities.find((priority) => priority.id === priorityId);
+  useEffect(() => { if (open) { setTitle(item.title); setDescription(item.description || ''); setPriorityId(item.priority_id || ''); setSubPriorityId(item.sub_priority_id || ''); setValues(Object.fromEntries(item.values.map((value) => [value.field_definition_id, valueOf(value)]))); } }, [open, item]);
+  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm"><DialogTitle>עריכת פרטי קריאת שירות</DialogTitle><DialogContent><Stack spacing={2} mt={1}><TextField required label="נושא" value={title} onChange={(e) => setTitle(e.target.value)}/><TextField required multiline minRows={4} label="תיאור" value={description} onChange={(e) => setDescription(e.target.value)}/><Stack direction={{ xs: 'column', sm: 'row' }} gap={1}><FormControl fullWidth><InputLabel>עדיפות</InputLabel><Select label="עדיפות" value={priorityId} onChange={(e) => { setPriorityId(e.target.value); setSubPriorityId(''); }}>{priorities.filter((x) => x.is_active).map((x) => <MenuItem key={x.id} value={x.id}>{x.label_he}</MenuItem>)}</Select></FormControl><FormControl fullWidth><InputLabel>תת-עדיפות</InputLabel><Select label="תת-עדיפות" value={subPriorityId} onChange={(e) => setSubPriorityId(e.target.value)}><MenuItem value="">ללא תת-עדיפות</MenuItem>{selectedPriority?.sub_priorities.filter((x) => x.is_active).map((x) => <MenuItem key={x.id} value={x.id}>{x.label_he}</MenuItem>)}</Select></FormControl></Stack>{form?.fields.map((field) => <DynamicField key={field.id} field={field} users={users} value={values[field.id!]} onChange={(value) => setValues({ ...values, [field.id!]: value })}/>)}</Stack></DialogContent><DialogActions><Button onClick={onClose}>ביטול</Button><Button variant="contained" disabled={!title.trim() || !description.trim() || !priorityId} onClick={() => onSave({ title, description, priority_id: priorityId, sub_priority_id: subPriorityId || null, priority: selectedPriority?.code, values: Object.entries(values).map(([field_definition_id, value]) => ({ field_definition_id, value })), version: item.version })}>שמירה</Button></DialogActions></Dialog>;
+}

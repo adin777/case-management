@@ -87,6 +87,7 @@ class RoleIn(BaseModel):
     description: str | None = None
     scope: str = Field(pattern="^(system|environment)$")
     permissions: list[str] = Field(default_factory=list)
+    is_active: bool = True
 
 
 class UserFieldOptionIn(BaseModel):
@@ -461,6 +462,7 @@ def list_roles(db: DB, user: Current) -> list[dict[str, Any]]:
             "description": r.description,
             "scope": r.scope,
             "permissions": sorted(permissions_for_role(db, r)),
+            "is_active": r.is_active,
         }
         for r in db.scalars(select(Role).order_by(Role.name))
     ]
@@ -485,6 +487,7 @@ def create_role(data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
         description=data.description,
         scope=data.scope,
         permissions=data.permissions,
+        is_active=data.is_active,
     )
     db.add(item)
     db.flush()
@@ -508,6 +511,7 @@ def get_role(role_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
         "description": item.description,
         "scope": item.scope,
         "permissions": sorted(permissions_for_role(db, item)),
+        "is_active": item.is_active,
     }
 
 
@@ -517,12 +521,13 @@ def update_role(role_id: uuid.UUID, data: RoleIn, db: DB, user: Current) -> dict
     item = db.get(Role, role_id)
     if not item:
         raise HTTPException(404, "Role not found")
-    item.code, item.name, item.description, item.scope, item.permissions = (
+    item.code, item.name, item.description, item.scope, item.permissions, item.is_active = (
         data.code,
         data.name,
         data.description,
         data.scope,
         data.permissions,
+        data.is_active,
     )
     db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
     for code in data.permissions:
@@ -871,6 +876,22 @@ def create_sub_priority(
         **data.model_dump(),
     )
     db.add(item)
+    db.commit()
+    return item
+
+
+@router.patch("/sub-priorities/{sub_priority_id}", response_model=None)
+def update_sub_priority(sub_priority_id: uuid.UUID, data: SubPriorityIn, db: DB, user: Current) -> SubPriorityDefinition:
+    item = db.get(SubPriorityDefinition, sub_priority_id)
+    if not item:
+        raise HTTPException(404, "Sub-priority not found")
+    parent = db.get(PriorityDefinition, item.priority_id)
+    if not parent:
+        raise HTTPException(409, "Parent priority no longer exists")
+    require(db, user, parent.environment_id, "environment.manage")
+    for key, value in data.model_dump().items():
+        setattr(item, key, value)
+    audit(db, user, "sub_priority", item.id, "updated")
     db.commit()
     return item
 

@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.modules.api import router
 from app.modules.governance.router import router as governance_router
+from app.modules.permissions.router import router as permissions_router
 from app.modules.platform.router import router as platform_router
 
 app = FastAPI(title="Case Management API", version="0.1.0")
@@ -19,6 +20,7 @@ app.add_middleware(
 )
 app.include_router(governance_router)
 app.include_router(platform_router)
+app.include_router(permissions_router)
 app.include_router(router)
 
 

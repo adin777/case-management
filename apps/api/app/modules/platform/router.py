@@ -271,7 +271,12 @@ def automation_logs(environment_id: uuid.UUID, db: DB, user: Current) -> list[di
 
 
 def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, request_type_id: uuid.UUID | None,
-                 status: str | None, search: str | None, sort: str, direction: str) -> Any:
+                 status: str | None, search: str | None, sort: str, direction: str,
+                 created_by_id: uuid.UUID | None = None, assignee_id: uuid.UUID | None = None,
+                 created_from: datetime | None = None, created_to: datetime | None = None,
+                 updated_from: datetime | None = None, updated_to: datetime | None = None,
+                 case_number: str | None = None, title: str | None = None,
+                 description: str | None = None, priority: str | None = None) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
     if not user.is_system_admin:
@@ -285,18 +290,32 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
     if status: query = query.where(Case.status == status)
     if search: query = query.where(or_(Case.case_number.ilike(f"%{search}%"), Case.title.ilike(f"%{search}%")))
+    if created_by_id: query = query.where(Case.reporter_id == created_by_id)
+    if assignee_id: query = query.where(Case.assignee_id == assignee_id)
+    if created_from: query = query.where(Case.created_at >= created_from)
+    if created_to: query = query.where(Case.created_at <= created_to)
+    if updated_from: query = query.where(Case.updated_at >= updated_from)
+    if updated_to: query = query.where(Case.updated_at <= updated_to)
+    if case_number: query = query.where(Case.case_number.ilike(f"%{case_number}%"))
+    if title: query = query.where(Case.title.ilike(f"%{title}%"))
+    if description: query = query.where(Case.description.ilike(f"%{description}%"))
+    if priority: query = query.where(Case.priority == priority)
     columns = {"case_number": Case.case_number, "created_at": Case.created_at,
-               "updated_at": Case.updated_at, "priority": Case.priority, "status": Case.status}
+               "updated_at": Case.updated_at, "priority": Case.priority, "status": Case.status,
+               "title": Case.title, "environment": Environment.name_he,
+               "request_type": RequestType.name_he, "requester": User.display_name}
     column = columns.get(sort, Case.created_at)
     return query.order_by(column.asc() if direction == "asc" else column.desc())
 
 
 def report_row(row: Any) -> dict[str, Any]:
-    item, env, request_type, requester = row
+    item, env, request_type, requester = row[:4]
+    assignee = row[4] if len(row) > 4 else None
     return {"case_number": item.case_number, "environment": env.name_he,
             "request_type": request_type.name_he, "title": item.title,
             "description": item.description or "", "status": item.status.value,
             "priority": item.priority, "requester": requester.display_name,
+            "assignee": assignee or "ללא מטפל",
             "created_at": item.created_at.isoformat(), "updated_at": item.updated_at.isoformat()}
 
 
@@ -304,16 +323,24 @@ def report_row(row: Any) -> dict[str, Any]:
 def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  request_type_id: uuid.UUID | None = None, status: str | None = None,
                  search: str | None = None, sort: str = "created_at", direction: str = "desc",
+                 created_by_id: uuid.UUID | None = None, assignee_id: uuid.UUID | None = None,
+                 created_from: datetime | None = None, created_to: datetime | None = None,
+                 updated_from: datetime | None = None, updated_to: datetime | None = None,
+                 case_number: str | None = None, title: str | None = None,
+                 description: str | None = None, priority: str | None = None,
                  page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)) -> dict[str, Any]:
-    query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction)
+    query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
+                         created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
+                         case_number, title, description, priority)
+    query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
     rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     return {"items": [report_row(row) for row in rows], "total": total, "page": page, "page_size": page_size}
 
 
 def xlsx_bytes(rows: list[dict[str, Any]], filters: dict[str, str]) -> bytes:
-    headers = ["מספר קריאה", "סביבה", "סוג קריאה", "נושא", "תיאור", "סטטוס", "עדיפות", "פותח", "נוצר", "עודכן"]
-    keys = ["case_number", "environment", "request_type", "title", "description", "status", "priority", "requester", "created_at", "updated_at"]
+    headers = ["מספר קריאה", "סביבה", "סוג קריאה", "נושא", "תיאור", "סטטוס", "עדיפות", "פותח", "מטפל", "נוצר", "עודכן"]
+    keys = ["case_number", "environment", "request_type", "title", "description", "status", "priority", "requester", "assignee", "created_at", "updated_at"]
     def cell(value: Any) -> str: return f'<c t="inlineStr"><is><t>{escape(str(value or ""))}</t></is></c>'
     report_rows = [headers] + [[row[key] for key in keys] for row in rows]
     sheet1 = "".join(f'<row r="{index}">{"".join(cell(value) for value in values)}</row>' for index, values in enumerate(report_rows, 1))
@@ -332,8 +359,16 @@ def xlsx_bytes(rows: list[dict[str, Any]], filters: dict[str, str]) -> bytes:
 @router.get("/reports/cases/export")
 def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  request_type_id: uuid.UUID | None = None, status: str | None = None,
-                 search: str | None = None, sort: str = "created_at", direction: str = "desc") -> Response:
-    query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction)
+                 search: str | None = None, sort: str = "created_at", direction: str = "desc",
+                 created_by_id: uuid.UUID | None = None, assignee_id: uuid.UUID | None = None,
+                 created_from: datetime | None = None, created_to: datetime | None = None,
+                 updated_from: datetime | None = None, updated_to: datetime | None = None,
+                 case_number: str | None = None, title: str | None = None,
+                 description: str | None = None, priority: str | None = None) -> Response:
+    query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
+                         created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
+                         case_number, title, description, priority)
+    query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
     rows = [report_row(row) for row in db.execute(query.limit(5000)).all()]
     content = xlsx_bytes(rows, {"environment_id": str(environment_id or ""), "request_type_id": str(request_type_id or ""), "status": status or "", "search": search or "", "sort": sort, "direction": direction})
     return StreamingResponse(io.BytesIO(content), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="case-report.xlsx"'})

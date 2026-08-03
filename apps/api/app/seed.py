@@ -41,13 +41,46 @@ def run() -> None:
             ],
         }
         permission_names = {
+            "system.users.read": ("צפייה במשתמשים", "מאפשר לצפות ברשימת המשתמשים ובפרטיהם"),
+            "system.users.create": ("יצירת משתמשים", "מאפשר ליצור משתמשים חדשים"),
+            "system.users.update": ("עריכת משתמשים", "מאפשר לערוך פרטי משתמשים"),
+            "system.users.disable": ("הפעלת והשבתת משתמשים", "מאפשר לשנות את מצב הפעילות של משתמשים"),
+            "system.users.reset_password": ("איפוס סיסמה", "מאפשר לאפס סיסמת משתמש בסביבת הפיתוח"),
+            "system.groups.read": ("צפייה בקבוצות משתמשים", "מאפשר לצפות בקבוצות ובחבריהן"),
+            "system.groups.manage": ("ניהול קבוצות משתמשים", "מאפשר ליצור ולערוך קבוצות וחברויות"),
+            "system.roles.read": ("צפייה בתפקידים", "מאפשר לצפות בתפקידים ובהרשאותיהם"),
+            "system.roles.manage": ("ניהול תפקידים", "מאפשר ליצור, לערוך ולהשבית תפקידים"),
+            "system.fields.read": ("צפייה בשדות משתמש", "מאפשר לצפות בהגדרות שדות משתמש"),
+            "system.fields.manage": ("ניהול שדות משתמש", "מאפשר ליצור ולערוך שדות משתמש וערכיהם"),
+            "system.environments.create": ("יצירת סביבות", "מאפשר ליצור סביבת עבודה חדשה"),
+            "system.environments.manage": ("ניהול כלל הסביבות", "מאפשר לערוך ולהשבית כל סביבת עבודה"),
+            "environment.read": ("צפייה בסביבה", "מאפשר לצפות בסביבת העבודה ובהגדרותיה"),
             "case.assign": ("הקצאת מטפל", "מאפשר לבחור משתמש או קבוצת טיפול ולהקצות להם קריאת שירות"),
             "case.manage_participants": ("ניהול משתתפים", "מאפשר להוסיף ולהסיר משתתפים בקריאת שירות"),
             "case.create": ("פתיחת קריאה", "מאפשר ליצור קריאות שירות בסביבה"),
             "case.update": ("עריכת קריאה", "מאפשר לעדכן את פרטי קריאת השירות"),
             "environment.manage": ("ניהול סביבה", "מאפשר לערוך את הגדרות סביבת העבודה"),
+            "environment.users.manage": ("ניהול משתמשי סביבה", "מאפשר לשייך משתמשים ותפקידים לסביבה"),
+            "environment.groups.manage": ("ניהול קבוצות בסביבה", "מאפשר לשייך קבוצות ותפקידים לסביבה"),
             "environment.fields.manage": ("ניהול שדות", "מאפשר להגדיר שדות בסביבת העבודה"),
+            "environment.request_types.manage": ("ניהול סוגי קריאות", "מאפשר ליצור ולערוך סוגי קריאות"),
+            "environment.forms.manage": ("ניהול טפסים", "מאפשר לערוך ולפרסם טפסי קריאה"),
             "environment.rules.manage": ("ניהול אוטומציות", "מאפשר ליצור ולערוך כללי אוטומציה"),
+            "environment.audit.read": ("צפייה ביומן ביקורת", "מאפשר לצפות בפעולות שבוצעו בסביבה"),
+            "request_type.read": ("צפייה בסוגי קריאות", "מאפשר לצפות בסוגי הקריאות הפעילים"),
+            "request_type.manage": ("עריכת סוגי קריאות", "מאפשר לערוך הגדרות של סוגי קריאות"),
+            "case.read": ("צפייה בקריאות", "מאפשר לצפות בקריאות שירות מורשות"),
+            "case.read_own": ("צפייה בקריאות שלי", "מאפשר לצפות בקריאות שהמשתמש פתח"),
+            "case.read_participating": ("צפייה בקריאות בהשתתפותי", "מאפשר לצפות בקריאות שבהן המשתמש משתתף"),
+            "case.read_environment": ("צפייה בקריאות הסביבה", "מאפשר לצפות בכל קריאות סביבת העבודה"),
+            "case.lock": ("נעילת קריאה", "מאפשר לנעול ולפתוח קריאת שירות לשינויים"),
+            "case.change_status": ("שינוי סטטוס קריאה", "מאפשר להעביר קריאה בין שלבי הטיפול"),
+            "case.comment": ("תגובה לקריאה", "מאפשר להוסיף תגובה לקריאת שירות"),
+            "case.internal_comment": ("תגובה פנימית", "מאפשר להוסיף הודעה פנימית למנהלים"),
+            "comment.public.read": ("צפייה בשיחה ציבורית", "מאפשר לקרוא תגובות ציבוריות בקריאה"),
+            "comment.public.create": ("כתיבה בשיחה ציבורית", "מאפשר להוסיף תגובה ציבורית לקריאה"),
+            "comment.manager.read": ("צפייה בהודעות מנהלים", "מאפשר לקרוא הודעות מנהלים בקריאה"),
+            "comment.manager.create": ("כתיבת הודעת מנהלים", "מאפשר להוסיף הודעה למנהלים בלבד"),
         }
         for code in ALL_PERMISSIONS:
             permission_item = db.get(Permission, code)
@@ -56,7 +89,12 @@ def run() -> None:
                 db.add(permission_item)
             name, description = permission_names.get(code, (code.replace(".", " "), "הרשאת מערכת מוגדרת"))
             permission_item.name_he, permission_item.description_he = name, description
-            permission_item.category = "קריאות שירות" if code.startswith(("case.", "comment.")) else "ניהול מערכת"
+            permission_item.category = (
+                "קריאות שירות" if code.startswith("case.") else
+                "תגובות" if code.startswith("comment.") else
+                "סביבות עבודה" if code.startswith(("environment.", "request_type.")) else
+                "משתמשים והרשאות"
+            )
             permission_item.scope = "system" if code.startswith("system.") else "environment"
         db.flush()
         roles: dict[str, Role] = {}

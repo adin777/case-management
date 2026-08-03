@@ -91,6 +91,7 @@ class Role(Base):
     description: Mapped[str | None] = mapped_column(Text)
     scope: Mapped[str] = mapped_column(String(20), default="environment")
     permissions: Mapped[list[str]] = mapped_column(JSON, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Permission(Base):
@@ -101,6 +102,7 @@ class Permission(Base):
     description_he: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String(100))
     scope: Mapped[str | None] = mapped_column(String(30))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class RolePermission(Base):
@@ -211,6 +213,10 @@ class Case(TimestampMixin, Base):
     assigned_group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id"))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    lock_reason: Mapped[str | None] = mapped_column(Text)
     values: Mapped[list["CaseFieldValue"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
     comments: Mapped[list["Comment"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
 

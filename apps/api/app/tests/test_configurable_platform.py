@@ -108,3 +108,65 @@ def test_two_step_approval_flow() -> None:
     second = next(row for row in approval["tasks"] if row["status"] == "pending")
     decided = client.post(f"/api/approval-tasks/{second['id']}/decision", headers=auth("envadmin@example.com", "EnvAdmin123!"), json={"decision": "approved"})
     assert decided.json()["status"] == "approved"
+
+
+def test_bulk_permissions_for_users_and_groups() -> None:
+    headers = auth(); environment, _, _ = context(headers)
+    users = client.get("/api/users", headers=headers).json()
+    requester = next(row for row in users if row["email"] == "requester@example.com")
+    agent = next(row for row in users if row["email"] == "agent@example.com")
+    added = client.post("/api/permissions/bulk/users", headers=headers, json={
+        "user_ids": [requester["id"], agent["id"]], "permission_codes": ["case.assign", "case.lock"],
+        "environment_id": environment["id"], "operation": "add",
+    })
+    assert added.status_code == 200 and added.json()["created"] == 4
+    for selected in (requester, agent):
+        effective = client.get(f"/api/users/{selected['id']}/effective-permissions?environment_id={environment['id']}", headers=headers).json()
+        assert {"case.assign", "case.lock"}.issubset(effective["permissions"])
+    removed = client.post("/api/permissions/bulk/users", headers=headers, json={
+        "user_ids": [requester["id"], agent["id"]], "permission_codes": ["case.assign", "case.lock"],
+        "environment_id": environment["id"], "operation": "remove",
+    })
+    assert removed.json()["removed"] == 4
+    group = client.post("/api/groups", headers=headers, json={"name": "קבוצת הרשאות בדיקה", "description": "בדיקה"}).json()
+    client.post(f"/api/groups/{group['id']}/members", headers=headers, json={"user_id": requester["id"]})
+    group_added = client.post("/api/permissions/bulk/groups", headers=headers, json={
+        "group_ids": [group["id"]], "permission_codes": ["case.lock"],
+        "environment_id": environment["id"], "operation": "add",
+    })
+    assert group_added.json()["created"] == 1
+
+
+def test_case_lock_blocks_edit_but_allows_public_comment() -> None:
+    admin_headers = auth(); item = create_case(admin_headers)
+    assigned = client.post(f"/api/cases/{item['id']}/assign", headers=admin_headers, json={
+        "assignee_id": next(row for row in client.get('/api/users', headers=admin_headers).json() if row['email'] == 'agent@example.com')["id"],
+        "version": item["version"],
+    }).json()
+    locked = client.post(f"/api/cases/{item['id']}/lock", headers=admin_headers, json={
+        "locked": True, "reason": "הקריאה בבדיקת מנהל", "version": assigned["version"],
+    })
+    assert locked.status_code == 200 and locked.json()["is_locked"] is True
+    agent_headers = auth("agent@example.com", "Agent123!")
+    blocked = client.patch(f"/api/cases/{item['id']}", headers=agent_headers, json={
+        "title": "עריכה אסורה", "version": locked.json()["version"],
+    })
+    assert blocked.status_code == 423
+    comment = client.post(f"/api/cases/{item['id']}/public-comments", headers=agent_headers, json={"body": "תגובה מותרת"})
+    assert comment.status_code == 201
+    unlocked = client.post(f"/api/cases/{item['id']}/lock", headers=admin_headers, json={
+        "locked": False, "version": locked.json()["version"],
+    })
+    assert unlocked.status_code == 200 and unlocked.json()["is_locked"] is False
+
+
+def test_report_filters_creator_assignee_and_updated_date() -> None:
+    headers = auth(); item = create_case(headers)
+    users = client.get("/api/users", headers=headers).json()
+    admin = next(row for row in users if row["email"] == "admin@example.com")
+    report = client.get(
+        f"/api/reports/cases?created_by_id={admin['id']}&updated_from=2020-01-01T00:00:00&case_number={item['case_number']}",
+        headers=headers,
+    )
+    assert report.status_code == 200
+    assert any(row["case_number"] == item["case_number"] for row in report.json()["items"])

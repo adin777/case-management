@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer
 from pwdlib import PasswordHash
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -64,7 +64,7 @@ ALL_PERMISSIONS = [
     "request_type.manage",
     "case.create",
     "case.read", "case.read_own", "case.read_participating", "case.read_environment",
-    "case.update",
+    "case.update", "case.lock",
     "case.assign",
     "case.change_status",
     "case.comment",
@@ -237,6 +237,10 @@ class CaseOut(BaseModel):
     assignee_id: uuid.UUID | None
     created_at: datetime
     version: int
+    is_locked: bool
+    locked_at: datetime | None
+    locked_by: uuid.UUID | None
+    lock_reason: str | None
     comments: list[CommentOut] = Field(default_factory=list)
     values: list[CaseValueOut] = Field(default_factory=list)
     permissions: dict[str, bool] = Field(default_factory=dict)
@@ -269,6 +273,15 @@ class CasePatch(BaseModel):
     title: str | None = None
     description: str | None = None
     priority: str | None = None
+    priority_id: uuid.UUID | None = None
+    sub_priority_id: uuid.UUID | None = None
+    values: list[ValueIn] | None = None
+    version: int
+
+
+class CaseLockIn(BaseModel):
+    locked: bool
+    reason: str | None = Field(default=None, max_length=1000)
     version: int
 
 
@@ -889,11 +902,13 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
         or "comment.manager.read" in permissions(db, user, item.environment_id)
     ]
     granted = permissions(db, user, item.environment_id)
+    can_override_lock = user.is_system_admin or "case.lock" in granted
     return CaseOut.model_validate(item).model_copy(
         update={
             "comments": [CommentOut.model_validate(c) for c in visible_comments],
             "permissions": {
-                "can_edit": "case.update" in granted,
+                "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
+                "can_lock": can_override_lock,
                 "can_assign": "case.assign" in granted,
                 "can_change_status": "case.change_status" in granted or "case.update" in granted,
                 "can_manage_participants": "case.manage_participants" in granted,
@@ -911,12 +926,56 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
     require(db, user, item.environment_id, "case.update")
+    if item.is_locked and not (user.is_system_admin or "case.lock" in permissions(db, user, item.environment_id)):
+        raise HTTPException(423, "הקריאה נעולה לשינויים")
     if item.version != data.version:
         raise HTTPException(409, "Case was updated by another user")
-    for key, value in data.model_dump(exclude={"version"}, exclude_unset=True).items():
+    changes = data.model_dump(exclude={"version", "values"}, exclude_unset=True)
+    if data.priority_id:
+        priority = db.get(PriorityDefinition, data.priority_id)
+        if not priority or priority.environment_id != item.environment_id or not priority.is_active:
+            raise HTTPException(422, "העדיפות אינה שייכת לסביבה")
+    if data.sub_priority_id:
+        sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
+        if not sub_priority or sub_priority.priority_id != data.priority_id or not sub_priority.is_active:
+            raise HTTPException(422, "תת-העדיפות אינה שייכת לעדיפות")
+    for key, value in changes.items():
         setattr(item, key, value)
+    if data.values is not None:
+        fields = {field.id: field for field in db.scalars(select(FieldDefinition).where(
+            FieldDefinition.form_definition_id == item.form_definition_id))}
+        for supplied in data.values:
+            field = fields.get(supplied.field_definition_id)
+            if not field:
+                raise HTTPException(422, "השדה הדינמי אינו שייך לטופס הקריאה")
+            db.execute(delete(CaseFieldValue).where(
+                CaseFieldValue.case_id == item.id,
+                CaseFieldValue.field_definition_id == supplied.field_definition_id,
+            ))
+            db.add(typed_value(item.id, field, supplied.value))
     item.version += 1
     audit(db, user, "case", item.id, "updated")
+    db.commit()
+    return item
+
+
+@router.post("/cases/{case_id}/lock", response_model=CaseOut)
+def set_case_lock(case_id: uuid.UUID, data: CaseLockIn, db: DB, user: Current) -> Case:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(404, "הקריאה לא נמצאה")
+    require(db, user, item.environment_id, "case.lock")
+    if item.version != data.version:
+        raise HTTPException(409, "הקריאה עודכנה על ידי משתמש אחר")
+    if data.locked and not (data.reason or "").strip():
+        raise HTTPException(422, "יש להזין סיבה לנעילת הקריאה")
+    item.is_locked = data.locked
+    item.locked_at = datetime.now(UTC) if data.locked else None
+    item.locked_by = user.id if data.locked else None
+    item.lock_reason = data.reason.strip() if data.locked and data.reason else None
+    item.version += 1
+    audit(db, user, "case", item.id, "locked" if data.locked else "unlocked",
+          after={"reason": item.lock_reason})
     db.commit()
     return item
 
