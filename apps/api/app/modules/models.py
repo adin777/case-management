@@ -217,6 +217,14 @@ class Case(TimestampMixin, Base):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     lock_reason: Mapped[str | None] = mapped_column(Text)
+    workflow_status_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    sla_policy_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sla_response_status: Mapped[str] = mapped_column(String(30), default="not_started")
+    sla_resolution_status: Mapped[str] = mapped_column(String(30), default="not_started")
     values: Mapped[list["CaseFieldValue"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
     comments: Mapped[list["Comment"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
 
@@ -261,9 +269,12 @@ class AuditEvent(Base):
     entity_id: Mapped[str] = mapped_column(String(100))
     action: Mapped[str] = mapped_column(String(80))
     actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"))
     before_json: Mapped[dict | None] = mapped_column(JSON)
     after_json: Mapped[dict | None] = mapped_column(JSON)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

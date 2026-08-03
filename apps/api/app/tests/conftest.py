@@ -8,6 +8,7 @@ TEST_DATABASE = Path(TEST_DIRECTORY.name) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE.as_posix()}"
 os.environ["ENVIRONMENT"] = "development"
 os.environ["JWT_SECRET"] = "test-only-secret"
+os.environ["ATTACHMENT_DIRECTORY"] = str(Path(TEST_DIRECTORY.name) / "attachments")
 
 
 def pytest_configure() -> None:

@@ -1,3 +1,5 @@
+import uuid
+
 from pwdlib.exceptions import PwdlibError
 from sqlalchemy import select
 
@@ -18,6 +20,7 @@ from app.modules.models import (
     SubPriorityDefinition,
     User,
 )
+from app.modules.operations.models import SlaPolicy, WorkflowDefinition, WorkflowStatus, WorkflowTransition
 
 
 def run() -> None:
@@ -41,6 +44,18 @@ def run() -> None:
             ],
         }
         permission_names = {
+            "workflow.read": ("צפייה בתהליכי עבודה", "מאפשר צפייה בתהליכי העבודה של הסביבה"),
+            "workflow.manage": ("ניהול תהליכי עבודה", "מאפשר יצירה ועריכה של סטטוסים ומעברים"),
+            "sla.read": ("צפייה במדיניות SLA", "מאפשר צפייה בזמני השירות שהוגדרו"),
+            "sla.manage": ("ניהול מדיניות SLA", "מאפשר יצירה ועריכה של יעדי תגובה ופתרון"),
+            "attachment.read": ("צפייה בקבצים מצורפים", "מאפשר צפייה והורדה של קבצים בקריאה מורשית"),
+            "attachment.upload": ("העלאת קבצים", "מאפשר צירוף קבצים לקריאה או לתגובה"),
+            "attachment.delete": ("מחיקת קבצים", "מאפשר מחיקה לוגית של קבצים מצורפים"),
+            "notification.read_own": ("צפייה בהתראות שלי", "מאפשר צפייה וסימון התראות אישיות"),
+            "notification.manage": ("ניהול התראות", "מאפשר ניהול הגדרות ותשתית ההתראות"),
+            "audit.read_system": ("צפייה ביומן מערכת", "מאפשר צפייה באירועי ביקורת מכל הסביבות"),
+            "audit.read_environment": ("צפייה ביומן סביבה", "מאפשר צפייה באירועי ביקורת בסביבה מורשית"),
+            "case.read_status_history": ("צפייה בהיסטוריית טיפול", "מאפשר צפייה במעברי הסטטוס של הקריאה"),
             "system.users.read": ("צפייה במשתמשים", "מאפשר לצפות ברשימת המשתמשים ובפרטיהם"),
             "system.users.create": ("יצירת משתמשים", "מאפשר ליצור משתמשים חדשים"),
             "system.users.update": ("עריכת משתמשים", "מאפשר לערוך פרטי משתמשים"),
@@ -201,6 +216,88 @@ def run() -> None:
             db.add(form)
             db.flush()
         request_type.form_version_id = form.id
+        workflow = db.scalar(
+            select(WorkflowDefinition).where(
+                WorkflowDefinition.environment_id == env.id,
+                WorkflowDefinition.name_he == "טיפול בבקשת הרשאה",
+            )
+        )
+        if not workflow:
+            workflow = WorkflowDefinition(
+                system_number=f"WF-{uuid.uuid4().hex[:8].upper()}",
+                environment_id=env.id,
+                name_he="טיפול בבקשת הרשאה",
+                name_en="Access request handling",
+                description="תהליך ברירת מחדל לטיפול מסודר בקריאות שירות",
+                is_default=True,
+                created_by=users["admin@example.com"].id,
+            )
+            db.add(workflow)
+            db.flush()
+        statuses: dict[str, WorkflowStatus] = {}
+        definitions = [
+            ("new", "חדש", False, False),
+            ("review", "בבדיקה", False, False),
+            ("approval", "ממתין לאישור", False, False),
+            ("implementation", "בביצוע", False, False),
+            ("completed", "הושלם", True, True),
+        ]
+        for order, (code, label, is_final, is_closed) in enumerate(definitions):
+            status = db.scalar(
+                select(WorkflowStatus).where(
+                    WorkflowStatus.workflow_id == workflow.id, WorkflowStatus.code == code
+                )
+            )
+            if not status:
+                status = WorkflowStatus(
+                    workflow_id=workflow.id,
+                    code=code,
+                    label_he=label,
+                    sort_order=order,
+                    is_initial=order == 0,
+                    is_final=is_final,
+                    is_closed=is_closed,
+                )
+                db.add(status)
+                db.flush()
+            statuses[code] = status
+        for order, (source, target, label) in enumerate(
+            [
+                ("new", "review", "העבר לבדיקה"),
+                ("review", "approval", "בקש אישור"),
+                ("approval", "implementation", "העבר לביצוע"),
+                ("implementation", "completed", "סמן כהושלם"),
+            ]
+        ):
+            if not db.scalar(
+                select(WorkflowTransition).where(
+                    WorkflowTransition.workflow_id == workflow.id,
+                    WorkflowTransition.from_status_id == statuses[source].id,
+                    WorkflowTransition.to_status_id == statuses[target].id,
+                )
+            ):
+                db.add(
+                    WorkflowTransition(
+                        workflow_id=workflow.id,
+                        from_status_id=statuses[source].id,
+                        to_status_id=statuses[target].id,
+                        label_he=label,
+                        sort_order=order,
+                    )
+                )
+        request_type.workflow_definition_id = workflow.id
+        if not db.scalar(select(SlaPolicy).where(SlaPolicy.environment_id == env.id)):
+            db.add(
+                SlaPolicy(
+                    system_number=f"SLA-{uuid.uuid4().hex[:8].upper()}",
+                    environment_id=env.id,
+                    request_type_id=request_type.id,
+                    priority_id=priorities["critical"].id,
+                    name_he="תגובה תוך 30 דקות, פתרון תוך 4 שעות",
+                    response_minutes=30,
+                    resolution_minutes=240,
+                )
+            )
         db.commit()
 
 

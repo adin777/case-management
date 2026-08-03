@@ -75,3 +75,12 @@ export async function register(display_name:string,email:string,password:string)
 }
 
 export async function apiDownload(path:string):Promise<Blob>{const response=await fetch(API_URL+path,{headers:{Authorization:`Bearer ${token.get()||''}`}});if(!response.ok)throw new ApiError(`ייצוא הדוח נכשל (${response.status})`,response.status);return response.blob()}
+
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(API_URL + path, {
+    method: 'POST', headers: { Authorization: `Bearer ${token.get() || ''}` }, body: form,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new ApiError(payload.detail || `העלאת הקובץ נכשלה (${response.status})`, response.status);
+  return payload as T;
+}

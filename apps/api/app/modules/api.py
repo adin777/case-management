@@ -44,6 +44,7 @@ from app.modules.models import (
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
+from app.modules.operations.service import initialize_operations
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -71,6 +72,10 @@ ALL_PERMISSIONS = [
     "case.internal_comment",
     "case.manage_participants",
     "comment.public.read", "comment.public.create", "comment.manager.read", "comment.manager.create",
+    "workflow.read", "workflow.manage", "sla.read", "sla.manage",
+    "attachment.read", "attachment.upload", "attachment.delete",
+    "notification.read_own", "notification.manage",
+    "audit.read_system", "audit.read_environment", "case.read_status_history",
 ]
 TRANSITIONS = {
     CaseStatus.draft: {CaseStatus.submitted, CaseStatus.cancelled},
@@ -241,6 +246,14 @@ class CaseOut(BaseModel):
     locked_at: datetime | None
     locked_by: uuid.UUID | None
     lock_reason: str | None
+    workflow_status_id: uuid.UUID | None
+    sla_policy_id: uuid.UUID | None
+    response_due_at: datetime | None
+    resolution_due_at: datetime | None
+    first_response_at: datetime | None
+    resolved_at: datetime | None
+    sla_response_status: str
+    sla_resolution_status: str
     comments: list[CommentOut] = Field(default_factory=list)
     values: list[CaseValueOut] = Field(default_factory=list)
     permissions: dict[str, bool] = Field(default_factory=dict)
@@ -842,13 +855,21 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     )
     db.add(item)
     db.flush()
+    initial_status = initialize_operations(db, item, rt)
     item.values = [typed_value(item.id, f, provided.get(f.id)) for f in form.fields if f.id in provided]
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
         if participant_id != user.id and participant_user:
             db.add(CaseParticipant(case_id=item.id, user_id=participant_id,
                                    participant_type="participant", added_by=user.id))
-    audit(db, user, "case", item.id, "created", after={"status": item.status.value})
+    audit(
+        db,
+        user,
+        "case",
+        item.id,
+        "created",
+        after={"status": item.status.value, "workflow_status_id": str(initial_status.id)},
+    )
     AutomationEngine.run(db, item, "request_type_selected",
                          {"request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id)})
     AutomationEngine.run(db, item, "case_created", {"request_type": str(item.request_type_id)})

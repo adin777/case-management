@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_days: int = 7
     environment: str = "development"
+    attachment_max_bytes: int = 10 * 1024 * 1024
+    attachment_allowed_types: str = "application/pdf,image/png,image/jpeg,text/plain"
+    attachment_directory: Path = PROJECT_ROOT / "data" / "attachments"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

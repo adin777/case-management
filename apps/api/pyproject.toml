@@ -2,7 +2,7 @@
 name = "case-management-api"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.116,<1", "uvicorn[standard]>=0.35,<1", "sqlalchemy>=2.0.41,<3", "alembic>=1.16,<2", "pydantic-settings>=2.10,<3", "pyjwt>=2.10,<3", "pwdlib[argon2]>=0.2,<1", "email-validator>=2.2,<3"]
+dependencies = ["fastapi>=0.116,<1", "uvicorn[standard]>=0.35,<1", "sqlalchemy>=2.0.41,<3", "alembic>=1.16,<2", "pydantic-settings>=2.10,<3", "pyjwt>=2.10,<3", "pwdlib[argon2]>=0.2,<1", "email-validator>=2.2,<3", "python-multipart>=0.0.20,<1"]
 [project.optional-dependencies]
 dev = ["pytest>=8.4,<9", "httpx>=0.28,<1", "ruff>=0.12,<1", "mypy>=1.16,<2"]
 postgres = ["psycopg[binary]>=3.2,<4"]
