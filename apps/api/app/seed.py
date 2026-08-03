@@ -50,14 +50,14 @@ def run() -> None:
             "environment.rules.manage": ("ניהול אוטומציות", "מאפשר ליצור ולערוך כללי אוטומציה"),
         }
         for code in ALL_PERMISSIONS:
-            item = db.get(Permission, code)
-            if not item:
-                item = Permission(code=code, description=code.replace(".", " ").title())
-                db.add(item)
+            permission_item = db.get(Permission, code)
+            if not permission_item:
+                permission_item = Permission(code=code, description=code.replace(".", " ").title())
+                db.add(permission_item)
             name, description = permission_names.get(code, (code.replace(".", " "), "הרשאת מערכת מוגדרת"))
-            item.name_he, item.description_he = name, description
-            item.category = "קריאות שירות" if code.startswith(("case.", "comment.")) else "ניהול מערכת"
-            item.scope = "system" if code.startswith("system.") else "environment"
+            permission_item.name_he, permission_item.description_he = name, description
+            permission_item.category = "קריאות שירות" if code.startswith(("case.", "comment.")) else "ניהול מערכת"
+            permission_item.scope = "system" if code.startswith("system.") else "environment"
         db.flush()
         roles: dict[str, Role] = {}
         for code, permission_codes in role_permissions.items():
@@ -122,14 +122,14 @@ def run() -> None:
             ("low", "נמוכה", "#22c55e"), ("normal", "רגילה", "#3b82f6"),
             ("high", "גבוהה", "#f59e0b"), ("critical", "קריטית", "#ef4444"),
         ]):
-            item = db.scalar(select(PriorityDefinition).where(
+            priority_item = db.scalar(select(PriorityDefinition).where(
                 PriorityDefinition.environment_id == env.id, PriorityDefinition.code == code))
-            if not item:
-                item = PriorityDefinition(environment_id=env.id, code=code, label_he=label,
-                                          color=color, sort_order=index)
-                db.add(item)
+            if not priority_item:
+                priority_item = PriorityDefinition(environment_id=env.id, code=code, label_he=label,
+                                                   color=color, sort_order=index)
+                db.add(priority_item)
                 db.flush()
-            priorities[code] = item
+            priorities[code] = priority_item
         for index, (code, label) in enumerate([("standard", "רגילה"), ("urgent", "דחופה")]):
             parent = priorities["high"]
             if not db.scalar(select(SubPriorityDefinition).where(

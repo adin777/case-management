@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,7 +23,7 @@ PREFIXES = {
     "user_group": "UG", "approval_flow": "AF", "approval_instance": "AI",
     "automation_rule": "AR", "priority": "PR", "sub_priority": "SP",
 }
-NUMBERED_MODELS = {
+NUMBERED_MODELS: dict[str, tuple[type[Any], str]] = {
     "case": (Case, "case_number"), "request_type": (RequestType, "system_number"),
     "case_field": (CaseFieldDefinition, "system_number"),
     "user_field": (UserFieldDefinition, "system_number"), "user_group": (Group, "system_number"),

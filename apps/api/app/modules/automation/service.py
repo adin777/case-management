@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.models import AutomationExecutionLog, AutomationRule, Case
+from app.modules.models import AutomationExecutionLog, AutomationRule, Case, CaseStatus
 
 
 class AutomationEngine:
@@ -59,7 +59,7 @@ class AutomationEngine:
         action_type, value = action.get("type"), action.get("value")
         if action_type == "assign_user": item.assignee_id = UUID(value)
         elif action_type == "assign_group": item.assigned_group_id = UUID(value)
-        elif action_type == "set_status": item.status = value
+        elif action_type == "set_status": item.status = CaseStatus(value)
         elif action_type == "set_priority": item.priority_id = UUID(value)
         elif action_type == "set_sub_priority": item.sub_priority_id = UUID(value)
         else: raise ValueError(f"Unsupported automation action: {action_type}")

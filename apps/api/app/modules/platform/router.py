@@ -238,10 +238,12 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
     if not task or task.approver_user_id != user.id: raise HTTPException(403, "רק המאשר שנבחר רשאי להחליט")
     if task.status != "pending": raise HTTPException(409, "המשימה כבר הושלמה")
     instance = db.get(ApprovalInstance, task.approval_instance_id)
+    if not instance: raise HTTPException(409, "תהליך האישור אינו זמין")
     task.status = data.decision; task.decision = data.decision; task.comment = data.comment; task.decided_at = datetime.now(UTC)
     if data.decision in {"rejected", "returned"}: instance.status = data.decision
     else:
         step = db.get(ApprovalStepDefinition, task.step_definition_id)
+        if not step: raise HTTPException(409, "שלב האישור אינו זמין")
         approved = db.scalar(select(func.count()).select_from(ApprovalTask).where(
             ApprovalTask.approval_instance_id == instance.id,
             ApprovalTask.step_definition_id == task.step_definition_id,
@@ -269,7 +271,7 @@ def automation_logs(environment_id: uuid.UUID, db: DB, user: Current) -> list[di
 
 
 def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, request_type_id: uuid.UUID | None,
-                 status: str | None, search: str | None, sort: str, direction: str):
+                 status: str | None, search: str | None, sort: str, direction: str) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
     if not user.is_system_admin:
@@ -289,7 +291,7 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
     return query.order_by(column.asc() if direction == "asc" else column.desc())
 
 
-def report_row(row: tuple[Case, Environment, RequestType, User]) -> dict[str, Any]:
+def report_row(row: Any) -> dict[str, Any]:
     item, env, request_type, requester = row
     return {"case_number": item.case_number, "environment": env.name_he,
             "request_type": request_type.name_he, "title": item.title,
