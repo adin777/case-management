@@ -27,6 +27,7 @@ from app.modules.models import (
     UserFieldValue,
     Visibility,
 )
+from app.modules.numbering.service import NumberingService
 
 router = APIRouter(prefix="/api", tags=["governance"])
 logger = logging.getLogger(__name__)
@@ -159,6 +160,8 @@ class MembershipPatch(BaseModel):
 class PriorityIn(BaseModel):
     code: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     label_he: str
+    label_en: str = ""
+    description: str | None = None
     color: str = "#64748b"
     sort_order: int = 0
     is_active: bool = True
@@ -167,6 +170,8 @@ class PriorityIn(BaseModel):
 class SubPriorityIn(BaseModel):
     code: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     label_he: str
+    label_en: str = ""
+    description: str | None = None
     color: str = "#64748b"
     sort_order: int = 0
     is_active: bool = True
@@ -182,7 +187,7 @@ class AutomationRuleIn(BaseModel):
     description: str | None = None
     is_active: bool = True
     trigger_type: str = Field(
-        pattern="^(case_created|case_status_changed|case_priority_changed|participant_added)$"
+        pattern="^(case_created|field_value_changed|request_type_selected|status_changed|priority_changed|participant_added|approval_completed)$"
     )
     conditions_json: dict = Field(default_factory=dict)
     actions_json: list[dict[str, Any]] = Field(default_factory=list)
@@ -352,7 +357,7 @@ def create_group(data: GroupIn, db: DB, user: Current) -> dict[str, Any]:
     if db.scalar(select(Group.id).where(func.lower(Group.name) == data.name.lower())):
         raise HTTPException(409, "כבר קיימת קבוצת משתמשים בשם זה")
     try:
-        item = Group(**data.model_dump())
+        item = Group(system_number=NumberingService.next(db, "user_group"), **data.model_dump())
         db.add(item)
         db.flush()
         audit(db, user, "group", item.id, "created")
@@ -586,7 +591,7 @@ def create_user_field(data: UserFieldIn, db: DB, user: Current) -> dict[str, Any
     environments = validate_environments(db, data.environment_ids)
     payload = data.model_dump(exclude={"environment_ids"})
     payload["options_json"] = [option.model_dump() for option in data.options_json]
-    item = UserFieldDefinition(**payload)
+    item = UserFieldDefinition(system_number=NumberingService.next(db, "user_field"), **payload)
     db.add(item)
     db.flush()
     for environment in environments:
@@ -801,6 +806,7 @@ def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[di
         result.append(
             {
                 "id": row.id,
+                "system_number": row.system_number,
                 "code": row.code,
                 "label_he": row.label_he,
                 "color": row.color,
@@ -809,6 +815,7 @@ def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[di
                 "sub_priorities": [
                     {
                         "id": child.id,
+                        "system_number": child.system_number,
                         "priority_id": child.priority_id,
                         "code": child.code,
                         "label_he": child.label_he,
@@ -826,7 +833,11 @@ def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[di
 @router.post("/environments/{environment_id}/priorities", status_code=201, response_model=None)
 def create_priority(environment_id: uuid.UUID, data: PriorityIn, db: DB, user: Current) -> PriorityDefinition:
     require(db, user, environment_id, "environment.manage")
-    item = PriorityDefinition(environment_id=environment_id, **data.model_dump())
+    item = PriorityDefinition(
+        system_number=NumberingService.next(db, "priority", environment_id),
+        environment_id=environment_id,
+        **data.model_dump(),
+    )
     db.add(item)
     db.commit()
     return item
@@ -854,7 +865,11 @@ def create_sub_priority(
     if not parent:
         raise HTTPException(404, "Priority not found")
     require(db, user, parent.environment_id, "environment.manage")
-    item = SubPriorityDefinition(priority_id=priority_id, **data.model_dump())
+    item = SubPriorityDefinition(
+        system_number=NumberingService.next(db, "sub_priority", parent.environment_id),
+        priority_id=priority_id,
+        **data.model_dump(),
+    )
     db.add(item)
     db.commit()
     return item
@@ -863,6 +878,7 @@ def create_sub_priority(
 def automation_dict(item: AutomationRule) -> dict[str, Any]:
     return {
         "id": item.id,
+        "system_number": item.system_number,
         "environment_id": item.environment_id,
         "name": item.name,
         "description": item.description,
@@ -892,7 +908,11 @@ def create_automation_rule(data: AutomationRuleIn, db: DB, user: Current) -> dic
         require(db, user, data.environment_id, "environment.rules.manage")
     else:
         system_admin(user)
-    item = AutomationRule(**data.model_dump(), created_by=user.id)
+    item = AutomationRule(
+        system_number=NumberingService.next(db, "automation_rule", data.environment_id),
+        **data.model_dump(),
+        created_by=user.id,
+    )
     db.add(item)
     db.flush()
     audit(db, user, "automation_rule", item.id, "created")

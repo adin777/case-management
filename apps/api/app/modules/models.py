@@ -68,6 +68,7 @@ class User(TimestampMixin, Base):
 class Group(TimestampMixin, Base):
     __tablename__ = "groups"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), unique=True)
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -96,6 +97,10 @@ class Permission(Base):
     __tablename__ = "permissions"
     code: Mapped[str] = mapped_column(String(120), primary_key=True)
     description: Mapped[str | None] = mapped_column(Text)
+    name_he: Mapped[str | None] = mapped_column(String(160))
+    description_he: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(100))
+    scope: Mapped[str | None] = mapped_column(String(30))
 
 
 class RolePermission(Base):
@@ -138,6 +143,7 @@ class EnvironmentMembership(Base):
 class RequestType(TimestampMixin, Base):
     __tablename__ = "request_types"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
     code: Mapped[str] = mapped_column(String(80))
     name_he: Mapped[str] = mapped_column(String(200))
@@ -145,6 +151,11 @@ class RequestType(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     form_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    default_priority_id: Mapped[uuid.UUID | None]
+    default_sub_priority_id: Mapped[uuid.UUID | None]
+    default_assignee_user_id: Mapped[uuid.UUID | None]
+    default_assignee_group_id: Mapped[uuid.UUID | None]
+    workflow_definition_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     __table_args__ = (UniqueConstraint("environment_id", "code"),)
 
 
@@ -268,6 +279,7 @@ class CaseNumberCounter(Base):
 class UserFieldDefinition(TimestampMixin, Base):
     __tablename__ = "user_field_definitions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     key: Mapped[str] = mapped_column(String(80), unique=True)
     label_he: Mapped[str] = mapped_column(String(200))
     label_en: Mapped[str] = mapped_column(String(200))
@@ -307,6 +319,7 @@ class EnvironmentUserField(Base):
 class AutomationRule(TimestampMixin, Base):
     __tablename__ = "automation_rules"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"))
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
@@ -321,9 +334,12 @@ class AutomationRule(TimestampMixin, Base):
 class PriorityDefinition(Base):
     __tablename__ = "priority_definitions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
     code: Mapped[str] = mapped_column(String(40))
     label_he: Mapped[str] = mapped_column(String(100))
+    label_en: Mapped[str | None] = mapped_column(String(100), default="")
+    description: Mapped[str | None] = mapped_column(Text)
     color: Mapped[str] = mapped_column(String(20), default="#64748b")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -333,10 +349,135 @@ class PriorityDefinition(Base):
 class SubPriorityDefinition(Base):
     __tablename__ = "sub_priority_definitions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     priority_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("priority_definitions.id", ondelete="CASCADE"))
     code: Mapped[str] = mapped_column(String(40))
     label_he: Mapped[str] = mapped_column(String(100))
+    label_en: Mapped[str | None] = mapped_column(String(100), default="")
+    description: Mapped[str | None] = mapped_column(Text)
     color: Mapped[str] = mapped_column(String(20), default="#64748b")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     __table_args__ = (UniqueConstraint("priority_id", "code"),)
+
+
+class NumberingSeries(TimestampMixin, Base):
+    __tablename__ = "numbering_series"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entity_type: Mapped[str] = mapped_column(String(40))
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"))
+    prefix: Mapped[str] = mapped_column(String(20))
+    next_number: Mapped[int] = mapped_column(Integer, default=1)
+    padding: Mapped[int] = mapped_column(Integer, default=6)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("entity_type", "environment_id"),)
+
+
+class CaseFieldDefinition(TimestampMixin, Base):
+    __tablename__ = "case_field_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str] = mapped_column(String(40), unique=True)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
+    request_type_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("request_types.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(80))
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str] = mapped_column(String(200), default="")
+    description: Mapped[str | None] = mapped_column(Text)
+    field_type: Mapped[str] = mapped_column(String(40))
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    options_json: Mapped[list] = mapped_column(JSON, default=list)
+    default_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+    validation_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    __table_args__ = (UniqueConstraint("environment_id", "request_type_id", "key"),)
+
+
+class UserPermissionAssignment(TimestampMixin, Base):
+    __tablename__ = "user_permission_assignments"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    permission_code: Mapped[str] = mapped_column(ForeignKey("permissions.code", ondelete="CASCADE"))
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
+    is_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    __table_args__ = (UniqueConstraint("user_id", "permission_code", "environment_id"),)
+
+
+class GroupPermissionAssignment(TimestampMixin, Base):
+    __tablename__ = "group_permission_assignments"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
+    permission_code: Mapped[str] = mapped_column(ForeignKey("permissions.code", ondelete="CASCADE"))
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
+    is_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    __table_args__ = (UniqueConstraint("group_id", "permission_code", "environment_id"),)
+
+
+class AutomationExecutionLog(Base):
+    __tablename__ = "automation_execution_logs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("automation_rules.id", ondelete="CASCADE"))
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"))
+    trigger_type: Mapped[str] = mapped_column(String(60))
+    matched: Mapped[bool] = mapped_column(Boolean)
+    actions_executed: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ApprovalFlowDefinition(TimestampMixin, Base):
+    __tablename__ = "approval_flow_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str] = mapped_column(String(40), unique=True)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    request_type_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("request_types.id"))
+    trigger_type: Mapped[str] = mapped_column(String(60), default="case_created")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+
+
+class ApprovalStepDefinition(Base):
+    __tablename__ = "approval_step_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    approval_flow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_flow_definitions.id", ondelete="CASCADE"))
+    step_order: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(200))
+    approver_type: Mapped[str] = mapped_column(String(40))
+    approver_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    approver_group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id"))
+    approver_field_key: Mapped[str | None] = mapped_column(String(80))
+    required_approvals: Mapped[int] = mapped_column(Integer, default=1)
+    allow_reject: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_return: Mapped[bool] = mapped_column(Boolean, default=True)
+    timeout_hours: Mapped[int | None] = mapped_column(Integer)
+    __table_args__ = (UniqueConstraint("approval_flow_id", "step_order"),)
+
+
+class ApprovalInstance(Base):
+    __tablename__ = "approval_instances"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str] = mapped_column(String(40), unique=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"))
+    approval_flow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_flow_definitions.id"))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    current_step_order: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ApprovalTask(Base):
+    __tablename__ = "approval_tasks"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    approval_instance_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_instances.id", ondelete="CASCADE"))
+    step_definition_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_step_definitions.id"))
+    approver_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    decision: Mapped[str | None] = mapped_column(String(30))
+    comment: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

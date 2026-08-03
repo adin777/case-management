@@ -16,11 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database.session import get_db
+from app.modules.approvals.service import start_matching_approvals
+from app.modules.automation.service import AutomationEngine
 from app.modules.models import (
     AuditEvent,
     Case,
     CaseFieldValue,
-    CaseNumberCounter,
     CaseParticipant,
     CaseStatus,
     Comment,
@@ -31,6 +32,7 @@ from app.modules.models import (
     FormStatus,
     GroupEnvironmentRole,
     GroupMember,
+    GroupPermissionAssignment,
     PriorityDefinition,
     RefreshToken,
     RequestType,
@@ -38,8 +40,10 @@ from app.modules.models import (
     RolePermission,
     SubPriorityDefinition,
     User,
+    UserPermissionAssignment,
     Visibility,
 )
+from app.modules.numbering.service import NumberingService
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -133,10 +137,15 @@ class RequestTypeIn(BaseModel):
     name_he: str
     name_en: str
     description: str | None = None
+    default_priority_id: uuid.UUID | None = None
+    default_sub_priority_id: uuid.UUID | None = None
+    default_assignee_user_id: uuid.UUID | None = None
+    default_assignee_group_id: uuid.UUID | None = None
 
 
 class RequestTypeOut(RequestTypeIn):
     id: uuid.UUID
+    system_number: str | None
     is_active: bool
     form_version_id: uuid.UUID | None
     model_config = {"from_attributes": True}
@@ -246,6 +255,10 @@ class RequestTypePatch(BaseModel):
     name_en: str | None = None
     description: str | None = None
     is_active: bool | None = None
+    default_priority_id: uuid.UUID | None = None
+    default_sub_priority_id: uuid.UUID | None = None
+    default_assignee_user_id: uuid.UUID | None = None
+    default_assignee_group_id: uuid.UUID | None = None
 
 
 class FormPatch(BaseModel):
@@ -324,6 +337,18 @@ def permissions(db: Session, user: User, environment_id: uuid.UUID) -> set[str]:
     result.update(db.scalars(select(RolePermission.permission_code).where(
         RolePermission.role_id.in_(role_ids)
     )))
+    direct = list(db.scalars(select(UserPermissionAssignment).where(
+        UserPermissionAssignment.user_id == user.id,
+        or_(UserPermissionAssignment.environment_id == environment_id,
+            UserPermissionAssignment.environment_id.is_(None)),
+    )))
+    group_direct = list(db.scalars(select(GroupPermissionAssignment).where(
+        GroupPermissionAssignment.group_id.in_(group_ids),
+        or_(GroupPermissionAssignment.environment_id == environment_id,
+            GroupPermissionAssignment.environment_id.is_(None)),
+    )))
+    result.update(row.permission_code for row in direct + group_direct if row.is_allowed)
+    result.difference_update(row.permission_code for row in direct + group_direct if not row.is_allowed)
     return result
 
 
@@ -598,9 +623,15 @@ def request_types(db: DB, user: Current, environment_id: Annotated[uuid.UUID, Qu
 @router.post("/request-types", response_model=RequestTypeOut, status_code=201)
 def create_request_type(data: RequestTypeIn, db: DB, user: Current) -> RequestType:
     require(db, user, data.environment_id, "request_type.manage")
-    item = RequestType(**data.model_dump())
+    item = RequestType(system_number=NumberingService.next(db, "request_type", data.environment_id),
+                       **data.model_dump())
     db.add(item)
     db.flush()
+    form = FormDefinition(request_type_id=item.id, version=1, status=FormStatus.published,
+                          published_at=datetime.now(UTC), fields=[])
+    db.add(form)
+    db.flush()
+    item.form_version_id = form.id
     audit(db, user, "request_type", item.id, "created", after=data.model_dump(mode="json"))
     db.commit()
     return item
@@ -789,17 +820,8 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     missing = [f.label_he for f in form.fields if f.is_required and provided.get(f.id) in (None, "")]
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
-    year = datetime.now(UTC).year
-    counter = db.get(CaseNumberCounter, year)
-    if not counter:
-        counter = CaseNumberCounter(year=year, next_value=2)
-        db.add(counter)
-        number = 1
-    else:
-        number = counter.next_value
-        counter.next_value += 1
     item = Case(
-        case_number=f"CASE-{year}-{number:06d}",
+        case_number=NumberingService.next(db, "case", data.environment_id),
         form_definition_id=form.id,
         reporter_id=user.id,
         requester_id=user.id,
@@ -814,6 +836,10 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
             db.add(CaseParticipant(case_id=item.id, user_id=participant_id,
                                    participant_type="participant", added_by=user.id))
     audit(db, user, "case", item.id, "created", after={"status": item.status.value})
+    AutomationEngine.run(db, item, "request_type_selected",
+                         {"request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id)})
+    AutomationEngine.run(db, item, "case_created", {"request_type": str(item.request_type_id)})
+    start_matching_approvals(db, item)
     db.commit()
     return item
 
@@ -990,6 +1016,10 @@ def remove_participant(case_id: uuid.UUID, participant_user_id: uuid.UUID, db: D
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.manage_participants")
+    if participant_user_id in {item.requester_id, item.reporter_id}:
+        raise HTTPException(409, "לא ניתן להסיר את פותח הקריאה")
+    if participant_user_id == item.assignee_id:
+        raise HTTPException(409, "לא ניתן להסיר את המטפל הנוכחי")
     rows = list(
         db.scalars(
             select(CaseParticipant).where(
@@ -1001,6 +1031,8 @@ def remove_participant(case_id: uuid.UUID, participant_user_id: uuid.UUID, db: D
         raise HTTPException(404, "Participant not found")
     for row in rows:
         db.delete(row)
+    audit(db, user, "case", item.id, "participant_removed",
+          after={"user_id": str(participant_user_id)})
     db.commit()
 
 

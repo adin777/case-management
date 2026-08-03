@@ -10,9 +10,6 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
-    Group,
-    GroupEnvironmentRole,
-    GroupMember,
     Permission,
     PriorityDefinition,
     RequestType,
@@ -43,9 +40,24 @@ def run() -> None:
                 "comment.public.read",
             ],
         }
+        permission_names = {
+            "case.assign": ("הקצאת מטפל", "מאפשר לבחור משתמש או קבוצת טיפול ולהקצות להם קריאת שירות"),
+            "case.manage_participants": ("ניהול משתתפים", "מאפשר להוסיף ולהסיר משתתפים בקריאת שירות"),
+            "case.create": ("פתיחת קריאה", "מאפשר ליצור קריאות שירות בסביבה"),
+            "case.update": ("עריכת קריאה", "מאפשר לעדכן את פרטי קריאת השירות"),
+            "environment.manage": ("ניהול סביבה", "מאפשר לערוך את הגדרות סביבת העבודה"),
+            "environment.fields.manage": ("ניהול שדות", "מאפשר להגדיר שדות בסביבת העבודה"),
+            "environment.rules.manage": ("ניהול אוטומציות", "מאפשר ליצור ולערוך כללי אוטומציה"),
+        }
         for code in ALL_PERMISSIONS:
-            if not db.get(Permission, code):
-                db.add(Permission(code=code, description=code.replace(".", " ").title()))
+            item = db.get(Permission, code)
+            if not item:
+                item = Permission(code=code, description=code.replace(".", " ").title())
+                db.add(item)
+            name, description = permission_names.get(code, (code.replace(".", " "), "הרשאת מערכת מוגדרת"))
+            item.name_he, item.description_he = name, description
+            item.category = "קריאות שירות" if code.startswith(("case.", "comment.")) else "ניהול מערכת"
+            item.scope = "system" if code.startswith("system.") else "environment"
         db.flush()
         roles: dict[str, Role] = {}
         for code, permission_codes in role_permissions.items():
@@ -104,18 +116,6 @@ def run() -> None:
             )):
                 db.add(EnvironmentMembership(environment_id=env.id, user_id=users[email].id,
                                              role_id=roles[role_code].id))
-
-        support = db.scalar(select(Group).where(Group.name == "צוות תמיכה"))
-        if not support:
-            support = Group(name="צוות תמיכה", description="קבוצת תמיכה לדוגמה", is_active=True)
-            db.add(support)
-            db.flush()
-        if not db.get(GroupMember, (support.id, users["agent@example.com"].id)):
-            db.add(GroupMember(group_id=support.id, user_id=users["agent@example.com"].id,
-                               added_by=users["admin@example.com"].id))
-        if not db.get(GroupEnvironmentRole, (env.id, support.id, roles["agent"].id)):
-            db.add(GroupEnvironmentRole(environment_id=env.id, group_id=support.id,
-                                        role_id=roles["agent"].id))
 
         priorities: dict[str, PriorityDefinition] = {}
         for index, (code, label, color) in enumerate([

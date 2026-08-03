@@ -73,3 +73,5 @@ export async function getCurrentUser() { return api<User>('/auth/me'); }
 export async function register(display_name:string,email:string,password:string) {
   return api<{access_token:string;refresh_token:string;token_type:string}>('/auth/register',{method:'POST',body:JSON.stringify({display_name,email,password})},{skipAuthRedirect:true});
 }
+
+export async function apiDownload(path:string):Promise<Blob>{const response=await fetch(API_URL+path,{headers:{Authorization:`Bearer ${token.get()||''}`}});if(!response.ok)throw new ApiError(`ייצוא הדוח נכשל (${response.status})`,response.status);return response.blob()}
