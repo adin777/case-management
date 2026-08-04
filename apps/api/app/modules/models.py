@@ -225,6 +225,10 @@ class Case(TimestampMixin, Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sla_response_status: Mapped[str] = mapped_column(String(30), default="not_started")
     sla_resolution_status: Mapped[str] = mapped_column(String(30), default="not_started")
+    approval_status: Mapped[str] = mapped_column(String(30), default="not_started")
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by_summary: Mapped[str | None] = mapped_column(Text)
     values: Mapped[list["CaseFieldValue"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
     comments: Mapped[list["Comment"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
 
@@ -275,6 +279,8 @@ class AuditEvent(Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     ip_address: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(500))
+    actor_name_snapshot: Mapped[str | None] = mapped_column(String(200))
+    actor_email_snapshot: Mapped[str | None] = mapped_column(String(320))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -468,7 +474,13 @@ class ApprovalStepDefinition(Base):
     approver_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     approver_group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id"))
     approver_field_key: Mapped[str | None] = mapped_column(String(80))
+    approver_environment_role: Mapped[str | None] = mapped_column(String(80))
+    approver_user_field_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    approver_case_field_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     required_approvals: Mapped[int] = mapped_column(Integer, default=1)
+    approval_mode: Mapped[str] = mapped_column(String(30), default="any")
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     allow_reject: Mapped[bool] = mapped_column(Boolean, default=True)
     allow_return: Mapped[bool] = mapped_column(Boolean, default=True)
     timeout_hours: Mapped[int | None] = mapped_column(Integer)

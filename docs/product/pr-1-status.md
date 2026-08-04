@@ -28,4 +28,4 @@ Database: `data/case_management.db`
 
 ## Remaining
 
-The complete status/transition editor, notification center, full audit page, background SLA warnings, complete report filters, attachment-to-comment composer, and remaining bulk-permission scale/tri-state work are tracked in `docs/product/roadmap.md`.
+The current branch now also includes business-level bulk permissions and copying, complete report-column filtering, safe development-user cleanup, and editable multi-step approval workflows with notifications and a durable approved state. Remaining work is tracked in `docs/product/roadmap.md`.

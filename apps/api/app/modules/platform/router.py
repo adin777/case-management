@@ -6,9 +6,10 @@ from html import escape
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from app.modules.api import DB, Current, audit, case_access, permissions, require
 from app.modules.approvals.service import create_step_tasks
@@ -23,11 +24,13 @@ from app.modules.models import (
     CaseParticipant,
     Environment,
     Permission,
+    PriorityDefinition,
     RequestType,
     User,
     UserPermissionAssignment,
 )
 from app.modules.numbering.service import NumberingService
+from app.modules.operations.models import Notification, WorkflowDefinition, WorkflowStatus
 
 router = APIRouter(prefix="/api", tags=["configurable-platform"])
 FIELD_TYPES = {"short_text", "long_text", "number", "date", "datetime", "boolean",
@@ -165,7 +168,13 @@ class ApprovalStepIn(BaseModel):
     approver_user_id: uuid.UUID | None = None
     approver_group_id: uuid.UUID | None = None
     approver_field_key: str | None = None
+    approver_environment_role: str | None = None
+    approver_user_field_id: uuid.UUID | None = None
+    approver_case_field_id: uuid.UUID | None = None
     required_approvals: int = 1
+    approval_mode: str = Field("any", pattern="^(any|all|minimum_count)$")
+    description: str | None = None
+    is_active: bool = True
     allow_reject: bool = True
     allow_return: bool = True
     timeout_hours: int | None = None
@@ -210,6 +219,22 @@ def create_flow(environment_id: uuid.UUID, data: ApprovalFlowIn, db: DB,
     audit(db, user, "approval_flow", item.id, "created"); db.commit(); return flow_dict(db, item)
 
 
+@router.put("/approval-flows/{flow_id}")
+def update_flow(flow_id: uuid.UUID, data: ApprovalFlowIn, db: DB, user: Current) -> dict[str, Any]:
+    item = db.get(ApprovalFlowDefinition, flow_id)
+    if not item: raise HTTPException(404, "סבב האישורים לא נמצא")
+    require(db, user, item.environment_id, "environment.manage")
+    before = jsonable_encoder(flow_dict(db, item))
+    for key, value in data.model_dump(exclude={"steps"}).items(): setattr(item, key, value)
+    db.execute(delete(ApprovalStepDefinition).where(ApprovalStepDefinition.approval_flow_id == item.id))
+    for index, step in enumerate(data.steps, 1):
+        db.add(ApprovalStepDefinition(id=uuid.uuid4(), approval_flow_id=item.id,
+                                      step_order=index, **step.model_dump()))
+    audit(db, user, "approval_flow", item.id, "updated", before=before,
+          after=data.model_dump(mode="json"))
+    db.commit(); return flow_dict(db, item)
+
+
 class ApprovalDecisionIn(BaseModel):
     decision: str = Field(pattern="^(approved|rejected|returned)$")
     comment: str | None = None
@@ -239,8 +264,24 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
     if task.status != "pending": raise HTTPException(409, "המשימה כבר הושלמה")
     instance = db.get(ApprovalInstance, task.approval_instance_id)
     if not instance: raise HTTPException(409, "תהליך האישור אינו זמין")
+    if instance.status != "pending": raise HTTPException(409, "סבב האישורים אינו פעיל")
+    if data.decision in {"rejected", "returned"} and not data.comment:
+        raise HTTPException(422, "חובה להזין הערה עבור דחייה או החזרה")
+    active_step_id = db.scalar(select(ApprovalStepDefinition.id).where(
+        ApprovalStepDefinition.approval_flow_id == instance.approval_flow_id,
+        ApprovalStepDefinition.step_order == instance.current_step_order))
+    if task.step_definition_id != active_step_id:
+        raise HTTPException(409, "משימת האישור אינה שייכת לשלב הפעיל")
+    case_item = db.get(Case, instance.case_id)
+    if not case_item: raise HTTPException(409, "הקריאה אינה זמינה")
     task.status = data.decision; task.decision = data.decision; task.comment = data.comment; task.decided_at = datetime.now(UTC)
-    if data.decision in {"rejected", "returned"}: instance.status = data.decision
+    if data.decision in {"rejected", "returned"}:
+        instance.status = data.decision; instance.completed_at = datetime.now(UTC)
+        case_item.approval_status = data.decision; case_item.is_approved = False
+        db.add(Notification(user_id=case_item.requester_id, notification_type=f"approval_{data.decision}",
+                            title_he="התקבלה החלטה בסבב האישורים",
+                            body_he=f"הקריאה {case_item.case_number} {('נדחתה' if data.decision == 'rejected' else 'הוחזרה לתיקון')}",
+                            entity_type="case", entity_id=str(case_item.id)))
     else:
         step = db.get(ApprovalStepDefinition, task.step_definition_id)
         if not step: raise HTTPException(409, "שלב האישור אינו זמין")
@@ -248,7 +289,11 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
             ApprovalTask.approval_instance_id == instance.id,
             ApprovalTask.step_definition_id == task.step_definition_id,
             ApprovalTask.status == "approved")) or 0
-        if approved >= step.required_approvals:
+        total_tasks = db.scalar(select(func.count()).select_from(ApprovalTask).where(
+            ApprovalTask.approval_instance_id == instance.id,
+            ApprovalTask.step_definition_id == task.step_definition_id)) or 0
+        required = total_tasks if step.approval_mode == "all" else 1 if step.approval_mode == "any" else step.required_approvals
+        if approved >= required:
             next_step = db.scalar(select(ApprovalStepDefinition).where(
                 ApprovalStepDefinition.approval_flow_id == instance.approval_flow_id,
                 ApprovalStepDefinition.step_order > step.step_order).order_by(
@@ -258,6 +303,13 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
                 create_step_tasks(db, instance, next_step.step_order)
             else:
                 instance.status = "approved"; instance.completed_at = datetime.now(UTC)
+                case_item.approval_status = "approved"; case_item.is_approved = True
+                case_item.approved_at = datetime.now(UTC)
+                case_item.approved_by_summary = f"{instance.system_number}: {approved} מאשרים"
+                db.add(Notification(user_id=case_item.requester_id, notification_type="approval_completed",
+                                    title_he="הקריאה אושרה",
+                                    body_he=f"סבב האישורים עבור {case_item.case_number} הושלם בהצלחה",
+                                    entity_type="case", entity_id=str(case_item.id)))
     audit(db, user, "approval_instance", instance.id, data.decision); db.commit()
     return {"status": instance.status}
 
@@ -276,7 +328,9 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
                  created_from: datetime | None = None, created_to: datetime | None = None,
                  updated_from: datetime | None = None, updated_to: datetime | None = None,
                  case_number: str | None = None, title: str | None = None,
-                 description: str | None = None, priority: str | None = None) -> Any:
+                 description: str | None = None, priority: str | None = None,
+                 workflow_status_id: uuid.UUID | None = None,
+                 priority_id: uuid.UUID | None = None) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
     if not user.is_system_admin:
@@ -300,6 +354,8 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
     if title: query = query.where(Case.title.ilike(f"%{title}%"))
     if description: query = query.where(Case.description.ilike(f"%{description}%"))
     if priority: query = query.where(Case.priority == priority)
+    if workflow_status_id: query = query.where(Case.workflow_status_id == workflow_status_id)
+    if priority_id: query = query.where(Case.priority_id == priority_id)
     columns = {"case_number": Case.case_number, "created_at": Case.created_at,
                "updated_at": Case.updated_at, "priority": Case.priority, "status": Case.status,
                "title": Case.title, "environment": Environment.name_he,
@@ -311,10 +367,12 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
 def report_row(row: Any) -> dict[str, Any]:
     item, env, request_type, requester = row[:4]
     assignee = row[4] if len(row) > 4 else None
+    status_label = row[5] if len(row) > 5 else item.status.value
+    priority_label = row[6] if len(row) > 6 else item.priority
     return {"case_number": item.case_number, "environment": env.name_he,
             "request_type": request_type.name_he, "title": item.title,
-            "description": item.description or "", "status": item.status.value,
-            "priority": item.priority, "requester": requester.display_name,
+            "description": item.description or "", "status": status_label or item.status.value,
+            "priority": priority_label or "לא הוגדרה", "requester": requester.display_name,
             "assignee": assignee or "ללא מטפל",
             "created_at": item.created_at.isoformat(), "updated_at": item.updated_at.isoformat()}
 
@@ -328,14 +386,33 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  updated_from: datetime | None = None, updated_to: datetime | None = None,
                  case_number: str | None = None, title: str | None = None,
                  description: str | None = None, priority: str | None = None,
+                 workflow_status_id: uuid.UUID | None = None, priority_id: uuid.UUID | None = None,
                  page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)) -> dict[str, Any]:
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
-                         case_number, title, description, priority)
+                         case_number, title, description, priority, workflow_status_id, priority_id)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
+    query = query.add_columns(select(WorkflowStatus.label_he).where(WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
+    query = query.add_columns(select(PriorityDefinition.label_he).where(PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
     rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     return {"items": [report_row(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/reports/cases/value-sources")
+def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None = None) -> dict[str, Any]:
+    status_query = select(WorkflowStatus, Environment.name_he).join(
+        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id
+    ).join(Environment, WorkflowDefinition.environment_id == Environment.id).where(
+        WorkflowStatus.is_active.is_(True), WorkflowDefinition.is_active.is_(True)
+    )
+    priority_query = select(PriorityDefinition).where(PriorityDefinition.is_active.is_(True))
+    if environment_id:
+        status_query = status_query.where(WorkflowDefinition.environment_id == environment_id)
+        priority_query = priority_query.where(PriorityDefinition.environment_id == environment_id)
+    statuses = [{"id": row.id, "code": row.code, "label_he": row.label_he, "environment": env_name} for row, env_name in db.execute(status_query).all()]
+    priorities = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(priority_query.order_by(PriorityDefinition.sort_order))]
+    return {"statuses": statuses, "priorities": priorities}
 
 
 def xlsx_bytes(rows: list[dict[str, Any]], filters: dict[str, str]) -> bytes:

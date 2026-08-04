@@ -5,6 +5,8 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.database.session import SessionLocal
+from app.modules.access.mapping import DOMAIN_DEFINITIONS
+from app.modules.access.models import PermissionDomain
 from app.modules.api import ALL_PERMISSIONS, password_hash
 from app.modules.models import (
     Environment,
@@ -12,6 +14,8 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    Group,
+    GroupMember,
     Permission,
     PriorityDefinition,
     RequestType,
@@ -127,12 +131,14 @@ def run() -> None:
             roles[code] = role
 
         users: dict[str, User] = {}
-        for email, name, password, is_admin in [
-            ("admin@example.com", "מנהל מערכת", "Admin123!", True),
-            ("envadmin@example.com", "מנהל סביבת IT", "EnvAdmin123!", False),
-            ("requester@example.com", "משתמש קצה", "Requester123!", False),
-            ("agent@example.com", "מטפל", "Agent123!", False),
-        ]:
+        seed_users = [("admin@example.com", "מנהל מערכת", "Admin123!", True)]
+        if settings.seed_demo_users:
+            seed_users += [
+                ("envadmin@example.com", "מנהל סביבת IT", "EnvAdmin123!", False),
+                ("requester@example.com", "משתמש קצה", "Requester123!", False),
+                ("agent@example.com", "מטפל", "Agent123!", False),
+            ]
+        for email, name, password, is_admin in seed_users:
             user = db.scalar(select(User).where(User.email == email))
             if not user:
                 user = User(email=email, display_name=name, password_hash=password_hash.hash(password),
@@ -157,11 +163,11 @@ def run() -> None:
                               description="סביבת שירותי טכנולוגיה")
             db.add(env)
             db.flush()
-        for email, role_code in [
+        for email, role_code in ([
             ("envadmin@example.com", "environment_admin"),
             ("requester@example.com", "requester"),
             ("agent@example.com", "agent"),
-        ]:
+        ] if settings.seed_demo_users else []):
             if not db.scalar(select(EnvironmentMembership).where(
                 EnvironmentMembership.environment_id == env.id,
                 EnvironmentMembership.user_id == users[email].id,
@@ -169,6 +175,35 @@ def run() -> None:
             )):
                 db.add(EnvironmentMembership(environment_id=env.id, user_id=users[email].id,
                                              role_id=roles[role_code].id))
+
+        base_groups: dict[str, Group] = {}
+        for name, description in [
+            ("אדמין", "מנהלי מערכת בעלי גישה מלאה"),
+            ("מנהל סביבה", "מנהלים לפי שיוך לסביבה"),
+            ("משתמש", "משתמשים בעלי הרשאות בסיס שהוגדרו במפורש"),
+        ]:
+            group = db.scalar(select(Group).where(Group.name == name))
+            if not group:
+                group = Group(system_number=f"UG-{uuid.uuid4().hex[:8].upper()}", name=name, description=description, is_active=True)
+                db.add(group)
+                db.flush()
+            base_groups[name] = group
+        if not db.get(GroupMember, (base_groups["אדמין"].id, users["admin@example.com"].id)):
+            db.add(GroupMember(group_id=base_groups["אדמין"].id, user_id=users["admin@example.com"].id, added_by=users["admin@example.com"].id))
+
+        for order, definition in enumerate(DOMAIN_DEFINITIONS):
+            code, name, description, scope, view_codes, edit_codes = definition
+            domain = db.get(PermissionDomain, code)
+            if not domain:
+                domain = PermissionDomain(code=code)
+                db.add(domain)
+            domain.name_he = name
+            domain.description_he = description
+            domain.scope = scope
+            domain.view_permissions = view_codes
+            domain.edit_permissions = edit_codes
+            domain.sort_order = order
+            domain.is_active = True
 
         priorities: dict[str, PriorityDefinition] = {}
         for index, (code, label, color) in enumerate([

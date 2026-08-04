@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database.session import get_db
+from app.modules.access.service import domain_permissions
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
 from app.modules.models import (
@@ -254,6 +255,10 @@ class CaseOut(BaseModel):
     resolved_at: datetime | None
     sla_response_status: str
     sla_resolution_status: str
+    approval_status: str
+    is_approved: bool
+    approved_at: datetime | None
+    approved_by_summary: str | None
     comments: list[CommentOut] = Field(default_factory=list)
     values: list[CaseValueOut] = Field(default_factory=list)
     permissions: dict[str, bool] = Field(default_factory=dict)
@@ -374,6 +379,7 @@ def permissions(db: Session, user: User, environment_id: uuid.UUID) -> set[str]:
             GroupPermissionAssignment.environment_id.is_(None)),
     )))
     result.update(row.permission_code for row in direct + group_direct if row.is_allowed)
+    result.update(domain_permissions(db, user.id, environment_id))
     result.difference_update(row.permission_code for row in direct + group_direct if not row.is_allowed)
     return result
 
@@ -398,6 +404,8 @@ def audit(
             entity_id=str(entity_id),
             action=action,
             actor_id=user.id,
+            actor_name_snapshot=user.display_name,
+            actor_email_snapshot=user.email,
             before_json=before,
             after_json=after,
             metadata_json={},

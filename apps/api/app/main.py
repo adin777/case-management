@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
+from app.modules.access.router import router as access_router
 from app.modules.api import router
 from app.modules.attachments.router import router as attachments_router
 from app.modules.governance.router import router as governance_router
@@ -23,6 +24,7 @@ app.add_middleware(
 app.include_router(governance_router)
 app.include_router(platform_router)
 app.include_router(permissions_router)
+app.include_router(access_router)
 app.include_router(operations_router)
 app.include_router(attachments_router)
 app.include_router(router)

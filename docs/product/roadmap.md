@@ -1,5 +1,12 @@
 # Product roadmap
 
+## Completed in the current milestone
+
+- Hebrew business permission domains with none/view/edit, bulk user/group assignment, active-state filtering, and audited copy modes.
+- Safe local development-user cleanup with a verified SQLite backup and preserved audit identity snapshots.
+- Header-level case-report filtering and sorting, including last update, creator, assignee, configured workflow status, and configured priority.
+- Editable unlimited approval flows with user/group approvers, ordering, any/all/minimum-count rules, decision comments, notifications, and a durable approved state on the case.
+
 ## הושלם
 
 - תשתית מקומית ב־SQLite עם Alembic, אימות משתמשים ו־RBAC רב־סביבתי.

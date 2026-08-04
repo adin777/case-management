@@ -15,6 +15,7 @@ data/*.db-shm
 data/*.db-wal
 data/local-processes.json
 data/case-management-tests*/
+data/backups/
 data/mypy-cache/
 coverage/
 .coverage
