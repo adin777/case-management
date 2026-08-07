@@ -1,0 +1,49 @@
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ContentCopy } from '@mui/icons-material';
+import { Alert, Box, Button, Checkbox, Container, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Paper, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { api } from '../../../api/client';
+import type { Environment, Group, User } from '../../../types';
+import { AccessLevelSelector, type AccessLevel } from './AccessLevelSelector';
+
+type Domain = { code: string; name_he: string; description_he: string; scope: string };
+type CopyMode = 'replace' | 'merge' | 'missing';
+
+export function AccessPage() {
+  const client = useQueryClient();
+  const [tab, setTab] = useState(0); const [selected, setSelected] = useState<string[]>([]);
+  const [search, setSearch] = useState(''); const [active, setActive] = useState('all');
+  const [environment, setEnvironment] = useState(''); const [levels, setLevels] = useState<Record<string, AccessLevel>>({});
+  const [confirmOpen, setConfirmOpen] = useState(false); const [copyOpen, setCopyOpen] = useState(false);
+  const [copySourceType, setCopySourceType] = useState<'user' | 'group'>('user'); const [copySourceId, setCopySourceId] = useState('');
+  const [copyMode, setCopyMode] = useState<CopyMode>('replace'); const [copyPreview, setCopyPreview] = useState<Record<string, string>>();
+  const [message, setMessage] = useState('');
+  const { data: domains = [] } = useQuery({ queryKey: ['access-domains'], queryFn: () => api<Domain[]>('/access/domains') });
+  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users') });
+  const { data: groups = [] } = useQuery({ queryKey: ['groups'], queryFn: () => api<Group[]>('/groups') });
+  const { data: environments = [] } = useQuery({ queryKey: ['environments'], queryFn: () => api<Environment[]>('/environments') });
+  const entities = useMemo(() => (tab === 0 ? users : groups).filter((item) => {
+    const enabled = item.is_active !== false;
+    const text = tab === 0 ? `${(item as User).display_name} ${(item as User).email}` : (item as Group).name;
+    return (active === 'all' || (active === 'active') === enabled) && text.toLowerCase().includes(search.toLowerCase());
+  }), [tab, users, groups, active, search]);
+  const sourceItems = copySourceType === 'user' ? users : groups;
+  const toggle = (id: string) => setSelected(selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]);
+  const payload = { source_type: copySourceType, source_id: copySourceId, target_type: tab === 0 ? 'users' : 'groups', target_ids: selected, environment_id: environment || null, mode: copyMode };
+  async function save() { await api('/access/bulk', { method: 'POST', body: JSON.stringify({ subject_type: tab === 0 ? 'users' : 'groups', subject_ids: selected, environment_id: environment || null, levels }) }); setConfirmOpen(false); setMessage('רמות הגישה נשמרו בהצלחה'); client.invalidateQueries({ queryKey: ['access-assignments'] }); }
+  async function previewCopy() { const result = await api<{ source_levels: Record<string, string> }>('/access/copy/preview', { method: 'POST', body: JSON.stringify(payload) }); setCopyPreview(result.source_levels); }
+  async function copyAccess() { await api('/access/copy', { method: 'POST', body: JSON.stringify(payload) }); setCopyOpen(false); setCopyPreview(undefined); setMessage(`ההרשאות הועתקו אל ${selected.length} יעדים`); client.invalidateQueries({ queryKey: ['access-assignments'] }); }
+
+  return <Container maxWidth="xl"><Stack spacing={2}>
+    <Box><Typography variant="h4" fontWeight={800}>ניהול הרשאות</Typography><Typography color="text.secondary">בחירת רמת גישה עסקית; האכיפה המפורטת מתבצעת בשרת</Typography></Box>
+    {message && <Alert severity="success" onClose={() => setMessage('')}>{message}</Alert>}
+    <Box className="permission-grid">
+      <Paper variant="outlined" sx={{ p: 2 }}><Typography variant="h6" fontWeight={800}>תחומי הרשאה</Typography><Stack spacing={1.5} mt={2}>{domains.map((domain) => <Paper key={domain.code} variant="outlined" sx={{ p: 1.5 }}><Typography fontWeight={800}>{domain.name_he}</Typography><Typography variant="body2" color="text.secondary">{domain.description_he} · {domain.scope === 'system' ? 'מערכתי' : 'סביבתי'}</Typography><AccessLevelSelector value={levels[domain.code] || 'none'} onChange={(value) => setLevels({ ...levels, [domain.code]: value })} /></Paper>)}</Stack></Paper>
+      <Paper variant="outlined" sx={{ p: 2 }}><Tabs value={tab} onChange={(_, value) => { setTab(value); setSelected([]); }}><Tab label="משתמשים"/><Tab label="קבוצות משתמשים"/></Tabs><Stack direction={{ xs: 'column', sm: 'row' }} gap={1} my={2}><TextField fullWidth label="חיפוש" value={search} onChange={(event) => setSearch(event.target.value)} /><TextField select label="מצב" value={active} onChange={(event) => setActive(event.target.value)}><MenuItem value="all">הכול</MenuItem><MenuItem value="active">פעילים</MenuItem><MenuItem value="inactive">לא פעילים</MenuItem></TextField></Stack><TextField fullWidth select label="תחולה" value={environment} onChange={(event) => setEnvironment(event.target.value)}><MenuItem value="">מערכתית</MenuItem>{environments.map((item) => <MenuItem key={item.id} value={item.id}>{item.name_he}</MenuItem>)}</TextField><FormControlLabel sx={{ mt: 1 }} control={<Checkbox checked={entities.length > 0 && selected.length === entities.length} indeterminate={selected.length > 0 && selected.length < entities.length} onChange={() => setSelected(selected.length === entities.length ? [] : entities.map((item) => item.id))} />} label="בחירת כל התוצאות"/><Stack>{entities.map((item) => <FormControlLabel key={item.id} control={<Checkbox checked={selected.includes(item.id)} onChange={() => toggle(item.id)} />} label={tab === 0 ? `${(item as User).display_name} · ${(item as User).email}` : (item as Group).name} />)}</Stack></Paper>
+    </Box>
+    <Paper className="bulk-toolbar" elevation={4}><Typography>{selected.length} יעדים · {Object.keys(levels).length} תחומים</Typography><Stack direction="row" gap={1}><Button startIcon={<ContentCopy />} disabled={!selected.length} onClick={() => setCopyOpen(true)}>העתקת הרשאות</Button><Button variant="contained" disabled={!selected.length || !Object.keys(levels).length} onClick={() => setConfirmOpen(true)}>שמירת רמות גישה</Button></Stack></Paper>
+  </Stack>
+  <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} fullWidth><DialogTitle>אישור שינוי הרשאות</DialogTitle><DialogContent><Typography>השינוי יחול על {selected.length} {tab === 0 ? 'משתמשים' : 'קבוצות'} ב־{environment ? environments.find((item) => item.id === environment)?.name_he : 'תחולה מערכתית'}.</Typography>{Object.entries(levels).map(([code, level]) => <Typography key={code}>{domains.find((item) => item.code === code)?.name_he}: {{ none: 'ללא', view: 'צפייה', edit: 'עריכה' }[level]}</Typography>)}</DialogContent><DialogActions><Button onClick={() => setConfirmOpen(false)}>ביטול</Button><Button variant="contained" onClick={save}>אישור ושמירה</Button></DialogActions></Dialog>
+  <Dialog open={copyOpen} onClose={() => setCopyOpen(false)} fullWidth maxWidth="sm"><DialogTitle>העתקת הרשאות</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}><Alert severity="info">המקור לא ישתנה. ההעתקה תחול על {selected.length} היעדים שנבחרו.</Alert><TextField select label="סוג מקור" value={copySourceType} onChange={(event) => { setCopySourceType(event.target.value as 'user' | 'group'); setCopySourceId(''); setCopyPreview(undefined); }}><MenuItem value="user">משתמש</MenuItem><MenuItem value="group">קבוצת משתמשים</MenuItem></TextField><TextField select label="מקור" value={copySourceId} onChange={(event) => { setCopySourceId(event.target.value); setCopyPreview(undefined); }}>{sourceItems.map((item) => <MenuItem key={item.id} value={item.id}>{copySourceType === 'user' ? `${(item as User).display_name} · ${(item as User).email}` : (item as Group).name}</MenuItem>)}</TextField><TextField select label="אופן העתקה" value={copyMode} onChange={(event) => { setCopyMode(event.target.value as CopyMode); setCopyPreview(undefined); }}><MenuItem value="replace">החלפה מלאה</MenuItem><MenuItem value="merge">מיזוג ועדכון הרשאות המקור</MenuItem><MenuItem value="missing">השלמת הרשאות חסרות בלבד</MenuItem></TextField>{copyPreview && <Paper variant="outlined" sx={{ p: 2 }}><Typography fontWeight={800}>תצוגה מקדימה</Typography>{Object.keys(copyPreview).length ? Object.entries(copyPreview).map(([code, level]) => <Typography key={code}>{domains.find((item) => item.code === code)?.name_he || code}: {{ none: 'ללא', view: 'צפייה', edit: 'עריכה' }[level]}</Typography>) : <Typography color="text.secondary">למקור לא הוגדרו הרשאות בתחולה זו.</Typography>}</Paper>}</Stack></DialogContent><DialogActions><Button onClick={() => setCopyOpen(false)}>ביטול</Button><Button disabled={!copySourceId} onClick={previewCopy}>תצוגה מקדימה</Button><Button variant="contained" disabled={!copySourceId || !copyPreview} onClick={copyAccess}>אישור והעתקה</Button></DialogActions></Dialog>
+  </Container>;
+}

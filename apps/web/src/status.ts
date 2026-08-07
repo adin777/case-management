@@ -1,0 +1,1 @@
+export const statusLabel=(status:string)=>({draft:'טיוטה',submitted:'נפתחה',assigned:'הוקצתה',in_progress:'בטיפול',waiting_for_requester:'ממתינה לפונה',resolved:'נפתרה',closed:'נסגרה',cancelled:'בוטלה'} as Record<string,string>)[status]||status;

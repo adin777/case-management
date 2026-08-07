@@ -1,0 +1,40 @@
+name: CI
+on:
+  pull_request:
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite:///./test-ci.db
+      JWT_SECRET: ci-secret
+      ENVIRONMENT: development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip}
+      - run: pip install -e ".[dev]"
+        working-directory: apps/api
+      - run: ruff check .
+        working-directory: apps/api
+      - run: mypy app
+        working-directory: apps/api
+      - run: alembic upgrade head && alembic check
+        working-directory: apps/api
+      - run: python -m app.seed && pytest
+        working-directory: apps/api
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - run: npm install
+        working-directory: apps/web
+      - run: npm run lint
+        working-directory: apps/web
+      - run: npm run typecheck
+        working-directory: apps/web
+      - run: npm test
+        working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web

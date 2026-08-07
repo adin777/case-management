@@ -1,0 +1,1 @@
+import {describe,expect,it} from 'vitest';import {statusLabel} from './status';describe('statusLabel',()=>{it('translates known workflow states',()=>expect(statusLabel('in_progress')).toBe('בטיפול'));it('keeps future states readable',()=>expect(statusLabel('custom')).toBe('custom'))});

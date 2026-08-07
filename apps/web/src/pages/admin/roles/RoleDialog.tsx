@@ -1,0 +1,13 @@
+import { useEffect, useState } from 'react';
+import { Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, TextField } from '@mui/material';
+import type { Permission, Role } from '../../../types';
+
+export type RoleForm = { code: string; name: string; description: string; scope: string; permissions: string[]; is_active: boolean };
+const empty: RoleForm = { code: '', name: '', description: '', scope: 'environment', permissions: [], is_active: true };
+
+export function RoleDialog({ open, saving, catalog, initial, onClose, onSubmit }: { open: boolean; saving: boolean; catalog: Permission[]; initial?: Role; onClose: () => void; onSubmit: (value: RoleForm) => Promise<void> }) {
+  const [value, setValue] = useState<RoleForm>(empty);
+  useEffect(() => { if (open) setValue(initial ? { ...initial, description: initial.description || '' } : empty); }, [open, initial]);
+  async function submit(event: React.FormEvent) { event.preventDefault(); if (!/^[a-z][a-z0-9_.-]*$/.test(value.code) || !value.name.trim()) return; await onSubmit(value); }
+  return <Dialog open={open} onClose={onClose} fullWidth><Stack component="form" onSubmit={submit}><DialogTitle>{initial ? 'עריכת תפקיד' : 'יצירת תפקיד'}</DialogTitle><DialogContent><Stack spacing={2} sx={{ pt: 1 }}><TextField label="קוד תפקיד" value={value.code} disabled={Boolean(initial)} onChange={(e) => setValue({ ...value, code: e.target.value })}/><TextField label="שם התפקיד" value={value.name} onChange={(e) => setValue({ ...value, name: e.target.value })}/><TextField label="תיאור" value={value.description} onChange={(e) => setValue({ ...value, description: e.target.value })}/><TextField select label="תחום" value={value.scope} onChange={(e) => setValue({ ...value, scope: e.target.value })}><MenuItem value="environment">סביבתי</MenuItem><MenuItem value="system">מערכתי</MenuItem></TextField><TextField select SelectProps={{ multiple: true }} label="הרשאות" value={value.permissions} onChange={(e) => setValue({ ...value, permissions: typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value })}>{catalog.filter((permission) => permission.is_active !== false).map((permission) => <MenuItem key={permission.code} value={permission.code}>{permission.name_he || permission.code}</MenuItem>)}</TextField><FormControlLabel control={<Checkbox checked={value.is_active} onChange={(e) => setValue({ ...value, is_active: e.target.checked })}/>} label="תפקיד פעיל"/></Stack></DialogContent><DialogActions><Button onClick={onClose}>ביטול</Button><Button type="submit" variant="contained" disabled={saving}>{saving ? 'שומר...' : 'שמירה'}</Button></DialogActions></Stack></Dialog>;
+}
