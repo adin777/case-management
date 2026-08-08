@@ -45,7 +45,8 @@ from app.modules.models import (
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.service import initialize_operations
+from app.modules.operations.models import CaseStatusHistory, WorkflowStatus, WorkflowTransition
+from app.modules.operations.service import initialize_operations, resolve_workflow
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -78,16 +79,6 @@ ALL_PERMISSIONS = [
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
 ]
-TRANSITIONS = {
-    CaseStatus.draft: {CaseStatus.submitted, CaseStatus.cancelled},
-    CaseStatus.submitted: {CaseStatus.assigned, CaseStatus.in_progress, CaseStatus.cancelled},
-    CaseStatus.assigned: {CaseStatus.in_progress, CaseStatus.cancelled},
-    CaseStatus.in_progress: {CaseStatus.waiting_for_requester, CaseStatus.resolved, CaseStatus.cancelled},
-    CaseStatus.waiting_for_requester: {CaseStatus.in_progress, CaseStatus.resolved},
-    CaseStatus.resolved: {CaseStatus.closed, CaseStatus.in_progress},
-    CaseStatus.closed: set(),
-    CaseStatus.cancelled: set(),
-}
 
 
 class LoginIn(BaseModel):
@@ -154,6 +145,7 @@ class RequestTypeOut(RequestTypeIn):
     system_number: str | None
     is_active: bool
     form_version_id: uuid.UUID | None
+    workflow_definition_id: uuid.UUID | None
     model_config = {"from_attributes": True}
 
 
@@ -197,8 +189,8 @@ class CaseIn(BaseModel):
     request_type_id: uuid.UUID
     title: str = Field(min_length=3, max_length=300)
     description: str = Field(min_length=1)
-    priority: str = "normal"
-    priority_id: uuid.UUID
+    workflow_status_id: uuid.UUID | None = None
+    priority_id: uuid.UUID | None = None
     sub_priority_id: uuid.UUID | None = None
     participant_ids: list[uuid.UUID] = Field(default_factory=list)
     values: list[ValueIn] = Field(default_factory=list)
@@ -319,7 +311,8 @@ class ParticipantIn(BaseModel):
 
 
 class TransitionIn(BaseModel):
-    status: CaseStatus
+    workflow_status_id: uuid.UUID
+    comment: str | None = None
 
 
 def issue(user: User, token_type: str, expires: timedelta, token_id: uuid.UUID | None = None) -> str:
@@ -842,13 +835,16 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     form = db.get(FormDefinition, rt.form_version_id)
     if not form:
         raise HTTPException(409, "Published form no longer exists")
-    if data.priority_id:
-        priority = db.get(PriorityDefinition, data.priority_id)
-        if not priority or priority.environment_id != data.environment_id or not priority.is_active:
-            raise HTTPException(422, "Priority does not belong to the selected environment")
-    if data.sub_priority_id:
-        sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
-        if not sub_priority or sub_priority.priority_id != data.priority_id or not sub_priority.is_active:
+    priority_id = data.priority_id or rt.default_priority_id
+    if not priority_id:
+        raise HTTPException(422, "לא הוגדרה עדיפות ברירת מחדל; יש לבחור עדיפות")
+    priority = db.get(PriorityDefinition, priority_id)
+    if not priority or priority.environment_id != data.environment_id or not priority.is_active:
+        raise HTTPException(422, "Priority does not belong to the selected environment")
+    sub_priority_id = data.sub_priority_id or rt.default_sub_priority_id
+    if sub_priority_id:
+        sub_priority = db.get(SubPriorityDefinition, sub_priority_id)
+        if not sub_priority or sub_priority.priority_id != priority.id or not sub_priority.is_active:
             raise HTTPException(422, "Sub-priority does not belong to the selected priority")
     provided = {v.field_definition_id: v.value for v in data.values}
     missing = [f.label_he for f in form.fields if f.is_required and provided.get(f.id) in (None, "")]
@@ -859,11 +855,25 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         form_definition_id=form.id,
         reporter_id=user.id,
         requester_id=user.id,
-        **data.model_dump(exclude={"values", "participant_ids"}),
+        environment_id=data.environment_id,
+        request_type_id=data.request_type_id,
+        title=data.title,
+        description=data.description,
+        priority=priority.code,
+        priority_id=priority.id,
+        sub_priority_id=sub_priority_id,
     )
     db.add(item)
     db.flush()
     initial_status = initialize_operations(db, item, rt)
+    if data.workflow_status_id and data.workflow_status_id != initial_status.id:
+        workflow, _ = resolve_workflow(db, rt)
+        selected_status = db.get(WorkflowStatus, data.workflow_status_id)
+        if not selected_status or selected_status.workflow_id != workflow.id or not selected_status.is_active:
+            raise HTTPException(422, "הסטטוס אינו שייך לתהליך העבודה של סוג הקריאה")
+        if "case.change_status" not in permissions(db, user, data.environment_id):
+            raise HTTPException(403, "אין הרשאה לשנות סטטוס בעת פתיחת קריאה")
+        item.workflow_status_id = selected_status.id
     item.values = [typed_value(item.id, f, provided.get(f.id)) for f in form.fields if f.id in provided]
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
@@ -884,6 +894,27 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     start_matching_approvals(db, item)
     db.commit()
     return item
+
+
+@router.get("/request-types/{request_type_id}/case-config")
+def case_creation_config(request_type_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
+    request_type = db.get(RequestType, request_type_id)
+    if not request_type or not request_type.is_active:
+        raise HTTPException(404, "סוג הקריאה לא נמצא")
+    require(db, user, request_type.environment_id, "case.create")
+    workflow, initial = resolve_workflow(db, request_type)
+    statuses = list(db.scalars(select(WorkflowStatus).where(
+        WorkflowStatus.workflow_id == workflow.id,
+        WorkflowStatus.is_active.is_(True),
+    ).order_by(WorkflowStatus.sort_order)))
+    return {
+        "workflow_id": workflow.id,
+        "initial_status_id": initial.id,
+        "can_choose_status": "case.change_status" in permissions(db, user, request_type.environment_id),
+        "statuses": [{"id": row.id, "label_he": row.label_he, "is_initial": row.is_initial} for row in statuses],
+        "default_priority_id": request_type.default_priority_id,
+        "default_sub_priority_id": request_type.default_sub_priority_id,
+    }
 
 
 @router.get("/cases", response_model=list[CaseOut])
@@ -1036,14 +1067,21 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
 
 
 @router.get("/cases/{case_id}/allowed-transitions")
-def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[str]:
+def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    if "case.update" not in permissions(db, user, item.environment_id):
+    if "case.change_status" not in permissions(db, user, item.environment_id):
         return []
-    return [s.value for s in TRANSITIONS[item.status]]
+    rows = db.execute(select(WorkflowTransition, WorkflowStatus).join(
+        WorkflowStatus, WorkflowTransition.to_status_id == WorkflowStatus.id).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+        WorkflowStatus.is_active.is_(True),
+    ).order_by(WorkflowTransition.sort_order)).all()
+    return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
+             "requires_comment": transition.requires_comment} for transition, status in rows]
 
 
 @router.post("/cases/{case_id}/comments", response_model=CommentOut, status_code=201)
@@ -1152,16 +1190,31 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
-    require(db, user, item.environment_id, "case.update")
-    if data.status not in TRANSITIONS[item.status]:
-        raise HTTPException(409, f"Transition {item.status.value} -> {data.status.value} is not allowed")
-    before = item.status
-    item.status = data.status
+    require(db, user, item.environment_id, "case.change_status")
+    transition_row = db.scalar(select(WorkflowTransition).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.to_status_id == data.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+    ))
+    target = db.get(WorkflowStatus, data.workflow_status_id)
+    if not transition_row or not target or not target.is_active:
+        raise HTTPException(409, "מעבר הסטטוס אינו חוקי בתהליך העבודה")
+    if transition_row.required_permission_code:
+        require(db, user, item.environment_id, transition_row.required_permission_code)
+    if transition_row.requires_comment and not (data.comment or "").strip():
+        raise HTTPException(422, "המעבר מחייב הערה")
+    before = item.workflow_status_id
+    item.workflow_status_id = target.id
     item.version += 1
-    if data.status == CaseStatus.closed:
+    if target.is_closed:
         item.closed_at = datetime.now(UTC)
+    db.add(CaseStatusHistory(case_id=item.id, from_status_id=before, to_status_id=target.id,
+                             transition_id=transition_row.id, changed_by=user.id,
+                             comment=(data.comment or "").strip() or None))
     audit(
-        db, user, "case", item.id, "status_changed", {"status": before.value}, {"status": data.status.value}
+        db, user, "case", item.id, "status_changed",
+        {"workflow_status_id": str(before) if before else None},
+        {"workflow_status_id": str(target.id), "label": target.label_he},
     )
     db.commit()
     return item

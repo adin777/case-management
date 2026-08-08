@@ -3,8 +3,8 @@ from sqlalchemy import select
 
 from app.database.session import SessionLocal
 from app.main import app
-from app.modules.api import TRANSITIONS, password_hash
-from app.modules.models import CaseStatus, EnvironmentMembership, User
+from app.modules.api import password_hash
+from app.modules.models import EnvironmentMembership, User
 
 client = TestClient(app)
 
@@ -72,11 +72,6 @@ def test_registration_rejects_duplicate_and_weak_password() -> None:
 
 def test_anonymous_access_is_blocked() -> None:
     assert client.get("/api/environments").status_code == 401
-
-
-def test_transition_rules_are_centralized() -> None:
-    assert CaseStatus.in_progress in TRANSITIONS[CaseStatus.submitted]
-    assert CaseStatus.closed not in TRANSITIONS[CaseStatus.submitted]
 
 
 def test_admin_can_create_environment_and_audit_is_written() -> None:
@@ -150,10 +145,12 @@ def test_complete_case_flow_and_internal_comment_filtering() -> None:
         json={"assignee_id": agent["id"], "version": case["version"]},
     )
     assert assigned.status_code == 200
+    allowed = client.get(f"/api/cases/{case['id']}/allowed-transitions", headers=agent_headers).json()
+    assert allowed
     transitioned = client.post(
         f"/api/cases/{case['id']}/transitions",
         headers=agent_headers,
-        json={"status": "in_progress"},
+        json={"workflow_status_id": allowed[0]["id"]},
     )
     assert transitioned.status_code == 200
     assert client.post(
