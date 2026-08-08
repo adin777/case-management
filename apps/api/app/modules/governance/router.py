@@ -82,10 +82,13 @@ class GroupRoleIn(BaseModel):
 
 
 class RoleIn(BaseModel):
-    code: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
+    code: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_.-]*$")
     name: str
+    name_he: str | None = None
     description: str | None = None
+    description_he: str | None = None
     scope: str = Field(pattern="^(system|environment)$")
+    sort_order: int = 0
     permissions: list[str] = Field(default_factory=list)
     is_active: bool = True
 
@@ -155,7 +158,8 @@ class MembershipCreate(BaseModel):
 
 
 class MembershipPatch(BaseModel):
-    role_id: uuid.UUID
+    role_id: uuid.UUID | None = None
+    is_active: bool | None = None
 
 
 class PriorityIn(BaseModel):
@@ -459,10 +463,12 @@ def list_roles(db: DB, user: Current) -> list[dict[str, Any]]:
             "id": r.id,
             "code": r.code,
             "name": r.name,
+            "name_he": r.name_he or r.name,
             "description": r.description,
             "scope": r.scope,
             "permissions": sorted(permissions_for_role(db, r)),
             "is_active": r.is_active,
+            "sort_order": r.sort_order,
         }
         for r in db.scalars(select(Role).order_by(Role.name))
     ]
@@ -481,11 +487,16 @@ def create_role(data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
     unknown = set(data.permissions) - set(db.scalars(select(Permission.code)))
     if unknown:
         raise HTTPException(422, f"Unknown permissions: {', '.join(sorted(unknown))}")
+    generated_code = data.code or f"role_{uuid.uuid4().hex[:10]}"
     item = Role(
-        code=data.code,
+        system_number=f"ROLE-{uuid.uuid4().hex[:8].upper()}",
+        code=generated_code,
         name=data.name,
+        name_he=data.name_he or data.name,
         description=data.description,
+        description_he=data.description_he or data.description,
         scope=data.scope,
+        sort_order=data.sort_order,
         permissions=data.permissions,
         is_active=data.is_active,
     )
@@ -495,7 +506,7 @@ def create_role(data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
         db.add(RolePermission(role_id=item.id, permission_code=code))
     audit(db, user, "role", item.id, "created")
     db.commit()
-    return {"id": item.id, **data.model_dump()}
+    return {"id": item.id, **data.model_dump(), "code": generated_code}
 
 
 @router.get("/roles/{role_id}")
@@ -508,10 +519,12 @@ def get_role(role_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
         "id": item.id,
         "code": item.code,
         "name": item.name,
+        "name_he": item.name_he or item.name,
         "description": item.description,
         "scope": item.scope,
         "permissions": sorted(permissions_for_role(db, item)),
         "is_active": item.is_active,
+        "sort_order": item.sort_order,
     }
 
 
@@ -521,11 +534,14 @@ def update_role(role_id: uuid.UUID, data: RoleIn, db: DB, user: Current) -> dict
     item = db.get(Role, role_id)
     if not item:
         raise HTTPException(404, "Role not found")
-    item.code, item.name, item.description, item.scope, item.permissions, item.is_active = (
-        data.code,
+    item.code, item.name, item.name_he, item.description, item.description_he, item.scope, item.sort_order, item.permissions, item.is_active = (
+        data.code or item.code,
         data.name,
+        data.name_he or data.name,
         data.description,
+        data.description_he or data.description,
         data.scope,
+        data.sort_order,
         data.permissions,
         data.is_active,
     )
@@ -747,6 +763,8 @@ def list_memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[d
             "group_name": g.name if g else None,
             "role_id": m.role_id,
             "role_name": r.name,
+            "role_name_he": r.name_he or r.name,
+            "is_active": m.is_active,
         }
         for m, u, g, r in rows
     ]
@@ -775,7 +793,8 @@ def update_membership(
     item = db.get(EnvironmentMembership, membership_id)
     if not item or item.environment_id != environment_id:
         raise HTTPException(404, "Membership not found")
-    item.role_id = data.role_id
+    if data.role_id is not None: item.role_id = data.role_id
+    if data.is_active is not None: item.is_active = data.is_active
     audit(db, user, "environment", environment_id, "membership_updated")
     db.commit()
     return {"ok": True}
@@ -872,6 +891,7 @@ def create_sub_priority(
     require(db, user, parent.environment_id, "environment.manage")
     item = SubPriorityDefinition(
         system_number=NumberingService.next(db, "sub_priority", parent.environment_id),
+        environment_id=parent.environment_id,
         priority_id=priority_id,
         **data.model_dump(),
     )
@@ -885,15 +905,38 @@ def update_sub_priority(sub_priority_id: uuid.UUID, data: SubPriorityIn, db: DB,
     item = db.get(SubPriorityDefinition, sub_priority_id)
     if not item:
         raise HTTPException(404, "Sub-priority not found")
-    parent = db.get(PriorityDefinition, item.priority_id)
-    if not parent:
-        raise HTTPException(409, "Parent priority no longer exists")
-    require(db, user, parent.environment_id, "environment.manage")
+    environment_id = item.environment_id
+    if not environment_id and item.priority_id:
+        parent = db.get(PriorityDefinition, item.priority_id)
+        environment_id = parent.environment_id if parent else None
+    if not environment_id:
+        raise HTTPException(409, "Sub-priority environment is unavailable")
+    require(db, user, environment_id, "environment.manage")
     for key, value in data.model_dump().items():
         setattr(item, key, value)
     audit(db, user, "sub_priority", item.id, "updated")
     db.commit()
     return item
+
+
+@router.get("/environments/{environment_id}/sub-priorities")
+def list_environment_sub_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+    require(db, user, environment_id, "environment.read")
+    rows = db.scalars(select(SubPriorityDefinition).where(
+        SubPriorityDefinition.environment_id == environment_id).order_by(SubPriorityDefinition.sort_order))
+    return [{column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows]
+
+
+@router.post("/environments/{environment_id}/sub-priorities", status_code=201)
+def create_environment_sub_priority(environment_id: uuid.UUID, data: SubPriorityIn,
+                                    db: DB, user: Current) -> dict[str, Any]:
+    require(db, user, environment_id, "environment.manage")
+    item = SubPriorityDefinition(system_number=NumberingService.next(db, "sub_priority", environment_id),
+                                 environment_id=environment_id, priority_id=None, **data.model_dump())
+    db.add(item); db.flush()
+    audit(db, user, "sub_priority", item.id, "created")
+    db.commit()
+    return {column.name: getattr(item, column.name) for column in item.__table__.columns}
 
 
 def automation_dict(item: AutomationRule) -> dict[str, Any]:

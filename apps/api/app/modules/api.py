@@ -134,6 +134,9 @@ class RequestTypeIn(BaseModel):
     name_he: str
     name_en: str
     description: str | None = None
+    sort_order: int = 0
+    requires_approval: bool = False
+    workflow_definition_id: uuid.UUID | None = None
     default_priority_id: uuid.UUID | None = None
     default_sub_priority_id: uuid.UUID | None = None
     default_assignee_user_id: uuid.UUID | None = None
@@ -145,7 +148,6 @@ class RequestTypeOut(RequestTypeIn):
     system_number: str | None
     is_active: bool
     form_version_id: uuid.UUID | None
-    workflow_definition_id: uuid.UUID | None
     model_config = {"from_attributes": True}
 
 
@@ -269,6 +271,9 @@ class RequestTypePatch(BaseModel):
     name_en: str | None = None
     description: str | None = None
     is_active: bool | None = None
+    sort_order: int | None = None
+    requires_approval: bool | None = None
+    workflow_definition_id: uuid.UUID | None = None
     default_priority_id: uuid.UUID | None = None
     default_sub_priority_id: uuid.UUID | None = None
     default_assignee_user_id: uuid.UUID | None = None
@@ -844,7 +849,7 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     sub_priority_id = data.sub_priority_id or rt.default_sub_priority_id
     if sub_priority_id:
         sub_priority = db.get(SubPriorityDefinition, sub_priority_id)
-        if not sub_priority or sub_priority.priority_id != priority.id or not sub_priority.is_active:
+        if not sub_priority or sub_priority.environment_id != data.environment_id or not sub_priority.is_active:
             raise HTTPException(422, "Sub-priority does not belong to the selected priority")
     provided = {v.field_definition_id: v.value for v in data.values}
     missing = [f.label_he for f in form.fields if f.is_required and provided.get(f.id) in (None, "")]
@@ -997,7 +1002,7 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
             raise HTTPException(422, "העדיפות אינה שייכת לסביבה")
     if data.sub_priority_id:
         sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
-        if not sub_priority or sub_priority.priority_id != data.priority_id or not sub_priority.is_active:
+        if not sub_priority or sub_priority.environment_id != item.environment_id or not sub_priority.is_active:
             raise HTTPException(422, "תת-העדיפות אינה שייכת לעדיפות")
     for key, value in changes.items():
         setattr(item, key, value)
@@ -1211,6 +1216,10 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     db.add(CaseStatusHistory(case_id=item.id, from_status_id=before, to_status_id=target.id,
                              transition_id=transition_row.id, changed_by=user.id,
                              comment=(data.comment or "").strip() or None))
+    AutomationEngine.run(db, item, "status_changed", {
+        "status": str(target.id), "status_id": str(target.id),
+        "request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id),
+    })
     audit(
         db, user, "case", item.id, "status_changed",
         {"workflow_status_id": str(before) if before else None},

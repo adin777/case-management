@@ -1,4 +1,5 @@
-from sqlalchemy import or_, select
+from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.models import (
@@ -9,6 +10,7 @@ from app.modules.models import (
     Case,
     EnvironmentMembership,
     GroupMember,
+    RequestType,
     Role,
 )
 from app.modules.numbering.service import NumberingService
@@ -16,13 +18,17 @@ from app.modules.operations.models import Notification
 
 
 def start_matching_approvals(db: Session, item: Case) -> list[ApprovalInstance]:
+    request_type = db.get(RequestType, item.request_type_id)
+    if not request_type or not request_type.requires_approval:
+        return []
     flows = db.scalars(select(ApprovalFlowDefinition).where(
         ApprovalFlowDefinition.environment_id == item.environment_id,
         ApprovalFlowDefinition.is_active.is_(True),
         ApprovalFlowDefinition.trigger_type == "case_created",
-        or_(ApprovalFlowDefinition.request_type_id.is_(None),
-            ApprovalFlowDefinition.request_type_id == item.request_type_id),
+        ApprovalFlowDefinition.request_type_id == item.request_type_id,
     )).all()
+    if not flows:
+        raise HTTPException(409, "סוג הקריאה דורש אישור אך לא הוגדרה עבורו תצורת אישורים פעילה")
     result = []
     for flow in flows:
         existing = db.scalar(select(ApprovalInstance).where(
@@ -32,6 +38,8 @@ def start_matching_approvals(db: Session, item: Case) -> list[ApprovalInstance]:
             result.append(existing); continue
         instance = ApprovalInstance(system_number=NumberingService.next(db, "approval_instance", item.environment_id),
                                     case_id=item.id, approval_flow_id=flow.id,
+                                    request_type_id=item.request_type_id,
+                                    approval_policy=flow.approval_policy,
                                     status="pending", current_step_order=1)
         db.add(instance); db.flush()
         item.approval_status = "pending"

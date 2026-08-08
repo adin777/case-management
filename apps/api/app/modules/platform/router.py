@@ -186,7 +186,16 @@ class ApprovalFlowIn(BaseModel):
     request_type_id: uuid.UUID | None = None
     trigger_type: str = "case_created"
     is_active: bool = True
-    steps: list[ApprovalStepIn] = Field(min_length=1)
+    approval_policy: str = Field("all_active_steps", pattern="^(all_active_steps|highest_active_step)$")
+    steps: list[ApprovalStepIn] = Field(min_length=1, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_simple_stages(self) -> "ApprovalFlowIn":
+        if any(step.approver_type != "user" or not step.approver_user_id for step in self.steps):
+            raise ValueError("בשלב זה כל שלב אישור חייב לבחור משתמש מאשר")
+        if any(not step.is_active for step in self.steps[:-1]) and self.steps[-1].is_active:
+            raise ValueError("שלבים פעילים חייבים להיות רציפים")
+        return self
 
 
 def flow_dict(db: DB, row: ApprovalFlowDefinition) -> dict[str, Any]:
@@ -195,6 +204,7 @@ def flow_dict(db: DB, row: ApprovalFlowDefinition) -> dict[str, Any]:
     return {"id": row.id, "system_number": row.system_number, "name": row.name,
             "description": row.description, "request_type_id": row.request_type_id,
             "trigger_type": row.trigger_type, "is_active": row.is_active,
+            "approval_policy": row.approval_policy,
             "steps": [{column.name: getattr(step, column.name) for column in step.__table__.columns} for step in steps]}
 
 
@@ -225,6 +235,21 @@ def update_flow(flow_id: uuid.UUID, data: ApprovalFlowIn, db: DB, user: Current)
     if not item: raise HTTPException(404, "סבב האישורים לא נמצא")
     require(db, user, item.environment_id, "environment.manage")
     before = jsonable_encoder(flow_dict(db, item))
+    if db.scalar(select(ApprovalInstance.id).where(ApprovalInstance.approval_flow_id == item.id).limit(1)):
+        item.is_active = False
+        replacement = ApprovalFlowDefinition(
+            id=uuid.uuid4(), system_number=NumberingService.next(db, "approval_flow", item.environment_id),
+            environment_id=item.environment_id, created_by=user.id,
+            **data.model_dump(exclude={"steps"}),
+        )
+        db.add(replacement); db.flush()
+        for index, step in enumerate(data.steps, 1):
+            db.add(ApprovalStepDefinition(id=uuid.uuid4(), approval_flow_id=replacement.id,
+                                          step_order=index, **step.model_dump()))
+        audit(db, user, "approval_flow", replacement.id, "version_created", before=before,
+              after=data.model_dump(mode="json"))
+        db.commit()
+        return flow_dict(db, replacement)
     for key, value in data.model_dump(exclude={"steps"}).items(): setattr(item, key, value)
     db.execute(delete(ApprovalStepDefinition).where(ApprovalStepDefinition.approval_flow_id == item.id))
     for index, step in enumerate(data.steps, 1):

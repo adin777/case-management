@@ -1,0 +1,2 @@
+export type SystemFieldOption = { id: string; label_he: string; description?: string; color?: string; sort_order?: number; is_active?: boolean; is_initial?: boolean; is_final?: boolean; workflow_id?: string; requires_approval?: boolean; default_priority_id?: string; default_sub_priority_id?: string; default_assignee_user_id?: string; default_assignee_group_id?: string };
+export type SystemField = { code: string; label_he: string; description_he: string; value_source: string; active_option_count: number; options: SystemFieldOption[] };
