@@ -32,21 +32,21 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
-    GroupEnvironmentRole,
-    GroupMember,
-    GroupPermissionAssignment,
     PriorityDefinition,
     RefreshToken,
     RequestType,
     Role,
-    RolePermission,
     SubPriorityDefinition,
     User,
-    UserPermissionAssignment,
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.models import CaseStatusHistory, WorkflowStatus, WorkflowTransition
+from app.modules.operations.models import (
+    CaseStatusHistory,
+    WorkflowDefinition,
+    WorkflowStatus,
+    WorkflowTransition,
+)
 from app.modules.operations.service import initialize_operations, resolve_workflow
 
 router = APIRouter(prefix="/api")
@@ -79,6 +79,7 @@ ALL_PERMISSIONS = [
     "attachment.read", "attachment.upload", "attachment.delete",
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
+    "report.cases", "report.audit", "report.sla",
 ]
 
 
@@ -236,6 +237,8 @@ class CaseOut(BaseModel):
     sub_priority_id: uuid.UUID | None
     reporter_id: uuid.UUID
     requester_id: uuid.UUID
+    reporter_name: str | None = None
+    reporter_email: str | None = None
     assignee_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
@@ -354,35 +357,7 @@ Current = Annotated[User, Depends(current_user)]
 def permissions(db: Session, user: User, environment_id: uuid.UUID) -> set[str]:
     if user.is_system_admin:
         return set(ALL_PERMISSIONS)
-    role_ids = set(db.scalars(select(EnvironmentMembership.role_id).where(
-        EnvironmentMembership.environment_id == environment_id,
-        EnvironmentMembership.user_id == user.id,
-    )))
-    group_ids = select(GroupMember.group_id).where(GroupMember.user_id == user.id)
-    role_ids.update(db.scalars(select(GroupEnvironmentRole.role_id).where(
-        GroupEnvironmentRole.environment_id == environment_id,
-        GroupEnvironmentRole.group_id.in_(group_ids),
-    )))
-    result: set[str] = set()
-    for role in db.scalars(select(Role).where(Role.id.in_(role_ids))):
-        result.update(role.permissions or [])
-    result.update(db.scalars(select(RolePermission.permission_code).where(
-        RolePermission.role_id.in_(role_ids)
-    )))
-    direct = list(db.scalars(select(UserPermissionAssignment).where(
-        UserPermissionAssignment.user_id == user.id,
-        or_(UserPermissionAssignment.environment_id == environment_id,
-            UserPermissionAssignment.environment_id.is_(None)),
-    )))
-    group_direct = list(db.scalars(select(GroupPermissionAssignment).where(
-        GroupPermissionAssignment.group_id.in_(group_ids),
-        or_(GroupPermissionAssignment.environment_id == environment_id,
-            GroupPermissionAssignment.environment_id.is_(None)),
-    )))
-    result.update(row.permission_code for row in direct + group_direct if row.is_allowed)
-    result.update(domain_permissions(db, user.id, environment_id))
-    result.difference_update(row.permission_code for row in direct + group_direct if not row.is_allowed)
-    return result
+    return domain_permissions(db, user.id, environment_id)
 
 
 def require(db: Session, user: User, env: uuid.UUID, permission: str) -> None:
@@ -950,12 +925,11 @@ def cases(
         query = query.where(Case.assignee_id == user.id)
     elif not user.is_system_admin:
         broad_environment_ids = []
-        for env_id, role in db.execute(
-            select(EnvironmentMembership.environment_id, Role)
-            .join(Role, EnvironmentMembership.role_id == Role.id)
-            .where(EnvironmentMembership.user_id == user.id)
-        ):
-            if "case.assign" in role.permissions or role.code == "viewer":
+        for env_id in db.scalars(select(EnvironmentMembership.environment_id).where(
+            EnvironmentMembership.user_id == user.id,
+            EnvironmentMembership.is_active.is_(True),
+        )):
+            if "case.read_environment" in permissions(db, user, env_id):
                 broad_environment_ids.append(env_id)
         query = query.where(
             or_(
@@ -982,6 +956,7 @@ def workspace_cases(
     updated_to: datetime | None = None,
     environment_id: uuid.UUID | None = None,
     dynamic_filters: str | None = None,
+    include_participating: bool = False,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     sort: str = "updated_at:desc",
@@ -1000,7 +975,15 @@ def workspace_cases(
     if view == "assigned" and not can_view_assigned:
         raise HTTPException(403, "אין הרשאה לצפות בקריאות בטיפולי")
     query = select(Case)
-    query = query.where(Case.reporter_id == user.id) if view == "my" else query.where(Case.assignee_id == user.id)
+    if view == "my":
+        own_filter = or_(Case.reporter_id == user.id, Case.requester_id == user.id)
+        if include_participating:
+            own_filter = or_(own_filter, Case.id.in_(select(CaseParticipant.case_id).where(
+                CaseParticipant.user_id == user.id
+            )))
+        query = query.where(own_filter)
+    else:
+        query = query.where(Case.assignee_id == user.id)
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
     if title.strip():
@@ -1104,8 +1087,11 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
     ]
     granted = permissions(db, user, item.environment_id)
     can_override_lock = user.is_system_admin or "case.lock" in granted
+    reporter = db.get(User, item.reporter_id)
     return CaseOut.model_validate(item).model_copy(
         update={
+            "reporter_name": reporter.display_name if reporter else None,
+            "reporter_email": reporter.email if reporter else None,
             "comments": [CommentOut.model_validate(c) for c in visible_comments],
             "permissions": {
                 "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
@@ -1225,6 +1211,36 @@ def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[
     ).order_by(WorkflowTransition.sort_order)).all()
     return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
              "requires_comment": transition.requires_comment} for transition, status in rows]
+
+
+@router.get("/cases/{case_id}/status-options")
+def status_options(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(404, "Case not found")
+    case_access(db, user, item)
+    statuses = list(db.scalars(select(WorkflowStatus).join(
+        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id,
+    ).where(
+        WorkflowDefinition.environment_id == item.environment_id,
+        WorkflowStatus.is_active.is_(True),
+    ).order_by(WorkflowStatus.sort_order)))
+    allowed_rows = db.execute(select(WorkflowTransition).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+    )).scalars().all()
+    allowed_ids = {row.to_status_id for row in allowed_rows}
+    can_change = "case.change_status" in permissions(db, user, item.environment_id)
+    return [{
+        "id": str(status.id),
+        "label_he": status.label_he,
+        "current": status.id == item.workflow_status_id,
+        "allowed": can_change and status.id in allowed_ids,
+        "reason": None if can_change and status.id in allowed_ids else (
+            "זהו הסטטוס הנוכחי" if status.id == item.workflow_status_id
+            else "לא ניתן לעבור ישירות מהסטטוס הנוכחי"
+        ),
+    } for status in statuses]
 
 
 @router.post("/cases/{case_id}/comments", response_model=CommentOut, status_code=201)

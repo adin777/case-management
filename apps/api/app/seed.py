@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.session import SessionLocal
-from app.modules.access.mapping import DOMAIN_DEFINITIONS
-from app.modules.access.models import PermissionDomain
+from app.modules.access.mapping import DOMAIN_DEFINITIONS, codes
+from app.modules.access.models import AccessLevelAssignment, PermissionDomain
 from app.modules.api import ALL_PERMISSIONS, password_hash
 from app.modules.models import (
     Environment,
@@ -28,28 +28,13 @@ from app.modules.operations.models import SlaPolicy, WorkflowDefinition, Workflo
 
 
 def ensure_foundation(db: Session, admin: User) -> None:
-    base_groups: dict[str, Group] = {}
-    for name, description in [
-        ("אדמין", "מנהלי מערכת בעלי גישה מלאה"),
-        ("מנהל סביבה", "מנהלים לפי שיוך לסביבה"),
-        ("משתמש", "משתמשים בעלי הרשאות בסיס שהוגדרו במפורש"),
-    ]:
-        group = db.scalar(select(Group).where(Group.name == name))
-        if not group:
-            group = Group(system_number=f"UG-{uuid.uuid4().hex[:8].upper()}", name=name,
-                          description=description, is_active=True)
-            db.add(group)
-            db.flush()
-        base_groups[name] = group
-    if not db.get(GroupMember, (base_groups["אדמין"].id, admin.id)):
-        db.add(GroupMember(group_id=base_groups["אדמין"].id, user_id=admin.id, added_by=admin.id))
     for order, definition in enumerate(DOMAIN_DEFINITIONS):
-        code, name, description, scope, view_codes, edit_codes = definition
+        code, name, description, category, scope, view_codes, edit_codes = definition
         domain = db.get(PermissionDomain, code)
         if not domain:
             domain = PermissionDomain(code=code)
             db.add(domain)
-        domain.name_he, domain.description_he, domain.scope = name, description, scope
+        domain.name_he, domain.description_he, domain.category, domain.scope = name, description, category, scope
         domain.view_permissions, domain.edit_permissions = view_codes, edit_codes
         domain.sort_order, domain.is_active = order, True
 
@@ -222,18 +207,36 @@ def run(*, include_demo_data: bool = False) -> None:
             db.add(GroupMember(group_id=base_groups["אדמין"].id, user_id=users["admin@example.com"].id, added_by=users["admin@example.com"].id))
 
         for order, definition in enumerate(DOMAIN_DEFINITIONS):
-            code, name, description, scope, view_codes, edit_codes = definition
+            code, name, description, category, scope, view_codes, edit_codes = definition
             domain = db.get(PermissionDomain, code)
             if not domain:
                 domain = PermissionDomain(code=code)
                 db.add(domain)
             domain.name_he = name
             domain.description_he = description
+            domain.category = category
             domain.scope = scope
             domain.view_permissions = view_codes
             domain.edit_permissions = edit_codes
             domain.sort_order = order
             domain.is_active = True
+
+        db.flush()
+        for membership in db.scalars(select(EnvironmentMembership)):
+            role = db.get(Role, membership.role_id)
+            role_codes = set(role.permissions or []) if role else set()
+            for domain in db.scalars(select(PermissionDomain).where(PermissionDomain.is_active.is_(True))):
+                level = "edit" if role_codes & codes(domain.edit_permissions) else (
+                    "view" if role_codes & codes(domain.view_permissions) else None
+                )
+                if level and not db.scalar(select(AccessLevelAssignment.id).where(
+                    AccessLevelAssignment.user_id == membership.user_id,
+                    AccessLevelAssignment.domain_code == domain.code,
+                    AccessLevelAssignment.environment_id == membership.environment_id,
+                )):
+                    db.add(AccessLevelAssignment(domain_code=domain.code, user_id=membership.user_id,
+                        group_id=None, environment_id=membership.environment_id,
+                        access_level=level, created_by=users["admin@example.com"].id))
 
         priorities: dict[str, PriorityDefinition] = {}
         for index, (code, label, color) in enumerate([

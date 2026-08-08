@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.modules.access.models import AccessLevelAssignment, PermissionDomain
-from app.modules.access.service import replace_levels
+from app.modules.access.service import EffectivePermissionService, replace_levels
 from app.modules.api import DB, Current, audit
+from app.modules.models import User
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
@@ -16,7 +17,7 @@ class BulkAccessIn(BaseModel):
     subject_type: Literal["users", "groups"]
     subject_ids: list[uuid.UUID] = Field(min_length=1)
     environment_id: uuid.UUID | None = None
-    levels: dict[str, Literal["none", "view", "edit"]]
+    levels: dict[str, Literal["inherit", "none", "view", "edit"]]
 
 
 class CopyAccessIn(BaseModel):
@@ -61,10 +62,51 @@ def assignments(
 @router.post("/bulk")
 def bulk(data: BulkAccessIn, db: DB, user: Current) -> dict[str, int]:
     system_admin(user)
+    aliases = {"users": "users_manage", "groups": "groups_manage", "access": "access_manage"}
+    expanded: dict[str, Literal["inherit", "none", "view", "edit"]] = {}
+    for code, level in data.levels.items():
+        if code == "cases":
+            expanded["cases_view"] = level
+            if level == "edit":
+                expanded["cases_edit"] = "edit"
+        else:
+            expanded[aliases.get(code, code)] = level
+    data.levels = expanded
+    known_domains = {row.code: row for row in db.scalars(select(PermissionDomain).where(PermissionDomain.code.in_(data.levels)))}
+    if len(known_domains) != len(data.levels):
+        raise HTTPException(422, "אחד מתחומי ההרשאה אינו קיים")
+    if data.subject_type == "groups" and "inherit" in data.levels.values():
+        raise HTTPException(422, "ירושה זמינה רק כחריגת משתמש")
+    if data.environment_id and any(row.scope == "global" for row in known_domains.values()):
+        raise HTTPException(422, "תחום הרשאה כללי אינו ניתן להגדרה בסביבה")
     replace_levels(db, user.id, data.subject_type, data.subject_ids, data.environment_id, data.levels)
     audit(db, user, "access_level", uuid.uuid4(), "bulk_updated", after=data.model_dump(mode="json"))
     db.commit()
     return {"subjects": len(data.subject_ids), "domains": len(data.levels)}
+
+
+@router.get("/users/{user_id}/overrides")
+def user_overrides(user_id: uuid.UUID, db: DB, user: Current,
+                   environment_id: uuid.UUID | None = None) -> dict[str, str]:
+    system_admin(user)
+    if not db.get(User, user_id):
+        raise HTTPException(404, "המשתמש לא נמצא")
+    rows = db.scalars(select(AccessLevelAssignment).where(
+        AccessLevelAssignment.user_id == user_id,
+        AccessLevelAssignment.environment_id == environment_id,
+    ))
+    return {row.domain_code: row.access_level for row in rows}
+
+
+@router.get("/users/{user_id}/effective-access")
+def effective_access(user_id: uuid.UUID, db: DB, user: Current,
+                     environment_id: uuid.UUID | None = None) -> list[dict]:
+    if not user.is_system_admin and user.id != user_id:
+        raise HTTPException(403, "אין הרשאה לצפייה בהרשאות המשתמש")
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "המשתמש לא נמצא")
+    return EffectivePermissionService(db).explain_all(target, environment_id)
 
 
 def source_levels(db: DB, data: CopyAccessIn) -> dict[str, str]:

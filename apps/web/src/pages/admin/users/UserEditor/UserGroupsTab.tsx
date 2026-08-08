@@ -1,0 +1,17 @@
+import { useEffect, useState } from 'react';
+import { Alert, Button, Chip, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material';
+import { api } from '../../../../api/client';
+import type { Group, User } from '../../../../types';
+
+type Preview = { source_group_ids: string[]; targets: { user_id: string; current_count: number; result_count: number; changed: boolean }[] };
+export function UserGroupsTab({ user, users, groups, onSaved }: { user: User; users: User[]; groups: Group[]; onSaved: () => Promise<void> }) {
+  const [selected, setSelected] = useState<string[]>([]); const [targets, setTargets] = useState<string[]>([]);
+  const [mode, setMode] = useState<'add_missing' | 'replace_all'>('add_missing'); const [preview, setPreview] = useState<Preview>(); const [message, setMessage] = useState('');
+  useEffect(() => { setSelected(user.groups?.map((group) => group.id) || []); setTargets([]); setPreview(undefined); }, [user]);
+  async function save() { await api(`/users/${user.id}/groups`, { method: 'PUT', body: JSON.stringify({ group_ids: selected }) }); setMessage('קבוצות המשתמש נשמרו'); await onSaved(); }
+  const copyPayload = { source_user_id: user.id, target_user_ids: targets, mode };
+  async function previewCopy() { setPreview(await api<Preview>('/user-group-memberships/copy/preview', { method: 'POST', body: JSON.stringify(copyPayload) })); }
+  async function copy() { await api('/user-group-memberships/copy', { method: 'POST', body: JSON.stringify(copyPayload) }); setMessage('הקבוצות הועתקו'); setPreview(undefined); await onSaved(); }
+  return <Stack spacing={2}>{message && <Alert severity="success">{message}</Alert>}<Typography fontWeight={800}>{selected.length} קבוצות משויכות</Typography><TextField select SelectProps={{ multiple: true, renderValue: (value) => <Stack direction="row" gap={.5} flexWrap="wrap">{(value as string[]).map((id) => <Chip key={id} label={groups.find((group) => group.id === id)?.name}/>)}</Stack> }} label="קבוצות משתמשים" value={selected} onChange={(event) => setSelected(typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)}>{groups.filter((group) => group.is_active || selected.includes(group.id)).map((group) => <MenuItem key={group.id} value={group.id}>{group.name}</MenuItem>)}</TextField><Button variant="contained" onClick={save}>שמירת קבוצות</Button>
+    <Paper variant="outlined" sx={{ p: 2 }}><Stack spacing={2}><Typography variant="h6">העתקת קבוצות</Typography><TextField select SelectProps={{ multiple: true }} label="משתמשי יעד" value={targets} onChange={(event) => { setTargets(typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value); setPreview(undefined); }}>{users.filter((item) => item.id !== user.id).map((item) => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}</TextField><TextField select label="אופן ההעתקה" value={mode} onChange={(event) => { setMode(event.target.value as typeof mode); setPreview(undefined); }}><MenuItem value="add_missing">הוספת קבוצות חסרות</MenuItem><MenuItem value="replace_all">החלפה מלאה</MenuItem></TextField><Button disabled={!targets.length} onClick={previewCopy}>תצוגה מקדימה</Button>{preview && <Alert severity="info">{preview.targets.filter((target) => target.changed).length} משתמשים ישתנו; למקור {preview.source_group_ids.length} קבוצות.</Alert>}<Button variant="outlined" disabled={!preview} onClick={copy}>אישור והעתקה</Button></Stack></Paper></Stack>;
+}

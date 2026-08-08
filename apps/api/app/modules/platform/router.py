@@ -11,6 +11,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, or_, select
 
+from app.modules.access.mapping import codes
+from app.modules.access.models import PermissionDomain
+from app.modules.access.service import replace_levels
 from app.modules.api import DB, Current, audit, case_access, permissions, require
 from app.modules.approvals.service import create_step_tasks
 from app.modules.models import (
@@ -141,7 +144,15 @@ def assign_user_permission(user_id: uuid.UUID, data: PermissionAssignmentIn, db:
     if not user.is_system_admin: raise HTTPException(403, "נדרש מנהל מערכת")
     if not db.get(Permission, data.permission_code): raise HTTPException(404, "ההרשאה לא נמצאה")
     item = UserPermissionAssignment(user_id=user_id, created_by=user.id, **data.model_dump())
-    db.add(item); db.commit(); return {"id": item.id}
+    db.add(item)
+    levels: dict[str, str] = {}
+    for domain in db.scalars(select(PermissionDomain).where(PermissionDomain.is_active.is_(True))):
+        if data.permission_code in codes(domain.edit_permissions):
+            levels[domain.code] = "edit" if data.is_allowed else "none"
+        elif data.permission_code in codes(domain.view_permissions):
+            levels[domain.code] = "view" if data.is_allowed else "none"
+    replace_levels(db, user.id, "users", [user_id], data.environment_id, levels)
+    db.commit(); return {"id": item.id}
 
 
 @router.delete("/users/{user_id}/direct-permissions/{assignment_id}", status_code=204)
@@ -149,6 +160,10 @@ def remove_user_permission(user_id: uuid.UUID, assignment_id: uuid.UUID, db: DB,
     if not user.is_system_admin: raise HTTPException(403, "נדרש מנהל מערכת")
     item = db.get(UserPermissionAssignment, assignment_id)
     if not item or item.user_id != user_id: raise HTTPException(404, "השיוך לא נמצא")
+    levels = {domain.code: "inherit" for domain in db.scalars(
+        select(PermissionDomain).where(PermissionDomain.is_active.is_(True)))
+        if item.permission_code in codes(domain.view_permissions) | codes(domain.edit_permissions)}
+    replace_levels(db, user.id, "users", [user_id], item.environment_id, levels)
     db.delete(item); db.commit()
 
 
@@ -355,16 +370,20 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
                  case_number: str | None = None, title: str | None = None,
                  description: str | None = None, priority: str | None = None,
                  workflow_status_id: uuid.UUID | None = None,
-                 priority_id: uuid.UUID | None = None) -> Any:
+                 priority_id: uuid.UUID | None = None,
+                 include_participating: bool = False) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
     if not user.is_system_admin:
-        query = query.where(or_(
+        access_conditions = [
             Case.requester_id == user.id,
             Case.reporter_id == user.id,
             Case.assignee_id == user.id,
-            Case.id.in_(select(CaseParticipant.case_id).where(CaseParticipant.user_id == user.id)),
-        ))
+        ]
+        if include_participating:
+            access_conditions.append(Case.id.in_(select(CaseParticipant.case_id).where(
+                CaseParticipant.user_id == user.id)))
+        query = query.where(or_(*access_conditions))
     if environment_id: query = query.where(Case.environment_id == environment_id)
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
     if status: query = query.where(Case.status == status)
@@ -412,10 +431,16 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  case_number: str | None = None, title: str | None = None,
                  description: str | None = None, priority: str | None = None,
                  workflow_status_id: uuid.UUID | None = None, priority_id: uuid.UUID | None = None,
+                 include_participating: bool = False,
                  page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)) -> dict[str, Any]:
+    if not user.is_system_admin:
+        if not environment_id:
+            raise HTTPException(422, "יש לבחור סביבה לצפייה בדוח")
+        require(db, user, environment_id, "report.cases")
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
-                         case_number, title, description, priority, workflow_status_id, priority_id)
+                         case_number, title, description, priority, workflow_status_id, priority_id,
+                         include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
     query = query.add_columns(select(WorkflowStatus.label_he).where(WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
     query = query.add_columns(select(PriorityDefinition.label_he).where(PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
@@ -426,6 +451,10 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
 
 @router.get("/reports/cases/value-sources")
 def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None = None) -> dict[str, Any]:
+    if not user.is_system_admin:
+        if not environment_id:
+            raise HTTPException(422, "יש לבחור סביבה לצפייה בדוח")
+        require(db, user, environment_id, "report.cases")
     status_query = select(WorkflowStatus, Environment.name_he).join(
         WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id
     ).join(Environment, WorkflowDefinition.environment_id == Environment.id).where(
@@ -466,10 +495,16 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  created_from: datetime | None = None, created_to: datetime | None = None,
                  updated_from: datetime | None = None, updated_to: datetime | None = None,
                  case_number: str | None = None, title: str | None = None,
-                 description: str | None = None, priority: str | None = None) -> Response:
+                 description: str | None = None, priority: str | None = None,
+                 include_participating: bool = False) -> Response:
+    if not user.is_system_admin:
+        if not environment_id:
+            raise HTTPException(422, "יש לבחור סביבה לייצוא הדוח")
+        require(db, user, environment_id, "report.cases")
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
-                         case_number, title, description, priority)
+                         case_number, title, description, priority,
+                         include_participating=include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
     rows = [report_row(row) for row in db.execute(query.limit(5000)).all()]
     content = xlsx_bytes(rows, {"environment_id": str(environment_id or ""), "request_type_id": str(request_type_id or ""), "status": status or "", "search": search or "", "sort": sort, "direction": direction})
