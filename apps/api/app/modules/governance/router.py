@@ -176,6 +176,16 @@ class CopyEnvironmentMembershipsIn(BaseModel):
     mode: str = Field(pattern="^(add_missing|replace_all)$")
 
 
+class UserGroupsIn(BaseModel):
+    group_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class CopyUserGroupsIn(BaseModel):
+    source_user_id: uuid.UUID
+    target_user_ids: list[uuid.UUID] = Field(min_length=1)
+    mode: str = Field(pattern="^(add_missing|replace_all)$")
+
+
 class PriorityIn(BaseModel):
     code: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     label_he: str
@@ -290,6 +300,60 @@ def get_user(user_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     return user_dict(db, item)
 
 
+@router.put("/users/{user_id}/groups")
+def set_user_groups(user_id: uuid.UUID, data: UserGroupsIn, db: DB, user: Current) -> dict[str, int]:
+    system_admin(user)
+    if not db.get(User, user_id):
+        raise HTTPException(404, "המשתמש לא נמצא")
+    known = set(db.scalars(select(Group.id).where(Group.id.in_(data.group_ids))))
+    if known != set(data.group_ids):
+        raise HTTPException(422, "אחת הקבוצות אינה קיימת")
+    before = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == user_id)))
+    db.execute(delete(GroupMember).where(GroupMember.user_id == user_id))
+    for group_id in data.group_ids:
+        db.add(GroupMember(group_id=group_id, user_id=user_id, added_by=user.id))
+    audit(db, user, "user_groups", user_id, "replaced",
+          before={"group_ids": [str(value) for value in before]},
+          after={"group_ids": [str(value) for value in data.group_ids]})
+    db.commit()
+    return {"groups": len(data.group_ids)}
+
+
+def _group_copy_preview(data: CopyUserGroupsIn, db: DB) -> dict[str, Any]:
+    source = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == data.source_user_id)))
+    targets = []
+    for target_id in data.target_user_ids:
+        current = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == target_id)))
+        result = source if data.mode == "replace_all" else current | source
+        targets.append({"user_id": target_id, "current_count": len(current),
+                        "result_count": len(result), "changed": current != result})
+    return {"source_group_ids": list(source), "targets": targets, "mode": data.mode}
+
+
+@router.post("/user-group-memberships/copy/preview")
+def copy_user_groups_preview(data: CopyUserGroupsIn, db: DB, user: Current) -> dict[str, Any]:
+    system_admin(user)
+    return _group_copy_preview(data, db)
+
+
+@router.post("/user-group-memberships/copy")
+def copy_user_groups(data: CopyUserGroupsIn, db: DB, user: Current) -> dict[str, int]:
+    system_admin(user)
+    preview = _group_copy_preview(data, db)
+    source = set(preview["source_group_ids"])
+    for target_id in data.target_user_ids:
+        if not db.get(User, target_id):
+            raise HTTPException(404, "אחד ממשתמשי היעד אינו קיים")
+        current = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == target_id)))
+        result = source if data.mode == "replace_all" else current | source
+        db.execute(delete(GroupMember).where(GroupMember.user_id == target_id))
+        for group_id in result:
+            db.add(GroupMember(group_id=group_id, user_id=target_id, added_by=user.id))
+    audit(db, user, "user_groups", data.source_user_id, "copied", after=data.model_dump(mode="json"))
+    db.commit()
+    return {"targets": len(data.target_user_ids), "groups": len(source)}
+
+
 @router.patch("/users/{user_id}")
 def update_user(user_id: uuid.UUID, data: UserPatch, db: DB, user: Current) -> dict[str, Any]:
     item = db.get(User, user_id)
@@ -349,6 +413,25 @@ def set_user_environment_memberships(
     )
     db.commit()
     return user_dict(db, target)
+
+
+@router.post("/users/environment-memberships/copy/preview")
+def copy_user_environment_memberships_preview(
+    data: CopyEnvironmentMembershipsIn, db: DB, user: Current
+) -> dict[str, Any]:
+    system_admin(user)
+    source = list(db.scalars(select(EnvironmentMembership).where(
+        EnvironmentMembership.user_id == data.source_user_id,
+        EnvironmentMembership.is_active.is_(True))))
+    targets = []
+    for target_id in data.target_user_ids:
+        current = set(db.scalars(select(EnvironmentMembership.environment_id).where(
+            EnvironmentMembership.user_id == target_id)))
+        source_ids = {row.environment_id for row in source}
+        result = source_ids if data.mode == "replace_all" else current | source_ids
+        targets.append({"user_id": target_id, "current_count": len(current),
+                        "result_count": len(result), "changed": current != result})
+    return {"source_count": len(source), "targets": targets, "mode": data.mode}
 
 
 @router.post("/users/environment-memberships/copy")

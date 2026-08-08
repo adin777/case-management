@@ -123,31 +123,17 @@ def test_group_permissions_are_unioned_and_removed_with_membership() -> None:
         headers=headers,
         json={"name": "Permission Test Group", "description": "Test", "is_active": True},
     ).json()
-    role = client.post(
-        "/api/roles",
-        headers=headers,
-        json={
-            "code": "group_assign_test",
-            "name": "Group Assign Test",
-            "scope": "environment",
-            "description": "Test role",
-            "permissions": ["case.assign"],
-        },
-    ).json()
     assert (
         client.post(
             f"/api/groups/{group['id']}/members", headers=headers, json={"user_id": requester["id"]}
         ).status_code
         == 201
     )
-    assert (
-        client.post(
-            f"/api/groups/{group['id']}/roles",
-            headers=headers,
-            json={"environment_id": environment["id"], "role_id": role["id"]},
-        ).status_code
-        == 201
-    )
+    assigned = client.post("/api/access/bulk", headers=headers, json={
+        "subject_type": "groups", "subject_ids": [group["id"]],
+        "environment_id": environment["id"], "levels": {"cases_assign": "edit"},
+    })
+    assert assigned.status_code == 200
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.email == "requester@example.com"))
         assert user and "case.assign" in permissions(db, user, uuid.UUID(environment["id"]))
@@ -187,6 +173,12 @@ def test_participant_access_public_comments_and_manager_isolation() -> None:
     requester_headers = auth("requester@example.com", "Requester123!")
     participant_headers = auth("participant@example.com", "Participant123!")
     outsider_headers = auth("outsider@example.com", "Outsider123!")
+    environment = it_environment(admin_headers)
+    requester = next(row for row in client.get("/api/users", headers=admin_headers).json() if row["email"] == "requester@example.com")
+    assert client.post("/api/access/bulk", headers=admin_headers, json={
+        "subject_type": "users", "subject_ids": [requester["id"]],
+        "environment_id": environment["id"], "levels": {"cases_create": "edit", "cases_view": "view"},
+    }).status_code == 200
     case = create_case(requester_headers, [participant["id"]])
     assert client.get(f"/api/cases/{case['id']}", headers=requester_headers).status_code == 200
     assert client.get(f"/api/cases/{case['id']}", headers=participant_headers).status_code == 200

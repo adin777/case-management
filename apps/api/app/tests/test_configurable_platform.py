@@ -60,6 +60,8 @@ def test_direct_permission_deny_overrides_role() -> None:
     assert assigned.status_code == 201
     after = client.get(f"/api/users/{requester['id']}/effective-permissions?environment_id={environment['id']}", headers=headers).json()["permissions"]
     assert "case.create" not in after
+    restored = client.post("/api/access/bulk", headers=headers, json={"subject_type": "users", "subject_ids": [requester["id"]], "environment_id": environment["id"], "levels": {"cases_create": "edit"}})
+    assert restored.status_code == 200
     removed = client.delete(f"/api/users/{requester['id']}/direct-permissions/{assigned.json()['id']}", headers=headers)
     assert removed.status_code == 204
 

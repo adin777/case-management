@@ -5,6 +5,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from app.modules.access.mapping import codes
+from app.modules.access.models import AccessLevelAssignment, PermissionDomain
+from app.modules.access.service import replace_levels
 from app.modules.api import DB, Current, audit, require
 from app.modules.models import (
     Group,
@@ -93,6 +96,26 @@ def apply_bulk(
     return {"created": created, "removed": removed, "unchanged": unchanged, "failed": []}
 
 
+def sync_access_levels(db: DB, user: Current, subject_type: str, subject_ids: list[uuid.UUID],
+                       data: BulkPermissionIn) -> None:
+    levels: dict[str, str] = {}
+    for domain in db.scalars(select(PermissionDomain).where(PermissionDomain.is_active.is_(True))):
+        for permission_code in data.permission_codes:
+            if permission_code in codes(domain.edit_permissions):
+                levels[domain.code] = "edit"
+            elif permission_code in codes(domain.view_permissions) and levels.get(domain.code) != "edit":
+                levels[domain.code] = "view"
+    if data.operation == "remove":
+        field = AccessLevelAssignment.user_id if subject_type == "users" else AccessLevelAssignment.group_id
+        for row in db.scalars(select(AccessLevelAssignment).where(
+            field.in_(subject_ids), AccessLevelAssignment.environment_id == data.environment_id,
+            AccessLevelAssignment.domain_code.in_(levels))):
+            db.delete(row)
+    else:
+        replace_levels(db, user.id, subject_type, subject_ids, data.environment_id, levels)
+    db.commit()
+
+
 @router.get("/manage")
 def catalog(db: DB, user: Current) -> list[dict[str, Any]]:
     if not user.is_system_admin:
@@ -132,7 +155,9 @@ def bulk_users(data: BulkPermissionIn, db: DB, user: Current) -> dict[str, Any]:
     known = set(db.scalars(select(User.id).where(User.id.in_(data.user_ids))))
     if known != set(data.user_ids):
         raise HTTPException(404, "אחד המשתמשים לא נמצא")
-    return apply_bulk(db, user, UserPermissionAssignment, "user_id", data.user_ids, data)
+    result = apply_bulk(db, user, UserPermissionAssignment, "user_id", data.user_ids, data)
+    sync_access_levels(db, user, "users", data.user_ids, data)
+    return result
 
 
 @router.post("/bulk/groups")
@@ -142,4 +167,6 @@ def bulk_groups(data: BulkPermissionIn, db: DB, user: Current) -> dict[str, Any]
     known = set(db.scalars(select(Group.id).where(Group.id.in_(data.group_ids))))
     if known != set(data.group_ids):
         raise HTTPException(404, "אחת הקבוצות לא נמצאה")
-    return apply_bulk(db, user, GroupPermissionAssignment, "group_id", data.group_ids, data)
+    result = apply_bulk(db, user, GroupPermissionAssignment, "group_id", data.group_ids, data)
+    sync_access_levels(db, user, "groups", data.group_ids, data)
+    return result

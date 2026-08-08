@@ -32,17 +32,12 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
-    GroupEnvironmentRole,
-    GroupMember,
-    GroupPermissionAssignment,
     PriorityDefinition,
     RefreshToken,
     RequestType,
     Role,
-    RolePermission,
     SubPriorityDefinition,
     User,
-    UserPermissionAssignment,
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
@@ -79,6 +74,7 @@ ALL_PERMISSIONS = [
     "attachment.read", "attachment.upload", "attachment.delete",
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
+    "report.cases", "report.audit", "report.sla",
 ]
 
 
@@ -354,35 +350,7 @@ Current = Annotated[User, Depends(current_user)]
 def permissions(db: Session, user: User, environment_id: uuid.UUID) -> set[str]:
     if user.is_system_admin:
         return set(ALL_PERMISSIONS)
-    role_ids = set(db.scalars(select(EnvironmentMembership.role_id).where(
-        EnvironmentMembership.environment_id == environment_id,
-        EnvironmentMembership.user_id == user.id,
-    )))
-    group_ids = select(GroupMember.group_id).where(GroupMember.user_id == user.id)
-    role_ids.update(db.scalars(select(GroupEnvironmentRole.role_id).where(
-        GroupEnvironmentRole.environment_id == environment_id,
-        GroupEnvironmentRole.group_id.in_(group_ids),
-    )))
-    result: set[str] = set()
-    for role in db.scalars(select(Role).where(Role.id.in_(role_ids))):
-        result.update(role.permissions or [])
-    result.update(db.scalars(select(RolePermission.permission_code).where(
-        RolePermission.role_id.in_(role_ids)
-    )))
-    direct = list(db.scalars(select(UserPermissionAssignment).where(
-        UserPermissionAssignment.user_id == user.id,
-        or_(UserPermissionAssignment.environment_id == environment_id,
-            UserPermissionAssignment.environment_id.is_(None)),
-    )))
-    group_direct = list(db.scalars(select(GroupPermissionAssignment).where(
-        GroupPermissionAssignment.group_id.in_(group_ids),
-        or_(GroupPermissionAssignment.environment_id == environment_id,
-            GroupPermissionAssignment.environment_id.is_(None)),
-    )))
-    result.update(row.permission_code for row in direct + group_direct if row.is_allowed)
-    result.update(domain_permissions(db, user.id, environment_id))
-    result.difference_update(row.permission_code for row in direct + group_direct if not row.is_allowed)
-    return result
+    return domain_permissions(db, user.id, environment_id)
 
 
 def require(db: Session, user: User, env: uuid.UUID, permission: str) -> None:
@@ -950,12 +918,11 @@ def cases(
         query = query.where(Case.assignee_id == user.id)
     elif not user.is_system_admin:
         broad_environment_ids = []
-        for env_id, role in db.execute(
-            select(EnvironmentMembership.environment_id, Role)
-            .join(Role, EnvironmentMembership.role_id == Role.id)
-            .where(EnvironmentMembership.user_id == user.id)
-        ):
-            if "case.assign" in role.permissions or role.code == "viewer":
+        for env_id in db.scalars(select(EnvironmentMembership.environment_id).where(
+            EnvironmentMembership.user_id == user.id,
+            EnvironmentMembership.is_active.is_(True),
+        )):
+            if "case.read_environment" in permissions(db, user, env_id):
                 broad_environment_ids.append(env_id)
         query = query.where(
             or_(

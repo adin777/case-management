@@ -251,6 +251,32 @@
 - API ו-Webhooks צריכים להיות Versioned לפני חשיפה לצרכנים חיצוניים.
 - אין להכניס AI ללוגיקת הליבה. AI יכול להציע סיווג, סיכום, כפילות או פתרון, אך החלטות משמעותיות דורשות אישור אדם ונרשמות ב-Audit.
 
+## סדר ערכים
+
+- אין להציג למשתמש `sort_order`; הוא נשמר פנימית בלבד.
+- סדר ערכים מנוהל באמצעות Drag & Drop ונשמר מיד או באמצעות פעולת שמירה ברורה.
+- שינוי סדר חייב להתעדכן בכל מקום שמשתמש בערכים.
+
+## שינוי לוגיקה הוא End-to-End
+
+- שינוי במודל עסקי חייב להיבדק ולעבור באופן עקבי דרך Database, Models, Services, API, Permissions, Automations, Reports, UI ו-Tests.
+- אין לבצע שינוי לוגי נקודתי במסך אחד בלבד.
+
+## אין Hardcoded business configuration
+
+- אין לשמור בקוד או ב-Seed Environment עסקי, Case Type, ערך Status, Priority, Sub-priority, Role עסקי, Custom Field, Select option, Approval configuration או Automation rule.
+- הגדרות עסקיות נוצרות דרך UI ונשמרות ב-Database. Permission Domains של יכולות המוצר הם System Configuration ולכן הם חריג מותר.
+- ערכי Demo/Seed עסקיים קיימים מוסרים רק באמצעות Migration בטוחה ששומרת מידע קיים.
+
+## הרשאה לפיצ'ר חדש
+
+כאשר נוסף Feature שמצריך הרשאה יש ליצור Permission Domain עם שם ותיאור בעברית ו-Scope, להציגו ב-UI של משתמשים וקבוצות, לאכוף אותו ב-Backend, להוסיף Tests ולהציגו בהסבר ההרשאה האפקטיבית. הסתרת UI בלבד אינה השלמת הרשאה.
+
+## UX וקבצים
+
+- UI/UX הוא חלק מדרישת Done: hierarchy חזותית, פעולות ברורות, Empty/Loading/Error states, אישור לפעולות רגישות, רספונסיביות וללא codes טכניים למשתמש.
+- יעד גודל לקובץ הוא פחות מ-250 שורות כאשר הפיצול משפר אחריות ותחזוקה; Business Logic אינו נשמר בתוך Components או Routes.
+
 ## Migrations ושמירת מידע
 
 - כל שינוי Schema מבוצע באמצעות Migration שניתן להריץ בסביבה קיימת.
