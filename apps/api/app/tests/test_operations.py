@@ -133,3 +133,48 @@ def test_attachment_guards_download_and_logical_delete() -> None:
     assert downloaded.status_code == 200 and downloaded.content == b"saved evidence"
     assert client.delete(f"/api/attachments/{attachment['id']}", headers=auth).status_code == 204
     assert client.get(f"/api/attachments/{attachment['id']}/download", headers=auth).status_code == 404
+
+
+def test_changing_initial_status_affects_new_cases_only() -> None:
+    auth = headers()
+    with SessionLocal() as db:
+        workflow = db.scalar(select(WorkflowDefinition).where(WorkflowDefinition.is_default.is_(True)))
+        assert workflow is not None
+        statuses = list(db.scalars(select(WorkflowStatus).where(
+            WorkflowStatus.workflow_id == workflow.id,
+            WorkflowStatus.is_active.is_(True),
+        ).order_by(WorkflowStatus.sort_order)))
+        assert len(statuses) >= 2
+        previous = next(item for item in statuses if item.is_initial)
+        replacement = next(item for item in statuses if not item.is_initial)
+        existing_case = db.scalar(select(Case).where(Case.workflow_status_id == previous.id))
+        existing_case_id = existing_case.id if existing_case else None
+    changed = client.post(f"/api/workflow-statuses/{replacement.id}/set-initial", headers=auth)
+    assert changed.status_code == 200 and changed.json()["is_initial"] is True
+    with SessionLocal() as db:
+        previous_stored = db.get(WorkflowStatus, previous.id)
+        replacement_stored = db.get(WorkflowStatus, replacement.id)
+        assert previous_stored is not None and previous_stored.is_initial is False
+        assert replacement_stored is not None and replacement_stored.is_initial is True
+        if existing_case_id:
+            existing_stored = db.get(Case, existing_case_id)
+            assert existing_stored is not None and existing_stored.workflow_status_id == previous.id
+    client.post(f"/api/workflow-statuses/{previous.id}/set-initial", headers=auth)
+
+
+def test_system_field_reorder_is_environment_scoped() -> None:
+    auth = headers()
+    environments = client.get("/api/environments", headers=auth).json()
+    environment = next(item for item in environments if len(client.get(
+        f"/api/environments/{item['id']}/priorities", headers=auth).json()) >= 2)
+    original = client.get(f"/api/environments/{environment['id']}/priorities", headers=auth).json()
+    original_ids = [item["id"] for item in original]
+    changed = client.put(
+        f"/api/environments/{environment['id']}/system-fields/priority/reorder",
+        headers=auth, json={"ids": list(reversed(original_ids))},
+    )
+    assert changed.status_code == 200
+    reordered = client.get(f"/api/environments/{environment['id']}/priorities", headers=auth).json()
+    assert [item["id"] for item in reordered] == list(reversed(original_ids))
+    client.put(f"/api/environments/{environment['id']}/system-fields/priority/reorder",
+               headers=auth, json={"ids": original_ids})

@@ -175,6 +175,25 @@ def update_status(status_id: uuid.UUID, data: StatusIn, db: DB, user: Current) -
     return row(item)
 
 
+@router.post("/workflow-statuses/{status_id}/set-initial")
+def set_initial_status(status_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
+    item = db.get(WorkflowStatus, status_id)
+    if not item:
+        raise HTTPException(404, "הסטטוס לא נמצא")
+    workflow = db.get(WorkflowDefinition, item.workflow_id)
+    if not workflow:
+        raise HTTPException(409, "תהליך העבודה אינו קיים")
+    require(db, user, workflow.environment_id, "workflow.manage")
+    if not item.is_active:
+        raise HTTPException(422, "סטטוס התחלתי חייב להיות פעיל")
+    db.execute(update(WorkflowStatus).where(
+        WorkflowStatus.workflow_id == item.workflow_id).values(is_initial=False))
+    item.is_initial = True
+    audit(db, user, "workflow_status", item.id, "set_initial")
+    db.commit()
+    return row(item)
+
+
 @router.get("/workflows/{workflow_id}/transitions")
 def transitions(workflow_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     workflow = db.get(WorkflowDefinition, workflow_id)

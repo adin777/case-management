@@ -1,15 +1,44 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select, update
 
-from app.modules.api import DB, Current, require
-from app.modules.models import CaseFieldDefinition
+from app.modules.api import DB, Current, audit, require
+from app.modules.models import CaseFieldDefinition, PriorityDefinition, RequestType, SubPriorityDefinition
+from app.modules.operations.models import WorkflowDefinition, WorkflowStatus
 from app.modules.system_fields.registry import registry_payload
 from app.modules.system_fields.service import options_for
 
 router = APIRouter(prefix="/api/environments/{environment_id}", tags=["system-fields"])
+
+
+class ReorderIn(BaseModel):
+    ids: list[uuid.UUID]
+
+
+@router.put("/system-fields/{field_code}/reorder")
+def reorder_system_field(environment_id: uuid.UUID, field_code: str, data: ReorderIn,
+                         db: DB, user: Current) -> dict[str, bool]:
+    permission = "workflow.manage" if field_code == "status" else "request_type.manage" if field_code == "request_type" else "environment.manage"
+    require(db, user, environment_id, permission)
+    model: Any = {"request_type": RequestType, "priority": PriorityDefinition,
+                  "sub_priority": SubPriorityDefinition, "status": WorkflowStatus}.get(field_code)
+    if not model:
+        raise HTTPException(404, "שדה המערכת אינו תומך בסידור")
+    if field_code == "status":
+        valid_ids = set(db.scalars(select(WorkflowStatus.id).join(WorkflowDefinition).where(
+            WorkflowDefinition.environment_id == environment_id)))
+    else:
+        valid_ids = set(db.scalars(select(model.id).where(model.environment_id == environment_id)))
+    if set(data.ids) != valid_ids or len(data.ids) != len(valid_ids):
+        raise HTTPException(422, "רשימת הסידור אינה תואמת לערכי הסביבה")
+    for order, item_id in enumerate(data.ids):
+        db.execute(update(model).where(model.id == item_id).values(sort_order=order))
+    audit(db, user, f"system_field:{field_code}", environment_id, "reordered")
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/system-fields")

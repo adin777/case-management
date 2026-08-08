@@ -51,6 +51,9 @@
 קיימים: `POST /api/request-types`, `PATCH /api/request-types/{id}` ו־
 `GET /api/request-types/{id}/case-config`. יעד: מחיקה בטוחה ו־reorder.
 
+`PUT /api/environments/{id}/system-fields/{field_code}/reorder` מסדר באופן אטומי ערכי
+Request Type, Status, Priority או Sub-priority באמצעות מערך IDs מלא של אותה סביבה.
+
 `GET /api/environments/{id}/priorities` ו־`GET /api/environments/{id}/sub-priorities`
 הם מקורות האמת לערכים בסביבה; ה־UI מציג רק פעילים ושומר UUID. סטטוסים לפתיחה מגיעים
 מ־`case-config`. שינוי סביבה מאפס Request Type, Status, Priority, Sub-priority וערכי שדות.
@@ -66,6 +69,7 @@
 - `GET /api/cases/{id}/status-options`: כל הסטטוסים הפעילים עם `current`, `allowed`, `reason`.
 - `GET /api/cases/{id}/allowed-transitions`: מעברים חוקיים.
 - `POST /api/cases/{id}/transitions`: ביצוע מעבר חוקי בלבד.
+- `POST /api/workflow-statuses/{id}/set-initial`: הגדרה אטומית של סטטוס פעיל כהתחלתי.
 
 ## Cases
 

@@ -18,6 +18,10 @@ PATCH /api/cases/{case_id}:
   - test_case_lock_blocks_edit_but_allows_public_comment
 GET /api/cases/{case_id}/status-options:
   - test_status_options_return_all_active_statuses_and_mark_invalid_targets
+POST /api/workflow-statuses/{status_id}/set-initial:
+  - test_changing_initial_status_affects_new_cases_only
+PUT /api/environments/{environment_id}/system-fields/{field_code}/reorder:
+  - test_system_field_reorder_is_environment_scoped
 GET /api/reports/cases:
   - test_copy_groups_preview_and_report_permission_403
 POST /api/approval-tasks/{task_id}/decision:
