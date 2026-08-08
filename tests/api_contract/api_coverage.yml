@@ -1,0 +1,24 @@
+POST /api/auth/login:
+  - test_valid_login_and_current_user
+GET /api/auth/me:
+  - test_valid_login_and_current_user
+GET /api/environments:
+  - test_admin_can_create_environment_and_audit_is_written
+PATCH /api/environments/{environment_id}:
+  - test_environment_patch_changes_only_the_path_environment
+GET /api/request-types:
+  - test_request_types_are_scoped_to_the_selected_environment
+  - test_case_creation_request_types_include_only_active_rows
+GET /api/environments/{id}/priorities:
+  - test_complete_case_flow_and_internal_comment_filtering
+POST /api/cases:
+  - test_complete_case_flow_and_internal_comment_filtering
+  - test_create_two_cases_with_same_business_values_and_without_dynamic_form
+PATCH /api/cases/{case_id}:
+  - test_case_lock_blocks_edit_but_allows_public_comment
+GET /api/cases/{case_id}/status-options:
+  - test_status_options_return_all_active_statuses_and_mark_invalid_targets
+GET /api/reports/cases:
+  - test_copy_groups_preview_and_report_permission_403
+POST /api/approval-tasks/{task_id}/decision:
+  - test_two_step_approval_flow

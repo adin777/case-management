@@ -1,5 +1,23 @@
 # AGENTS.md
 
+## API CONTRACT RULE
+
+`docs/api/API_SPEC.md` is the source of truth for the public/internal API contract.
+Every feature or behavioral change that affects an endpoint, request, response, permission,
+validation, filtering, domain value source, delete behavior, or workflow behavior must update:
+
+1. `API_SPEC.md`.
+2. Automated API contract tests.
+3. Regression tests.
+4. Implementation.
+
+A feature is not Done when the implementation changed but the API contract/tests did not.
+Every feature, bug fix, or behavioral change must add or update at least one regression test.
+Bug fixes require a regression test that fails before the fix and passes after it.
+
+After implementation, do not use an ad-hoc subset as final validation. Always run:
+`powershell -ExecutionPolicy Bypass -File .\scripts\run-regression.ps1`.
+
 ## SIMPLE FIRST
 
 כאשר פעולה יכולה להתבצע באופן ישיר וברור במסך, אין להוסיף שלב, Dialog, מצב עריכה או כפתור נוסף ללא צורך ממשי. שדה פשוט שניתן לעריכה יוצג כ־inline editable; אין להסתיר ערכים רלוונטיים או להוסיף ניווט כאשר הפעולה יכולה להתבצע במקום. לפני השלמת UI יש לשאול האם אפשר לבצע את אותה פעולה בפחות צעדים ולבחור בפתרון הפשוט יותר.

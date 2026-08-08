@@ -4,11 +4,12 @@ Revision ID: 0013
 Revises: 0012
 """
 
-from collections.abc import Sequence
 import json
 import uuid
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 from app.modules.access.mapping import DOMAIN_DEFINITIONS
 
