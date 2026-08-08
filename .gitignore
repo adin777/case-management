@@ -16,6 +16,7 @@ data/*.db-wal
 data/local-processes.json
 data/case-management-tests*/
 data/backups/
+data/attachments/
 data/mypy-cache/
 coverage/
 .coverage

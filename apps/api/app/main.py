@@ -12,6 +12,7 @@ from app.modules.governance.router import router as governance_router
 from app.modules.operations.router import router as operations_router
 from app.modules.permissions.router import router as permissions_router
 from app.modules.platform.router import router as platform_router
+from app.modules.system_fields.router import router as system_fields_router
 
 app = FastAPI(title="Case Management API", version="0.1.0")
 app.add_middleware(
@@ -25,6 +26,7 @@ app.include_router(governance_router)
 app.include_router(platform_router)
 app.include_router(permissions_router)
 app.include_router(access_router)
+app.include_router(system_fields_router)
 app.include_router(operations_router)
 app.include_router(attachments_router)
 app.include_router(router)

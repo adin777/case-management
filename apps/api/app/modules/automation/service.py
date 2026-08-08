@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.models import AutomationExecutionLog, AutomationRule, Case, CaseStatus
+from app.modules.models import AutomationExecutionLog, AutomationRule, Case
 
 
 class AutomationEngine:
@@ -57,9 +57,19 @@ class AutomationEngine:
     @staticmethod
     def _apply(item: Case, action: dict[str, Any]) -> None:
         action_type, value = action.get("type"), action.get("value")
+        if action_type == "set_field":
+            field_code = action.get("field_code")
+            value = action.get("value_id", action.get("value"))
+            if field_code == "status": item.workflow_status_id = UUID(value)
+            elif field_code == "priority": item.priority_id = UUID(value)
+            elif field_code == "sub_priority": item.sub_priority_id = UUID(value)
+            elif field_code == "assignee": item.assignee_id = UUID(value)
+            elif field_code == "assignee_group": item.assigned_group_id = UUID(value)
+            else: raise ValueError(f"Unsupported automation target field: {field_code}")
+            return
         if action_type == "assign_user": item.assignee_id = UUID(value)
         elif action_type == "assign_group": item.assigned_group_id = UUID(value)
-        elif action_type == "set_status": item.status = CaseStatus(value)
+        elif action_type == "set_status": item.workflow_status_id = UUID(value)
         elif action_type == "set_priority": item.priority_id = UUID(value)
         elif action_type == "set_sub_priority": item.sub_priority_id = UUID(value)
         else: raise ValueError(f"Unsupported automation action: {action_type}")

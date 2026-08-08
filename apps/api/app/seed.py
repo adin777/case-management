@@ -2,8 +2,8 @@ import uuid
 
 from pwdlib.exceptions import PwdlibError
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.database.session import SessionLocal
 from app.modules.access.mapping import DOMAIN_DEFINITIONS
 from app.modules.access.models import PermissionDomain
@@ -27,9 +27,34 @@ from app.modules.models import (
 from app.modules.operations.models import SlaPolicy, WorkflowDefinition, WorkflowStatus, WorkflowTransition
 
 
-def run() -> None:
-    if settings.environment != "development":
-        return
+def ensure_foundation(db: Session, admin: User) -> None:
+    base_groups: dict[str, Group] = {}
+    for name, description in [
+        ("אדמין", "מנהלי מערכת בעלי גישה מלאה"),
+        ("מנהל סביבה", "מנהלים לפי שיוך לסביבה"),
+        ("משתמש", "משתמשים בעלי הרשאות בסיס שהוגדרו במפורש"),
+    ]:
+        group = db.scalar(select(Group).where(Group.name == name))
+        if not group:
+            group = Group(system_number=f"UG-{uuid.uuid4().hex[:8].upper()}", name=name,
+                          description=description, is_active=True)
+            db.add(group)
+            db.flush()
+        base_groups[name] = group
+    if not db.get(GroupMember, (base_groups["אדמין"].id, admin.id)):
+        db.add(GroupMember(group_id=base_groups["אדמין"].id, user_id=admin.id, added_by=admin.id))
+    for order, definition in enumerate(DOMAIN_DEFINITIONS):
+        code, name, description, scope, view_codes, edit_codes = definition
+        domain = db.get(PermissionDomain, code)
+        if not domain:
+            domain = PermissionDomain(code=code)
+            db.add(domain)
+        domain.name_he, domain.description_he, domain.scope = name, description, scope
+        domain.view_permissions, domain.edit_permissions = view_codes, edit_codes
+        domain.sort_order, domain.is_active = order, True
+
+
+def run(*, include_demo_data: bool = False) -> None:
     with SessionLocal() as db:
         role_permissions = {
             "environment_admin": [code for code in ALL_PERMISSIONS if not code.startswith("system.")],
@@ -132,7 +157,7 @@ def run() -> None:
 
         users: dict[str, User] = {}
         seed_users = [("admin@example.com", "מנהל מערכת", "Admin123!", True)]
-        if settings.seed_demo_users:
+        if include_demo_data:
             seed_users += [
                 ("envadmin@example.com", "מנהל סביבת IT", "EnvAdmin123!", False),
                 ("requester@example.com", "משתמש קצה", "Requester123!", False),
@@ -157,6 +182,11 @@ def run() -> None:
                     user.password_hash = password_hash.hash(password)
             users[email] = user
 
+        ensure_foundation(db, users["admin@example.com"])
+        if not include_demo_data:
+            db.commit()
+            return
+
         env = db.scalar(select(Environment).where(Environment.code == "IT"))
         if not env:
             env = Environment(code="IT", name_he="שירותי IT", name_en="IT Service",
@@ -167,7 +197,7 @@ def run() -> None:
             ("envadmin@example.com", "environment_admin"),
             ("requester@example.com", "requester"),
             ("agent@example.com", "agent"),
-        ] if settings.seed_demo_users else []):
+        ] if include_demo_data else []):
             if not db.scalar(select(EnvironmentMembership).where(
                 EnvironmentMembership.environment_id == env.id,
                 EnvironmentMembership.user_id == users[email].id,

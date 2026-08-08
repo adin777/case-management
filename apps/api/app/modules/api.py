@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import uuid
@@ -10,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer
 from pwdlib import PasswordHash
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -45,7 +46,8 @@ from app.modules.models import (
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.service import initialize_operations
+from app.modules.operations.models import CaseStatusHistory, WorkflowStatus, WorkflowTransition
+from app.modules.operations.service import initialize_operations, resolve_workflow
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -78,16 +80,6 @@ ALL_PERMISSIONS = [
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
 ]
-TRANSITIONS = {
-    CaseStatus.draft: {CaseStatus.submitted, CaseStatus.cancelled},
-    CaseStatus.submitted: {CaseStatus.assigned, CaseStatus.in_progress, CaseStatus.cancelled},
-    CaseStatus.assigned: {CaseStatus.in_progress, CaseStatus.cancelled},
-    CaseStatus.in_progress: {CaseStatus.waiting_for_requester, CaseStatus.resolved, CaseStatus.cancelled},
-    CaseStatus.waiting_for_requester: {CaseStatus.in_progress, CaseStatus.resolved},
-    CaseStatus.resolved: {CaseStatus.closed, CaseStatus.in_progress},
-    CaseStatus.closed: set(),
-    CaseStatus.cancelled: set(),
-}
 
 
 class LoginIn(BaseModel):
@@ -143,6 +135,9 @@ class RequestTypeIn(BaseModel):
     name_he: str
     name_en: str
     description: str | None = None
+    sort_order: int = 0
+    requires_approval: bool = False
+    workflow_definition_id: uuid.UUID | None = None
     default_priority_id: uuid.UUID | None = None
     default_sub_priority_id: uuid.UUID | None = None
     default_assignee_user_id: uuid.UUID | None = None
@@ -164,6 +159,7 @@ class FieldIn(BaseModel):
     field_type: str
     is_required: bool = False
     is_read_only: bool = False
+    is_active: bool = True
     sort_order: int = 0
     configuration_json: dict[str, Any] = Field(default_factory=dict)
 
@@ -197,8 +193,8 @@ class CaseIn(BaseModel):
     request_type_id: uuid.UUID
     title: str = Field(min_length=3, max_length=300)
     description: str = Field(min_length=1)
-    priority: str = "normal"
-    priority_id: uuid.UUID
+    workflow_status_id: uuid.UUID | None = None
+    priority_id: uuid.UUID | None = None
     sub_priority_id: uuid.UUID | None = None
     participant_ids: list[uuid.UUID] = Field(default_factory=list)
     values: list[ValueIn] = Field(default_factory=list)
@@ -242,6 +238,7 @@ class CaseOut(BaseModel):
     requester_id: uuid.UUID
     assignee_id: uuid.UUID | None
     created_at: datetime
+    updated_at: datetime
     version: int
     is_locked: bool
     locked_at: datetime | None
@@ -277,6 +274,9 @@ class RequestTypePatch(BaseModel):
     name_en: str | None = None
     description: str | None = None
     is_active: bool | None = None
+    sort_order: int | None = None
+    requires_approval: bool | None = None
+    workflow_definition_id: uuid.UUID | None = None
     default_priority_id: uuid.UUID | None = None
     default_sub_priority_id: uuid.UUID | None = None
     default_assignee_user_id: uuid.UUID | None = None
@@ -319,7 +319,8 @@ class ParticipantIn(BaseModel):
 
 
 class TransitionIn(BaseModel):
-    status: CaseStatus
+    workflow_status_id: uuid.UUID
+    comment: str | None = None
 
 
 def issue(user: User, token_type: str, expires: timedelta, token_id: uuid.UUID | None = None) -> str:
@@ -560,6 +561,17 @@ def environments(db: DB, user: Current) -> list[Environment]:
     query = select(Environment).order_by(Environment.name_he)
     if not user.is_system_admin:
         query = query.join(EnvironmentMembership).where(EnvironmentMembership.user_id == user.id)
+    return list(db.scalars(query).unique())
+
+
+@router.get("/case-creation/environments", response_model=list[EnvironmentOut])
+def case_creation_environments(db: DB, user: Current) -> list[Environment]:
+    query = select(Environment).where(Environment.is_active.is_(True)).order_by(Environment.name_he)
+    if not user.is_system_admin:
+        query = query.join(EnvironmentMembership).where(
+            EnvironmentMembership.user_id == user.id,
+            EnvironmentMembership.is_active.is_(True),
+        )
     return list(db.scalars(query).unique())
 
 
@@ -842,16 +854,20 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     form = db.get(FormDefinition, rt.form_version_id)
     if not form:
         raise HTTPException(409, "Published form no longer exists")
-    if data.priority_id:
-        priority = db.get(PriorityDefinition, data.priority_id)
-        if not priority or priority.environment_id != data.environment_id or not priority.is_active:
-            raise HTTPException(422, "Priority does not belong to the selected environment")
-    if data.sub_priority_id:
-        sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
-        if not sub_priority or sub_priority.priority_id != data.priority_id or not sub_priority.is_active:
+    priority_id = data.priority_id or rt.default_priority_id
+    if not priority_id:
+        raise HTTPException(422, "לא הוגדרה עדיפות ברירת מחדל; יש לבחור עדיפות")
+    priority = db.get(PriorityDefinition, priority_id)
+    if not priority or priority.environment_id != data.environment_id or not priority.is_active:
+        raise HTTPException(422, "Priority does not belong to the selected environment")
+    sub_priority_id = data.sub_priority_id or rt.default_sub_priority_id
+    if sub_priority_id:
+        sub_priority = db.get(SubPriorityDefinition, sub_priority_id)
+        if not sub_priority or sub_priority.environment_id != data.environment_id or not sub_priority.is_active:
             raise HTTPException(422, "Sub-priority does not belong to the selected priority")
     provided = {v.field_definition_id: v.value for v in data.values}
-    missing = [f.label_he for f in form.fields if f.is_required and provided.get(f.id) in (None, "")]
+    active_fields = [field for field in form.fields if field.is_active]
+    missing = [f.label_he for f in active_fields if f.is_required and provided.get(f.id) in (None, "")]
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
     item = Case(
@@ -859,12 +875,26 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         form_definition_id=form.id,
         reporter_id=user.id,
         requester_id=user.id,
-        **data.model_dump(exclude={"values", "participant_ids"}),
+        environment_id=data.environment_id,
+        request_type_id=data.request_type_id,
+        title=data.title,
+        description=data.description,
+        priority=priority.code,
+        priority_id=priority.id,
+        sub_priority_id=sub_priority_id,
     )
     db.add(item)
     db.flush()
     initial_status = initialize_operations(db, item, rt)
-    item.values = [typed_value(item.id, f, provided.get(f.id)) for f in form.fields if f.id in provided]
+    if data.workflow_status_id and data.workflow_status_id != initial_status.id:
+        workflow, _ = resolve_workflow(db, rt)
+        selected_status = db.get(WorkflowStatus, data.workflow_status_id)
+        if not selected_status or selected_status.workflow_id != workflow.id or not selected_status.is_active:
+            raise HTTPException(422, "הסטטוס אינו שייך לתהליך העבודה של סוג הקריאה")
+        if "case.change_status" not in permissions(db, user, data.environment_id):
+            raise HTTPException(403, "אין הרשאה לשנות סטטוס בעת פתיחת קריאה")
+        item.workflow_status_id = selected_status.id
+    item.values = [typed_value(item.id, f, provided.get(f.id)) for f in active_fields if f.id in provided]
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
         if participant_id != user.id and participant_user:
@@ -884,6 +914,27 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     start_matching_approvals(db, item)
     db.commit()
     return item
+
+
+@router.get("/request-types/{request_type_id}/case-config")
+def case_creation_config(request_type_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
+    request_type = db.get(RequestType, request_type_id)
+    if not request_type or not request_type.is_active:
+        raise HTTPException(404, "סוג הקריאה לא נמצא")
+    require(db, user, request_type.environment_id, "case.create")
+    workflow, initial = resolve_workflow(db, request_type)
+    statuses = list(db.scalars(select(WorkflowStatus).where(
+        WorkflowStatus.workflow_id == workflow.id,
+        WorkflowStatus.is_active.is_(True),
+    ).order_by(WorkflowStatus.sort_order)))
+    return {
+        "workflow_id": workflow.id,
+        "initial_status_id": initial.id,
+        "can_choose_status": "case.change_status" in permissions(db, user, request_type.environment_id),
+        "statuses": [{"id": row.id, "label_he": row.label_he, "is_initial": row.is_initial} for row in statuses],
+        "default_priority_id": request_type.default_priority_id,
+        "default_sub_priority_id": request_type.default_sub_priority_id,
+    }
 
 
 @router.get("/cases", response_model=list[CaseOut])
@@ -916,6 +967,127 @@ def cases(
             )
         )
     return list(db.scalars(query.offset(offset).limit(limit)).unique())
+
+
+@router.get("/cases/workspace/query")
+def workspace_cases(
+    db: DB,
+    user: Current,
+    view: str = Query("my", pattern="^(my|assigned)$"),
+    activity_state: str = Query("active", pattern="^(active|inactive|all)$"),
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    title: str = "",
+    updated_from: datetime | None = None,
+    updated_to: datetime | None = None,
+    environment_id: uuid.UUID | None = None,
+    dynamic_filters: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort: str = "updated_at:desc",
+) -> dict[str, Any]:
+    active_memberships = list(
+        db.scalars(
+            select(EnvironmentMembership.environment_id).where(
+                EnvironmentMembership.user_id == user.id,
+                EnvironmentMembership.is_active.is_(True),
+            )
+        )
+    )
+    can_view_assigned = user.is_system_admin or any(
+        "case.assign" in permissions(db, user, environment_id_) for environment_id_ in active_memberships
+    )
+    if view == "assigned" and not can_view_assigned:
+        raise HTTPException(403, "אין הרשאה לצפות בקריאות בטיפולי")
+    query = select(Case)
+    query = query.where(Case.reporter_id == user.id) if view == "my" else query.where(Case.assignee_id == user.id)
+    if environment_id:
+        query = query.where(Case.environment_id == environment_id)
+    if title.strip():
+        query = query.where(Case.title.ilike(f"%{title.strip()}%"))
+    if created_from:
+        query = query.where(Case.created_at >= created_from)
+    if created_to:
+        query = query.where(Case.created_at <= created_to)
+    if updated_from:
+        query = query.where(Case.updated_at >= updated_from)
+    if updated_to:
+        query = query.where(Case.updated_at <= updated_to)
+    if activity_state != "all":
+        inactive_statuses = select(WorkflowStatus.id).where(
+            WorkflowStatus.semantic_category.in_(["resolved", "closed"])
+        )
+        query = query.where(
+            Case.workflow_status_id.not_in(inactive_statuses)
+            if activity_state == "active"
+            else Case.workflow_status_id.in_(inactive_statuses)
+        )
+    if dynamic_filters:
+        try:
+            supplied_filters = json.loads(dynamic_filters)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, "מסנני הסביבה אינם תקינים") from exc
+        for field_id, value in supplied_filters.items():
+            try:
+                parsed_field_id = uuid.UUID(field_id)
+            except ValueError as exc:
+                raise HTTPException(422, "מזהה שדה סביבה אינו תקין") from exc
+            query = query.where(
+                Case.id.in_(
+                    select(CaseFieldValue.case_id).where(
+                        CaseFieldValue.field_definition_id == parsed_field_id,
+                        or_(
+                            CaseFieldValue.value_text == str(value),
+                            cast(CaseFieldValue.value_number, String) == str(value),
+                            cast(CaseFieldValue.value_boolean, String) == str(value),
+                            cast(CaseFieldValue.value_json, String).contains(str(value)),
+                        ),
+                    )
+                )
+            )
+    sort_field, _, direction = sort.partition(":")
+    allowed_sort = {
+        "case_number": Case.case_number,
+        "title": Case.title,
+        "created_at": Case.created_at,
+        "updated_at": Case.updated_at,
+    }
+    column = allowed_sort.get(sort_field, Case.updated_at)
+    query = query.order_by(column.asc() if direction == "asc" else column.desc())
+    total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    rows = list(db.scalars(query.offset((page - 1) * page_size).limit(page_size)))
+    environments_by_id = {
+        row.id: row.name_he for row in db.scalars(select(Environment).where(Environment.id.in_({x.environment_id for x in rows})))
+    } if rows else {}
+    request_types_by_id = {
+        row.id: row.name_he for row in db.scalars(select(RequestType).where(RequestType.id.in_({x.request_type_id for x in rows})))
+    } if rows else {}
+    statuses_by_id = {
+        row.id: row.label_he for row in db.scalars(select(WorkflowStatus).where(WorkflowStatus.id.in_({x.workflow_status_id for x in rows if x.workflow_status_id})))
+    } if rows else {}
+    priorities_by_id = {
+        row.id: row.label_he for row in db.scalars(select(PriorityDefinition).where(PriorityDefinition.id.in_({x.priority_id for x in rows if x.priority_id})))
+    } if rows else {}
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "case_number": row.case_number,
+                "title": row.title,
+                "environment": environments_by_id.get(row.environment_id, ""),
+                "request_type": request_types_by_id.get(row.request_type_id, ""),
+                "status": statuses_by_id.get(row.workflow_status_id, "") if row.workflow_status_id else "",
+                "priority": priorities_by_id.get(row.priority_id, row.priority) if row.priority_id else row.priority,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "can_view_assigned_cases": can_view_assigned,
+    }
 
 
 @router.get("/cases/{case_id}", response_model=CaseOut)
@@ -966,7 +1138,7 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
             raise HTTPException(422, "העדיפות אינה שייכת לסביבה")
     if data.sub_priority_id:
         sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
-        if not sub_priority or sub_priority.priority_id != data.priority_id or not sub_priority.is_active:
+        if not sub_priority or sub_priority.environment_id != item.environment_id or not sub_priority.is_active:
             raise HTTPException(422, "תת-העדיפות אינה שייכת לעדיפות")
     for key, value in changes.items():
         setattr(item, key, value)
@@ -977,6 +1149,8 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
             field = fields.get(supplied.field_definition_id)
             if not field:
                 raise HTTPException(422, "השדה הדינמי אינו שייך לטופס הקריאה")
+            if not field.is_active or field.is_read_only:
+                raise HTTPException(422, "השדה הדינמי אינו זמין לעריכה")
             db.execute(delete(CaseFieldValue).where(
                 CaseFieldValue.case_id == item.id,
                 CaseFieldValue.field_definition_id == supplied.field_definition_id,
@@ -1036,14 +1210,21 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
 
 
 @router.get("/cases/{case_id}/allowed-transitions")
-def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[str]:
+def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    if "case.update" not in permissions(db, user, item.environment_id):
+    if "case.change_status" not in permissions(db, user, item.environment_id):
         return []
-    return [s.value for s in TRANSITIONS[item.status]]
+    rows = db.execute(select(WorkflowTransition, WorkflowStatus).join(
+        WorkflowStatus, WorkflowTransition.to_status_id == WorkflowStatus.id).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+        WorkflowStatus.is_active.is_(True),
+    ).order_by(WorkflowTransition.sort_order)).all()
+    return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
+             "requires_comment": transition.requires_comment} for transition, status in rows]
 
 
 @router.post("/cases/{case_id}/comments", response_model=CommentOut, status_code=201)
@@ -1152,16 +1333,35 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
-    require(db, user, item.environment_id, "case.update")
-    if data.status not in TRANSITIONS[item.status]:
-        raise HTTPException(409, f"Transition {item.status.value} -> {data.status.value} is not allowed")
-    before = item.status
-    item.status = data.status
+    require(db, user, item.environment_id, "case.change_status")
+    transition_row = db.scalar(select(WorkflowTransition).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.to_status_id == data.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+    ))
+    target = db.get(WorkflowStatus, data.workflow_status_id)
+    if not transition_row or not target or not target.is_active:
+        raise HTTPException(409, "מעבר הסטטוס אינו חוקי בתהליך העבודה")
+    if transition_row.required_permission_code:
+        require(db, user, item.environment_id, transition_row.required_permission_code)
+    if transition_row.requires_comment and not (data.comment or "").strip():
+        raise HTTPException(422, "המעבר מחייב הערה")
+    before = item.workflow_status_id
+    item.workflow_status_id = target.id
     item.version += 1
-    if data.status == CaseStatus.closed:
+    if target.is_closed:
         item.closed_at = datetime.now(UTC)
+    db.add(CaseStatusHistory(case_id=item.id, from_status_id=before, to_status_id=target.id,
+                             transition_id=transition_row.id, changed_by=user.id,
+                             comment=(data.comment or "").strip() or None))
+    AutomationEngine.run(db, item, "status_changed", {
+        "status": str(target.id), "status_id": str(target.id),
+        "request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id),
+    })
     audit(
-        db, user, "case", item.id, "status_changed", {"status": before.value}, {"status": data.status.value}
+        db, user, "case", item.id, "status_changed",
+        {"workflow_status_id": str(before) if before else None},
+        {"workflow_status_id": str(target.id), "label": target.label_he},
     )
     db.commit()
     return item

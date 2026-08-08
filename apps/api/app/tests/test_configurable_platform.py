@@ -92,6 +92,10 @@ def test_report_filters_and_real_xlsx() -> None:
 
 def test_two_step_approval_flow() -> None:
     headers = auth(); environment, request_type, _ = context(headers)
+    enabled = client.patch(
+        f"/api/request-types/{request_type['id']}", headers=headers, json={"requires_approval": True}
+    )
+    assert enabled.status_code == 200
     users = client.get("/api/users", headers=headers).json()
     agent = next(row for row in users if row["email"] == "agent@example.com")
     envadmin = next(row for row in users if row["email"] == "envadmin@example.com")

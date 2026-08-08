@@ -1,0 +1,10 @@
+import { Card, CardActionArea, CardContent, Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import type { WorkspaceCase } from './types';
+
+export function DashboardCaseList({ items }: { items: WorkspaceCase[] }) {
+  const navigate = useNavigate();
+  if (!items.length) return <Paper variant="outlined" sx={{ p: 6, textAlign: 'center' }}><Typography fontWeight={700}>לא נמצאו קריאות</Typography><Typography color="text.secondary">אפשר לשנות את המסננים או לפתוח קריאה חדשה.</Typography></Paper>;
+  return <><Paper variant="outlined" sx={{ display: { xs: 'none', md: 'block' }, overflowX: 'auto' }}><Table><TableHead><TableRow>{['מספר קריאה','נושא','סביבה','סוג קריאה','סטטוס','עדיפות','תאריך פתיחה','עדכון אחרון'].map((label) => <TableCell key={label}>{label}</TableCell>)}</TableRow></TableHead><TableBody>{items.map((item) => <TableRow hover key={item.id} onClick={() => navigate(`/cases/${item.id}`)} sx={{ cursor: 'pointer' }}><TableCell>{item.case_number}</TableCell><TableCell>{item.title}</TableCell><TableCell>{item.environment}</TableCell><TableCell>{item.request_type}</TableCell><TableCell><Chip size="small" label={item.status}/></TableCell><TableCell>{item.priority}</TableCell><TableCell>{new Date(item.created_at).toLocaleDateString('he-IL')}</TableCell><TableCell>{new Date(item.updated_at).toLocaleString('he-IL')}</TableCell></TableRow>)}</TableBody></Table></Paper>
+  <Stack spacing={1.5} sx={{ display: { md: 'none' } }}>{items.map((item) => <Card variant="outlined" key={item.id}><CardActionArea onClick={() => navigate(`/cases/${item.id}`)}><CardContent><Typography color="primary" fontWeight={800}>{item.case_number}</Typography><Typography variant="h6">{item.title}</Typography><Stack direction="row" gap={1} mt={1} flexWrap="wrap"><Chip size="small" label={item.status}/><Chip size="small" variant="outlined" label={item.environment}/></Stack><Typography variant="caption" color="text.secondary">עדכון אחרון: {new Date(item.updated_at).toLocaleString('he-IL')}</Typography></CardContent></CardActionArea></Card>)}</Stack></>;
+}

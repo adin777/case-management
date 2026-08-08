@@ -44,6 +44,7 @@ class WorkflowStatus(Base):
     description: Mapped[str | None] = mapped_column(Text)
     color: Mapped[str] = mapped_column(String(20), default="#64748b")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    semantic_category: Mapped[str] = mapped_column(String(30), default="open")
     is_initial: Mapped[bool] = mapped_column(Boolean, default=False)
     is_final: Mapped[bool] = mapped_column(Boolean, default=False)
     is_closed: Mapped[bool] = mapped_column(Boolean, default=False)

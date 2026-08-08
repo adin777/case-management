@@ -86,10 +86,14 @@ class GroupMember(Base):
 class Role(Base):
     __tablename__ = "roles"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     code: Mapped[str] = mapped_column(String(80), unique=True)
     name: Mapped[str] = mapped_column(String(120))
+    name_he: Mapped[str | None] = mapped_column(String(120))
     description: Mapped[str | None] = mapped_column(Text)
+    description_he: Mapped[str | None] = mapped_column(Text)
     scope: Mapped[str] = mapped_column(String(20), default="environment")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
     permissions: Mapped[list[str]] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -139,6 +143,7 @@ class EnvironmentMembership(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     __table_args__ = (UniqueConstraint("environment_id", "user_id", "role_id"),)
 
 
@@ -152,6 +157,8 @@ class RequestType(TimestampMixin, Base):
     name_en: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     form_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     default_priority_id: Mapped[uuid.UUID | None]
     default_sub_priority_id: Mapped[uuid.UUID | None]
@@ -187,6 +194,7 @@ class FieldDefinition(Base):
     field_type: Mapped[str] = mapped_column(String(40))
     is_required: Mapped[bool] = mapped_column(Boolean, default=False)
     is_read_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer)
     configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("form_definition_id", "key"),)
@@ -373,7 +381,8 @@ class SubPriorityDefinition(Base):
     __tablename__ = "sub_priority_definitions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
-    priority_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("priority_definitions.id", ondelete="CASCADE"))
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"), index=True)
+    priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("priority_definitions.id"))
     code: Mapped[str] = mapped_column(String(40))
     label_he: Mapped[str] = mapped_column(String(100))
     label_en: Mapped[str | None] = mapped_column(String(100), default="")
@@ -461,6 +470,7 @@ class ApprovalFlowDefinition(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     request_type_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("request_types.id"))
     trigger_type: Mapped[str] = mapped_column(String(60), default="case_created")
+    approval_policy: Mapped[str] = mapped_column(String(40), default="all_active_steps")
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
 
 
@@ -493,6 +503,8 @@ class ApprovalInstance(Base):
     system_number: Mapped[str] = mapped_column(String(40), unique=True)
     case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"))
     approval_flow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_flow_definitions.id"))
+    request_type_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("request_types.id"))
+    approval_policy: Mapped[str] = mapped_column(String(40), default="all_active_steps")
     status: Mapped[str] = mapped_column(String(30), default="pending")
     current_step_order: Mapped[int] = mapped_column(Integer, default=1)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

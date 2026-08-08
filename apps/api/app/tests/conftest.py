@@ -19,7 +19,7 @@ def pytest_configure() -> None:
     from app.seed import run
 
     command.upgrade(Config("alembic.ini"), "head")
-    run()
+    run(include_demo_data=True)
 
 
 def pytest_sessionfinish() -> None:
