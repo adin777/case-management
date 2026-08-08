@@ -190,3 +190,72 @@ def test_published_form_is_immutable_and_can_be_cloned() -> None:
     )
     clone = client.post(f"/api/forms/{published_id}/clone-draft", headers=admin_headers)
     assert clone.status_code == 201 and clone.json()["status"] == "draft"
+
+
+def test_request_types_are_scoped_to_the_selected_environment() -> None:
+    headers = login_headers("admin@example.com", "Admin123!")
+    environments = client.get("/api/environments", headers=headers).json()
+    assert len(environments) >= 2
+    first, second = environments[:2]
+    first_rows = client.get(
+        f"/api/request-types?environment_id={first['id']}", headers=headers
+    ).json()
+    second_rows = client.get(
+        f"/api/request-types?environment_id={second['id']}", headers=headers
+    ).json()
+    assert all(row["environment_id"] == first["id"] for row in first_rows)
+    assert all(row["environment_id"] == second["id"] for row in second_rows)
+    assert {row["id"] for row in first_rows}.isdisjoint({row["id"] for row in second_rows})
+
+
+def test_environment_patch_changes_only_the_path_environment() -> None:
+    headers = login_headers("admin@example.com", "Admin123!")
+    environments = client.get("/api/environments", headers=headers).json()
+    first, second = environments[:2]
+    second_before = second["is_active"]
+    changed = client.patch(
+        f"/api/environments/{first['id']}",
+        headers=headers,
+        json={"is_active": not first["is_active"]},
+    )
+    assert changed.status_code == 200
+    refreshed_second = client.get(f"/api/environments/{second['id']}", headers=headers).json()
+    assert refreshed_second["is_active"] == second_before
+    client.patch(
+        f"/api/environments/{first['id']}",
+        headers=headers,
+        json={"is_active": first["is_active"]},
+    )
+
+
+def test_status_options_return_all_active_statuses_and_mark_invalid_targets() -> None:
+    headers = login_headers("requester@example.com", "Requester123!")
+    environment = client.get("/api/environments", headers=headers).json()[0]
+    request_type = client.get(
+        f"/api/request-types?environment_id={environment['id']}", headers=headers
+    ).json()[0]
+    priority = client.get(
+        f"/api/environments/{environment['id']}/priorities", headers=headers
+    ).json()[0]
+    form = client.get(f"/api/forms/{request_type['form_version_id']}", headers=headers).json()
+    values = [{
+        "field_definition_id": field["id"],
+        "value": field["configuration_json"].get("options", ["בדיקה"])[0]
+        if field["field_type"] == "single_select" else "בדיקה",
+    } for field in form["fields"] if field["is_required"]]
+    created_response = client.post("/api/cases", headers=headers, json={
+        "environment_id": environment["id"],
+        "request_type_id": request_type["id"],
+        "title": "Status options regression",
+        "description": "Verify every status is visible",
+        "priority_id": priority["id"],
+        "values": values,
+    })
+    assert created_response.status_code == 201, created_response.text
+    created = created_response.json()
+    options = client.get(f"/api/cases/{created['id']}/status-options", headers=headers)
+    assert options.status_code == 200
+    rows = options.json()
+    assert len(rows) >= 2
+    assert any(row["current"] for row in rows)
+    assert any(not row["allowed"] and row["reason"] for row in rows)

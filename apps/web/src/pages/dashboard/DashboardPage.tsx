@@ -9,7 +9,7 @@ import { CaseFilters } from './CaseFilters';
 import { DashboardCaseList } from './DashboardCaseList';
 import type { WorkspaceFilters, WorkspaceResponse } from './types';
 
-const initial: WorkspaceFilters = { activity_state: 'active', created_from: '', created_to: '', title: '', updated_from: '', updated_to: '', environment_id: '', dynamic: {} };
+const initial: WorkspaceFilters = { activity_state: 'active', created_from: '', created_to: '', title: '', updated_from: '', updated_to: '', environment_id: '', include_participating: false, dynamic: {} };
 
 export function DashboardPage() {
   const [search, setSearch] = useSearchParams(); const view = search.get('tab') === 'assigned' ? 'assigned' : 'my';
@@ -17,7 +17,7 @@ export function DashboardPage() {
   const { data: environments = [] } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
   const { data: fields = [] } = useQuery({ queryKey: ['dashboard-fields', filters.environment_id], queryFn: () => api<CaseField[]>(`/environments/${filters.environment_id}/case-fields`), enabled: !!filters.environment_id });
   const filterable = fields.filter((field) => field.is_active && field.validation_json?.is_filterable === true);
-  const params = useMemo(() => { const value = new URLSearchParams({ view, activity_state: filters.activity_state, page: String(page), page_size: '25', sort: 'updated_at:desc' }); for (const key of ['created_from','created_to','title','updated_from','updated_to','environment_id'] as const) if (filters[key]) value.set(key, filters[key]); const dynamic = Object.fromEntries(Object.entries(filters.dynamic).filter(([, item]) => item)); if (Object.keys(dynamic).length) value.set('dynamic_filters', JSON.stringify(dynamic)); return value.toString(); }, [filters, page, view]);
+  const params = useMemo(() => { const value = new URLSearchParams({ view, activity_state: filters.activity_state, page: String(page), page_size: '25', sort: 'updated_at:desc', include_participating: String(filters.include_participating) }); for (const key of ['created_from','created_to','title','updated_from','updated_to','environment_id'] as const) if (filters[key]) value.set(key, filters[key]); const dynamic = Object.fromEntries(Object.entries(filters.dynamic).filter(([, item]) => item)); if (Object.keys(dynamic).length) value.set('dynamic_filters', JSON.stringify(dynamic)); return value.toString(); }, [filters, page, view]);
   const query = useQuery({ queryKey: ['workspace-cases', params], queryFn: () => api<WorkspaceResponse>(`/cases/workspace/query?${params}`), retry: false });
   const changeFilters = (next: WorkspaceFilters) => { setFilters(next); setPage(1); };
   return <Container maxWidth="xl"><Stack spacing={2.5}><Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2}><Box><Typography variant="h4" fontWeight={800}>מרכז העבודה</Typography><Typography color="text.secondary">הקריאות, המסננים והפעולות החשובות במקום אחד</Typography></Box><Button component={Link} to="/cases/new" variant="contained" startIcon={<Add/>}>פתיחת קריאה חדשה</Button></Stack>

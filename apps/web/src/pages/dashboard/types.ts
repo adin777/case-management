@@ -9,6 +9,6 @@ export type WorkspaceResponse = {
 
 export type WorkspaceFilters = {
   activity_state: 'active' | 'inactive' | 'all'; created_from: string; created_to: string;
-  title: string; updated_from: string; updated_to: string; environment_id: string;
+  title: string; updated_from: string; updated_to: string; environment_id: string; include_participating: boolean;
   dynamic: Record<string, string>;
 };

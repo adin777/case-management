@@ -1,17 +1,15 @@
-import { MenuItem, Paper, Stack, TextField } from '@mui/material';
+import { Checkbox, FormControlLabel, MenuItem, Paper, Stack, TextField, Tooltip } from '@mui/material';
 import type { CaseField, Environment } from '../../types';
 import type { WorkspaceFilters } from './types';
 
 export function CaseFilters({ value, environments, fields, onChange }: { value: WorkspaceFilters; environments: Environment[]; fields: CaseField[]; onChange: (value: WorkspaceFilters) => void }) {
   const set = (key: keyof WorkspaceFilters, next: string) => onChange({ ...value, [key]: next });
-  return <Paper variant="outlined" sx={{ p: 2 }}><Stack direction={{ xs: 'column', md: 'row' }} gap={1.5} flexWrap="wrap">
+  return <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}><Stack direction={{ xs: 'column', md: 'row' }} gap={1.5} flexWrap="wrap">
     <TextField select size="small" label="מצב פעילות" value={value.activity_state} onChange={(event) => set('activity_state', event.target.value)} sx={{ minWidth: 150 }}><MenuItem value="active">פעילות</MenuItem><MenuItem value="inactive">לא פעילות</MenuItem><MenuItem value="all">הכול</MenuItem></TextField>
-    <TextField size="small" type="date" label="תאריך פתיחה מ-" value={value.created_from} onChange={(event) => set('created_from', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-    <TextField size="small" type="date" label="תאריך פתיחה עד-" value={value.created_to} onChange={(event) => set('created_to', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-    <TextField size="small" label="נושא" value={value.title} onChange={(event) => set('title', event.target.value)} />
-    <TextField size="small" type="date" label="עדכון אחרון מ-" value={value.updated_from} onChange={(event) => set('updated_from', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-    <TextField size="small" type="date" label="עדכון אחרון עד-" value={value.updated_to} onChange={(event) => set('updated_to', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+    <TextField size="small" type="date" label="תאריך פתיחה מ-" value={value.created_from} onChange={(event) => set('created_from', event.target.value)} slotProps={{ inputLabel: { shrink: true } }}/><TextField size="small" type="date" label="תאריך פתיחה עד-" value={value.created_to} onChange={(event) => set('created_to', event.target.value)} slotProps={{ inputLabel: { shrink: true } }}/>
+    <TextField size="small" label="נושא" value={value.title} onChange={(event) => set('title', event.target.value)}/><TextField size="small" type="date" label="עדכון אחרון מ-" value={value.updated_from} onChange={(event) => set('updated_from', event.target.value)} slotProps={{ inputLabel: { shrink: true } }}/><TextField size="small" type="date" label="עדכון אחרון עד-" value={value.updated_to} onChange={(event) => set('updated_to', event.target.value)} slotProps={{ inputLabel: { shrink: true } }}/>
     <TextField select size="small" label="סביבה" value={value.environment_id} onChange={(event) => onChange({ ...value, environment_id: event.target.value, dynamic: {} })} sx={{ minWidth: 180 }}><MenuItem value="">כל הסביבות</MenuItem>{environments.map((environment) => <MenuItem key={environment.id} value={environment.id}>{environment.name_he}</MenuItem>)}</TextField>
+    <Tooltip title="כולל קריאות שלא פתחת, אך צורפת אליהן כמשתתף"><FormControlLabel control={<Checkbox checked={value.include_participating} onChange={(event) => onChange({ ...value, include_participating: event.target.checked })}/>} label="כולל קריאות שאני משתתף בהן"/></Tooltip>
     {fields.map((field) => <TextField key={field.id} select={field.field_type.includes('select')} size="small" label={field.label_he} value={value.dynamic[field.id] || ''} onChange={(event) => onChange({ ...value, dynamic: { ...value.dynamic, [field.id]: event.target.value } })} sx={{ minWidth: 160 }}>{field.field_type.includes('select') && [<MenuItem key="none" value="">הכול</MenuItem>, ...field.options_json.filter((option) => option.is_active).map((option) => <MenuItem key={option.value} value={option.value}>{option.label_he}</MenuItem>)]}</TextField>)}
   </Stack></Paper>;
 }

@@ -370,16 +370,20 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
                  case_number: str | None = None, title: str | None = None,
                  description: str | None = None, priority: str | None = None,
                  workflow_status_id: uuid.UUID | None = None,
-                 priority_id: uuid.UUID | None = None) -> Any:
+                 priority_id: uuid.UUID | None = None,
+                 include_participating: bool = False) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
     if not user.is_system_admin:
-        query = query.where(or_(
+        access_conditions = [
             Case.requester_id == user.id,
             Case.reporter_id == user.id,
             Case.assignee_id == user.id,
-            Case.id.in_(select(CaseParticipant.case_id).where(CaseParticipant.user_id == user.id)),
-        ))
+        ]
+        if include_participating:
+            access_conditions.append(Case.id.in_(select(CaseParticipant.case_id).where(
+                CaseParticipant.user_id == user.id)))
+        query = query.where(or_(*access_conditions))
     if environment_id: query = query.where(Case.environment_id == environment_id)
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
     if status: query = query.where(Case.status == status)
@@ -427,6 +431,7 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  case_number: str | None = None, title: str | None = None,
                  description: str | None = None, priority: str | None = None,
                  workflow_status_id: uuid.UUID | None = None, priority_id: uuid.UUID | None = None,
+                 include_participating: bool = False,
                  page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)) -> dict[str, Any]:
     if not user.is_system_admin:
         if not environment_id:
@@ -434,7 +439,8 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
         require(db, user, environment_id, "report.cases")
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
-                         case_number, title, description, priority, workflow_status_id, priority_id)
+                         case_number, title, description, priority, workflow_status_id, priority_id,
+                         include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
     query = query.add_columns(select(WorkflowStatus.label_he).where(WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
     query = query.add_columns(select(PriorityDefinition.label_he).where(PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
@@ -489,14 +495,16 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  created_from: datetime | None = None, created_to: datetime | None = None,
                  updated_from: datetime | None = None, updated_to: datetime | None = None,
                  case_number: str | None = None, title: str | None = None,
-                 description: str | None = None, priority: str | None = None) -> Response:
+                 description: str | None = None, priority: str | None = None,
+                 include_participating: bool = False) -> Response:
     if not user.is_system_admin:
         if not environment_id:
             raise HTTPException(422, "יש לבחור סביבה לייצוא הדוח")
         require(db, user, environment_id, "report.cases")
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
-                         case_number, title, description, priority)
+                         case_number, title, description, priority,
+                         include_participating=include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
     rows = [report_row(row) for row in db.execute(query.limit(5000)).all()]
     content = xlsx_bytes(rows, {"environment_id": str(environment_id or ""), "request_type_id": str(request_type_id or ""), "status": status or "", "search": search or "", "sort": sort, "direction": direction})

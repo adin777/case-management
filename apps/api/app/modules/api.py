@@ -41,7 +41,12 @@ from app.modules.models import (
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.models import CaseStatusHistory, WorkflowStatus, WorkflowTransition
+from app.modules.operations.models import (
+    CaseStatusHistory,
+    WorkflowDefinition,
+    WorkflowStatus,
+    WorkflowTransition,
+)
 from app.modules.operations.service import initialize_operations, resolve_workflow
 
 router = APIRouter(prefix="/api")
@@ -232,6 +237,8 @@ class CaseOut(BaseModel):
     sub_priority_id: uuid.UUID | None
     reporter_id: uuid.UUID
     requester_id: uuid.UUID
+    reporter_name: str | None = None
+    reporter_email: str | None = None
     assignee_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
@@ -949,6 +956,7 @@ def workspace_cases(
     updated_to: datetime | None = None,
     environment_id: uuid.UUID | None = None,
     dynamic_filters: str | None = None,
+    include_participating: bool = False,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     sort: str = "updated_at:desc",
@@ -967,7 +975,15 @@ def workspace_cases(
     if view == "assigned" and not can_view_assigned:
         raise HTTPException(403, "אין הרשאה לצפות בקריאות בטיפולי")
     query = select(Case)
-    query = query.where(Case.reporter_id == user.id) if view == "my" else query.where(Case.assignee_id == user.id)
+    if view == "my":
+        own_filter = or_(Case.reporter_id == user.id, Case.requester_id == user.id)
+        if include_participating:
+            own_filter = or_(own_filter, Case.id.in_(select(CaseParticipant.case_id).where(
+                CaseParticipant.user_id == user.id
+            )))
+        query = query.where(own_filter)
+    else:
+        query = query.where(Case.assignee_id == user.id)
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
     if title.strip():
@@ -1071,8 +1087,11 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
     ]
     granted = permissions(db, user, item.environment_id)
     can_override_lock = user.is_system_admin or "case.lock" in granted
+    reporter = db.get(User, item.reporter_id)
     return CaseOut.model_validate(item).model_copy(
         update={
+            "reporter_name": reporter.display_name if reporter else None,
+            "reporter_email": reporter.email if reporter else None,
             "comments": [CommentOut.model_validate(c) for c in visible_comments],
             "permissions": {
                 "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
@@ -1192,6 +1211,36 @@ def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[
     ).order_by(WorkflowTransition.sort_order)).all()
     return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
              "requires_comment": transition.requires_comment} for transition, status in rows]
+
+
+@router.get("/cases/{case_id}/status-options")
+def status_options(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(404, "Case not found")
+    case_access(db, user, item)
+    statuses = list(db.scalars(select(WorkflowStatus).join(
+        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id,
+    ).where(
+        WorkflowDefinition.environment_id == item.environment_id,
+        WorkflowStatus.is_active.is_(True),
+    ).order_by(WorkflowStatus.sort_order)))
+    allowed_rows = db.execute(select(WorkflowTransition).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+    )).scalars().all()
+    allowed_ids = {row.to_status_id for row in allowed_rows}
+    can_change = "case.change_status" in permissions(db, user, item.environment_id)
+    return [{
+        "id": str(status.id),
+        "label_he": status.label_he,
+        "current": status.id == item.workflow_status_id,
+        "allowed": can_change and status.id in allowed_ids,
+        "reason": None if can_change and status.id in allowed_ids else (
+            "זהו הסטטוס הנוכחי" if status.id == item.workflow_status_id
+            else "לא ניתן לעבור ישירות מהסטטוס הנוכחי"
+        ),
+    } for status in statuses]
 
 
 @router.post("/cases/{case_id}/comments", response_model=CommentOut, status_code=201)
