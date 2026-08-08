@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from typing import Any
@@ -19,6 +20,7 @@ from app.modules.models import (
     GroupMember,
     Permission,
     PriorityDefinition,
+    RequestType,
     Role,
     RolePermission,
     SubPriorityDefinition,
@@ -28,6 +30,7 @@ from app.modules.models import (
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
+from app.modules.operations.models import SlaPolicy
 
 router = APIRouter(prefix="/api", tags=["governance"])
 logger = logging.getLogger(__name__)
@@ -160,6 +163,17 @@ class MembershipCreate(BaseModel):
 class MembershipPatch(BaseModel):
     role_id: uuid.UUID | None = None
     is_active: bool | None = None
+
+
+class UserEnvironmentMembershipIn(BaseModel):
+    environment_id: uuid.UUID
+    role_id: uuid.UUID
+
+
+class CopyEnvironmentMembershipsIn(BaseModel):
+    source_user_id: uuid.UUID
+    target_user_ids: list[uuid.UUID] = Field(min_length=1)
+    mode: str = Field(pattern="^(add_missing|replace_all)$")
 
 
 class PriorityIn(BaseModel):
@@ -300,6 +314,93 @@ def update_user(user_id: uuid.UUID, data: UserPatch, db: DB, user: Current) -> d
     audit(db, user, "user", item.id, "updated")
     db.commit()
     return user_dict(db, item)
+
+
+@router.put("/users/{user_id}/environment-memberships")
+def set_user_environment_memberships(
+    user_id: uuid.UUID, rows: list[UserEnvironmentMembershipIn], db: DB, user: Current
+) -> dict[str, Any]:
+    system_admin(user)
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "המשתמש לא נמצא")
+    if len({row.environment_id for row in rows}) != len(rows):
+        raise HTTPException(422, "ניתן לבחור תפקיד אחד בלבד לכל סביבת עבודה")
+    for row in rows:
+        if not db.get(Environment, row.environment_id) or not db.get(Role, row.role_id):
+            raise HTTPException(422, "סביבה או תפקיד אינם קיימים")
+    before = [
+        {"environment_id": str(item.environment_id), "role_id": str(item.role_id)}
+        for item in db.scalars(
+            select(EnvironmentMembership).where(EnvironmentMembership.user_id == user_id)
+        )
+    ]
+    db.execute(delete(EnvironmentMembership).where(EnvironmentMembership.user_id == user_id))
+    for row in rows:
+        db.add(EnvironmentMembership(user_id=user_id, is_active=True, **row.model_dump()))
+    audit(
+        db,
+        user,
+        "user",
+        user_id,
+        "environment_memberships_replaced",
+        before={"memberships": before},
+        after={"memberships": [row.model_dump(mode="json") for row in rows]},
+    )
+    db.commit()
+    return user_dict(db, target)
+
+
+@router.post("/users/environment-memberships/copy")
+def copy_user_environment_memberships(
+    data: CopyEnvironmentMembershipsIn, db: DB, user: Current
+) -> dict[str, int]:
+    system_admin(user)
+    source_rows = list(
+        db.scalars(
+            select(EnvironmentMembership).where(
+                EnvironmentMembership.user_id == data.source_user_id,
+                EnvironmentMembership.is_active.is_(True),
+            )
+        )
+    )
+    if not source_rows:
+        raise HTTPException(409, "למשתמש המקור אין סביבות עבודה פעילות להעתקה")
+    copied = 0
+    for target_id in set(data.target_user_ids):
+        if target_id == data.source_user_id or not db.get(User, target_id):
+            continue
+        if data.mode == "replace_all":
+            db.execute(delete(EnvironmentMembership).where(EnvironmentMembership.user_id == target_id))
+        existing = set(
+            db.scalars(
+                select(EnvironmentMembership.environment_id).where(
+                    EnvironmentMembership.user_id == target_id
+                )
+            )
+        )
+        for source in source_rows:
+            if source.environment_id in existing:
+                continue
+            db.add(
+                EnvironmentMembership(
+                    environment_id=source.environment_id,
+                    user_id=target_id,
+                    role_id=source.role_id,
+                    is_active=True,
+                )
+            )
+            copied += 1
+        audit(
+            db,
+            user,
+            "user",
+            target_id,
+            "environment_memberships_copied",
+            after={"source_user_id": str(data.source_user_id), "mode": data.mode},
+        )
+    db.commit()
+    return {"copied": copied}
 
 
 @router.post("/users/{user_id}/activate")
@@ -881,6 +982,48 @@ def update_priority(
     return item
 
 
+def _configuration_reference_count(db: DB, value_id: uuid.UUID) -> int:
+    needle = str(value_id)
+    rules = db.scalars(select(AutomationRule)).all()
+    return sum(
+        1
+        for rule in rules
+        if needle in json.dumps(
+            {"conditions": rule.conditions_json, "actions": rule.actions_json}, default=str
+        )
+    )
+
+
+@router.delete("/priorities/{priority_id}", status_code=204)
+def delete_priority(priority_id: uuid.UUID, db: DB, user: Current) -> None:
+    item = db.get(PriorityDefinition, priority_id)
+    if not item:
+        raise HTTPException(404, "העדיפות לא נמצאה")
+    require(db, user, item.environment_id, "environment.manage")
+    usage = {
+        "קריאות שירות": db.scalar(select(func.count(Case.id)).where(Case.priority_id == item.id)) or 0,
+        "ברירות מחדל של סוגי קריאה": db.scalar(
+            select(func.count(RequestType.id)).where(RequestType.default_priority_id == item.id)
+        ) or 0,
+        "תתי-עדיפויות": db.scalar(
+            select(func.count(SubPriorityDefinition.id)).where(SubPriorityDefinition.priority_id == item.id)
+        ) or 0,
+        "מדיניות SLA": db.scalar(select(func.count(SlaPolicy.id)).where(SlaPolicy.priority_id == item.id)) or 0,
+        "כללי אוטומציה": _configuration_reference_count(db, item.id),
+    }
+    used = {label: count for label, count in usage.items() if count}
+    if used:
+        summary = ", ".join(f"{count} {label}" for label, count in used.items())
+        raise HTTPException(
+            409,
+            f'לא ניתן למחוק את הערך "{item.label_he}". הוא נמצא בשימוש ב-{summary}. '
+            "ניתן להשבית אותו במקום למחוק.",
+        )
+    audit(db, user, "priority", item.id, "deleted", before={"label_he": item.label_he})
+    db.delete(item)
+    db.commit()
+
+
 @router.post("/priorities/{priority_id}/sub-priorities", status_code=201, response_model=None)
 def create_sub_priority(
     priority_id: uuid.UUID, data: SubPriorityIn, db: DB, user: Current
@@ -917,6 +1060,32 @@ def update_sub_priority(sub_priority_id: uuid.UUID, data: SubPriorityIn, db: DB,
     audit(db, user, "sub_priority", item.id, "updated")
     db.commit()
     return item
+
+
+@router.delete("/sub-priorities/{sub_priority_id}", status_code=204)
+def delete_sub_priority(sub_priority_id: uuid.UUID, db: DB, user: Current) -> None:
+    item = db.get(SubPriorityDefinition, sub_priority_id)
+    if not item or not item.environment_id:
+        raise HTTPException(404, "תת-העדיפות לא נמצאה")
+    require(db, user, item.environment_id, "environment.manage")
+    usage = {
+        "קריאות שירות": db.scalar(select(func.count(Case.id)).where(Case.sub_priority_id == item.id)) or 0,
+        "ברירות מחדל של סוגי קריאה": db.scalar(
+            select(func.count(RequestType.id)).where(RequestType.default_sub_priority_id == item.id)
+        ) or 0,
+        "כללי אוטומציה": _configuration_reference_count(db, item.id),
+    }
+    used = {label: count for label, count in usage.items() if count}
+    if used:
+        summary = ", ".join(f"{count} {label}" for label, count in used.items())
+        raise HTTPException(
+            409,
+            f'לא ניתן למחוק את הערך "{item.label_he}". הוא נמצא בשימוש ב-{summary}. '
+            "ניתן להשבית אותו במקום למחוק.",
+        )
+    audit(db, user, "sub_priority", item.id, "deleted", before={"label_he": item.label_he})
+    db.delete(item)
+    db.commit()
 
 
 @router.get("/environments/{environment_id}/sub-priorities")

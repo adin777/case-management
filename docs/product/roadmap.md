@@ -2,6 +2,12 @@
 
 ## Completed in the current milestone
 
+- Unified dashboard workspace with My Cases and permission-aware Assigned Cases tabs, server-side pagination, semantic activity filtering, environment filtering, and responsive desktop/mobile results.
+- Environment-specific dynamic dashboard filtering for explicitly filterable fields.
+- Simplified core-field Case Details and Create Case UX, with the SLA panel and populated legacy demo fields removed from active presentation without deleting historical data.
+- Safe priority and sub-priority deletion with dependency checks, Hebrew conflict guidance, audit, and no cascade deletion.
+- Configuration validation for active creation environments and initial workflow status management with stable semantic categories.
+- Multi-environment user membership editing and audited membership copying with add-missing and replace-all modes.
 - Hebrew business permission domains with none/view/edit, bulk user/group assignment, active-state filtering, and audited copy modes.
 - Safe local development-user cleanup with a verified SQLite backup and preserved audit identity snapshots.
 - Header-level case-report filtering and sorting, including last update, creator, assignee, configured workflow status, and configured priority.

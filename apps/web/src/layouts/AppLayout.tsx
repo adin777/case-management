@@ -1,7 +1,7 @@
 import { ReactNode, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Assessment, Assignment, Dashboard, Groups, LockPerson, Logout, Menu, Notifications, Settings, TaskAlt } from '@mui/icons-material';
+import { Assessment, Dashboard, Groups, LockPerson, Logout, Menu, Notifications, Settings } from '@mui/icons-material';
 import { AppBar, Avatar, Box, Divider, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Toolbar, Tooltip, Typography } from '@mui/material';
 import { api, token } from '../api/client';
 import type { User } from '../types';
@@ -9,8 +9,6 @@ import type { User } from '../types';
 type LinkItem = { url: string; label: string; icon: ReactNode; admin?: boolean };
 const links: LinkItem[] = [
   { url: '/', label: 'ראשי', icon: <Dashboard /> },
-  { url: '/cases', label: 'הקריאות שלי', icon: <Assignment /> },
-  { url: '/assigned', label: 'קריאות בטיפולי', icon: <TaskAlt /> },
   { url: '/reports/cases', label: 'דוח קריאות שירות', icon: <Assessment /> },
   { url: '/admin/environments', label: 'סביבות וסוגי קריאות', icon: <Settings /> },
   { url: '/admin/users', label: 'משתמשים והרשאות', icon: <Groups />, admin: true },

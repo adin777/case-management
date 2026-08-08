@@ -36,6 +36,7 @@ class StatusIn(BaseModel):
     description: str | None = None
     color: str = "#64748b"
     sort_order: int = 0
+    semantic_category: str = Field(default="open", pattern="^(open|in_progress|waiting|resolved|closed)$")
     is_initial: bool = False
     is_final: bool = False
     is_closed: bool = False
@@ -143,6 +144,8 @@ def create_status(workflow_id: uuid.UUID, data: StatusIn, db: DB, user: Current)
     if not workflow:
         raise HTTPException(404, "Workflow not found")
     require(db, user, workflow.environment_id, "workflow.manage")
+    if data.is_initial and not data.is_active:
+        raise HTTPException(422, "סטטוס התחלתי חייב להיות פעיל")
     if data.is_initial:
         db.execute(update(WorkflowStatus).where(WorkflowStatus.workflow_id == workflow_id).values(is_initial=False))
     item = WorkflowStatus(id=uuid.uuid4(), workflow_id=workflow_id, **data.model_dump())
@@ -161,6 +164,8 @@ def update_status(status_id: uuid.UUID, data: StatusIn, db: DB, user: Current) -
     if not workflow:
         raise HTTPException(409, "Workflow no longer exists")
     require(db, user, workflow.environment_id, "workflow.manage")
+    if data.is_initial and not data.is_active:
+        raise HTTPException(422, "סטטוס התחלתי חייב להיות פעיל")
     if data.is_initial:
         db.execute(update(WorkflowStatus).where(WorkflowStatus.workflow_id == item.workflow_id).values(is_initial=False))
     for key, value in data.model_dump().items():

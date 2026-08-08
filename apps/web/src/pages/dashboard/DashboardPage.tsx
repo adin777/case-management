@@ -1,2 +1,29 @@
-import {useQuery} from '@tanstack/react-query';import {Box,Button,Container,Grid,Stack,Typography} from '@mui/material';import {Add} from '@mui/icons-material';import {api} from '../../api/client';import type {Case} from '../../types';import {CaseList} from '../cases/CaseList';
-export function DashboardPage(){const{data:cases=[]}=useQuery({queryKey:['cases'],queryFn:()=>api<Case[]>('/cases')});return <Container maxWidth="lg"><Stack spacing={3}><Box className="hero"><Typography variant="h4">בוקר טוב 👋</Typography><Typography sx={{opacity:.85,mt:1}}>כאן אפשר לפתוח פנייה, לעקוב אחריה ולנהל את העבודה.</Typography><Button variant="contained" color="secondary" startIcon={<Add/>} sx={{mt:3}} href="/cases/new">פתיחת פנייה חדשה</Button></Box><Grid container spacing={2}>{[['פניות פתוחות',cases.filter(c=>!['closed','cancelled'].includes(c.status)).length],['בטיפול',cases.filter(c=>c.status==='in_progress').length],['הושלמו',cases.filter(c=>c.status==='closed').length]].map(([label,count])=><Grid size={{xs:12,sm:4}} key={label}><Box className="metric"><Typography color="text.secondary">{label}</Typography><Typography variant="h4">{count}</Typography></Box></Grid>)}</Grid><Typography variant="h6">פניות אחרונות</Typography><CaseList cases={cases.slice(0,5)}/></Stack></Container>}
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Add } from '@mui/icons-material';
+import { Alert, Box, Button, CircularProgress, Container, Pagination, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api } from '../../api/client';
+import type { CaseField, Environment } from '../../types';
+import { CaseFilters } from './CaseFilters';
+import { DashboardCaseList } from './DashboardCaseList';
+import type { WorkspaceFilters, WorkspaceResponse } from './types';
+
+const initial: WorkspaceFilters = { activity_state: 'active', created_from: '', created_to: '', title: '', updated_from: '', updated_to: '', environment_id: '', dynamic: {} };
+
+export function DashboardPage() {
+  const [search, setSearch] = useSearchParams(); const view = search.get('tab') === 'assigned' ? 'assigned' : 'my';
+  const [filters, setFilters] = useState(initial); const [page, setPage] = useState(1);
+  const { data: environments = [] } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
+  const { data: fields = [] } = useQuery({ queryKey: ['dashboard-fields', filters.environment_id], queryFn: () => api<CaseField[]>(`/environments/${filters.environment_id}/case-fields`), enabled: !!filters.environment_id });
+  const filterable = fields.filter((field) => field.is_active && field.validation_json?.is_filterable === true);
+  const params = useMemo(() => { const value = new URLSearchParams({ view, activity_state: filters.activity_state, page: String(page), page_size: '25', sort: 'updated_at:desc' }); for (const key of ['created_from','created_to','title','updated_from','updated_to','environment_id'] as const) if (filters[key]) value.set(key, filters[key]); const dynamic = Object.fromEntries(Object.entries(filters.dynamic).filter(([, item]) => item)); if (Object.keys(dynamic).length) value.set('dynamic_filters', JSON.stringify(dynamic)); return value.toString(); }, [filters, page, view]);
+  const query = useQuery({ queryKey: ['workspace-cases', params], queryFn: () => api<WorkspaceResponse>(`/cases/workspace/query?${params}`), retry: false });
+  const changeFilters = (next: WorkspaceFilters) => { setFilters(next); setPage(1); };
+  return <Container maxWidth="xl"><Stack spacing={2.5}><Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2}><Box><Typography variant="h4" fontWeight={800}>מרכז העבודה</Typography><Typography color="text.secondary">הקריאות, המסננים והפעולות החשובות במקום אחד</Typography></Box><Button component={Link} to="/cases/new" variant="contained" startIcon={<Add/>}>פתיחת קריאה חדשה</Button></Stack>
+    <Paper variant="outlined"><Tabs value={view} onChange={(_, value) => setSearch({ tab: value })}><Tab value="my" label="הקריאות שלי"/>{(view === 'assigned' || query.data?.can_view_assigned_cases) && <Tab value="assigned" label="קריאות בטיפולי" disabled={query.data?.can_view_assigned_cases === false}/>}</Tabs></Paper>
+    <CaseFilters value={filters} environments={environments} fields={filterable} onChange={changeFilters}/>
+    {query.error && <Alert severity="error">{(query.error as Error).message}</Alert>}{query.isLoading ? <Box textAlign="center" py={6}><CircularProgress/></Box> : <DashboardCaseList items={query.data?.items || []}/>}
+    {(query.data?.total || 0) > 25 && <Pagination page={page} count={Math.ceil((query.data?.total || 0) / 25)} onChange={(_, value) => setPage(value)} sx={{ alignSelf: 'center' }}/>}
+  </Stack></Container>;
+}

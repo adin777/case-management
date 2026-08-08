@@ -25,7 +25,7 @@ def options_for(db: Session, environment_id: uuid.UUID, field_code: str,
         request_query = select(RequestType).where(RequestType.environment_id == environment_id)
         if active_only: request_query = request_query.where(RequestType.is_active.is_(True))
         request_rows = db.scalars(request_query.order_by(RequestType.sort_order, RequestType.name_he))
-        return [{"id": row.id, "label_he": row.name_he, "description": row.description,
+        return [{"id": row.id, "code": row.code, "label_he": row.name_he, "description": row.description,
                  "sort_order": row.sort_order, "is_active": row.is_active,
                  "requires_approval": row.requires_approval,
                  "workflow_id": row.workflow_definition_id,
@@ -38,21 +38,22 @@ def options_for(db: Session, environment_id: uuid.UUID, field_code: str,
             WorkflowDefinition.environment_id == environment_id, WorkflowDefinition.is_active.is_(True))
         if active_only: status_query = status_query.where(WorkflowStatus.is_active.is_(True))
         status_rows = db.scalars(status_query.order_by(WorkflowStatus.sort_order))
-        return [{"id": row.id, "label_he": row.label_he, "color": row.color,
+        return [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
                  "sort_order": row.sort_order, "is_active": row.is_active,
                  "is_initial": row.is_initial, "is_final": row.is_final,
+                 "semantic_category": row.semantic_category,
                  "workflow_id": row.workflow_id} for row in status_rows]
     if field_code == "priority":
         priority_query = select(PriorityDefinition).where(PriorityDefinition.environment_id == environment_id)
         if active_only: priority_query = priority_query.where(PriorityDefinition.is_active.is_(True))
         priority_rows = db.scalars(priority_query.order_by(PriorityDefinition.sort_order))
-        return [{"id": row.id, "label_he": row.label_he, "color": row.color,
+        return [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
                  "sort_order": row.sort_order, "is_active": row.is_active} for row in priority_rows]
     if field_code == "sub_priority":
         sub_query = select(SubPriorityDefinition).where(SubPriorityDefinition.environment_id == environment_id)
         if active_only: sub_query = sub_query.where(SubPriorityDefinition.is_active.is_(True))
         sub_rows = db.scalars(sub_query.order_by(SubPriorityDefinition.sort_order))
-        return [{"id": row.id, "label_he": row.label_he, "color": row.color,
+        return [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
                  "sort_order": row.sort_order, "is_active": row.is_active} for row in sub_rows]
     if field_code in {"assignee", "participants"}:
         user_rows = db.scalars(select(User).where(User.is_active.is_(True)).order_by(User.display_name))

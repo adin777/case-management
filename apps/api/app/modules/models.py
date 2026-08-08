@@ -194,6 +194,7 @@ class FieldDefinition(Base):
     field_type: Mapped[str] = mapped_column(String(40))
     is_required: Mapped[bool] = mapped_column(Boolean, default=False)
     is_read_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer)
     configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("form_definition_id", "key"),)
