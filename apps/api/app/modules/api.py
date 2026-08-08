@@ -228,7 +228,7 @@ class CaseOut(BaseModel):
     case_number: str
     environment_id: uuid.UUID
     request_type_id: uuid.UUID
-    form_definition_id: uuid.UUID
+    form_definition_id: uuid.UUID | None
     title: str
     description: str | None
     status: CaseStatus
@@ -636,9 +636,13 @@ def add_membership(environment_id: uuid.UUID, data: MembershipIn, db: DB, user: 
 
 
 @router.get("/request-types", response_model=list[RequestTypeOut])
-def request_types(db: DB, user: Current, environment_id: Annotated[uuid.UUID, Query()]) -> list[RequestType]:
+def request_types(db: DB, user: Current, environment_id: Annotated[uuid.UUID, Query()],
+                  active_only: bool = False) -> list[RequestType]:
     require(db, user, environment_id, "request_type.read")
-    return list(db.scalars(select(RequestType).where(RequestType.environment_id == environment_id)))
+    query = select(RequestType).where(RequestType.environment_id == environment_id)
+    if active_only:
+        query = query.where(RequestType.is_active.is_(True))
+    return list(db.scalars(query.order_by(RequestType.sort_order, RequestType.name_he)))
 
 
 @router.post("/request-types", response_model=RequestTypeOut, status_code=201)
@@ -824,11 +828,11 @@ def typed_value(case_id: uuid.UUID, field: FieldDefinition, value: Any) -> CaseF
 def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     require(db, user, data.environment_id, "case.create")
     rt = db.get(RequestType, data.request_type_id)
-    if not rt or rt.environment_id != data.environment_id or not rt.form_version_id:
-        raise HTTPException(400, "Published form is required")
-    form = db.get(FormDefinition, rt.form_version_id)
-    if not form:
-        raise HTTPException(409, "Published form no longer exists")
+    if not rt or rt.environment_id != data.environment_id or not rt.is_active:
+        raise HTTPException(422, "סוג הקריאה שנבחר אינו תקף בסביבה זו")
+    form = db.get(FormDefinition, rt.form_version_id) if rt.form_version_id else None
+    if rt.form_version_id and not form:
+        raise HTTPException(409, "הטופס המקושר לסוג הקריאה אינו קיים")
     priority_id = data.priority_id or rt.default_priority_id
     if not priority_id:
         raise HTTPException(422, "לא הוגדרה עדיפות ברירת מחדל; יש לבחור עדיפות")
@@ -841,13 +845,13 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         if not sub_priority or sub_priority.environment_id != data.environment_id or not sub_priority.is_active:
             raise HTTPException(422, "Sub-priority does not belong to the selected priority")
     provided = {v.field_definition_id: v.value for v in data.values}
-    active_fields = [field for field in form.fields if field.is_active]
+    active_fields = [field for field in form.fields if field.is_active] if form else []
     missing = [f.label_he for f in active_fields if f.is_required and provided.get(f.id) in (None, "")]
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
     item = Case(
         case_number=NumberingService.next(db, "case", data.environment_id),
-        form_definition_id=form.id,
+        form_definition_id=form.id if form else None,
         reporter_id=user.id,
         requester_id=user.id,
         environment_id=data.environment_id,

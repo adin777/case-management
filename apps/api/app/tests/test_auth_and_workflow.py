@@ -1,10 +1,12 @@
+import uuid
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.database.session import SessionLocal
 from app.main import app
 from app.modules.api import password_hash
-from app.modules.models import EnvironmentMembership, User
+from app.modules.models import EnvironmentMembership, RequestType, User
 
 client = TestClient(app)
 
@@ -206,6 +208,68 @@ def test_request_types_are_scoped_to_the_selected_environment() -> None:
     assert all(row["environment_id"] == first["id"] for row in first_rows)
     assert all(row["environment_id"] == second["id"] for row in second_rows)
     assert {row["id"] for row in first_rows}.isdisjoint({row["id"] for row in second_rows})
+
+
+def test_case_creation_request_types_include_only_active_rows() -> None:
+    headers = login_headers("admin@example.com", "Admin123!")
+    environments = client.get("/api/environments", headers=headers).json()
+    environment, rows = next(
+        (environment, rows)
+        for environment in environments
+        if (rows := client.get(
+            f"/api/request-types?environment_id={environment['id']}", headers=headers
+        ).json())
+    )
+    target = rows[0]
+    client.patch(f"/api/request-types/{target['id']}", headers=headers, json={"is_active": False})
+    try:
+        active_rows = client.get(
+            f"/api/request-types?environment_id={environment['id']}&active_only=true", headers=headers
+        )
+        assert active_rows.status_code == 200
+        assert target["id"] not in {row["id"] for row in active_rows.json()}
+        assert all(row["is_active"] for row in active_rows.json())
+    finally:
+        client.patch(f"/api/request-types/{target['id']}", headers=headers, json={"is_active": True})
+
+
+def test_create_two_cases_with_same_business_values_and_without_dynamic_form() -> None:
+    headers = login_headers("requester@example.com", "Requester123!")
+    environment = client.get("/api/case-creation/environments", headers=headers).json()[0]
+    request_type = client.get(
+        f"/api/request-types?environment_id={environment['id']}&active_only=true", headers=headers
+    ).json()[0]
+    priority = client.get(
+        f"/api/environments/{environment['id']}/priorities", headers=headers
+    ).json()[0]
+    with SessionLocal() as db:
+        stored = db.get(RequestType, uuid.UUID(request_type["id"]))
+        assert stored is not None
+        original_form_id = stored.form_version_id
+        stored.form_version_id = None
+        db.commit()
+    payload = {
+        "environment_id": environment["id"],
+        "request_type_id": request_type["id"],
+        "title": "אותם ערכים עסקיים",
+        "description": "קריאה ללא שדות דינמיים",
+        "priority_id": priority["id"],
+        "values": [],
+    }
+    try:
+        first = client.post("/api/cases", headers=headers, json=payload)
+        second = client.post("/api/cases", headers=headers, json=payload)
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+        assert first.json()["id"] != second.json()["id"]
+        assert first.json()["case_number"] != second.json()["case_number"]
+        assert first.json()["form_definition_id"] is None
+    finally:
+        with SessionLocal() as db:
+            stored = db.get(RequestType, uuid.UUID(request_type["id"]))
+            assert stored is not None
+            stored.form_version_id = original_form_id
+            db.commit()
 
 
 def test_environment_patch_changes_only_the_path_environment() -> None:

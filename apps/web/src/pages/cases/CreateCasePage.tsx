@@ -5,6 +5,7 @@ import { Alert, Button, Card, CardContent, Chip, CircularProgress, Container, Fo
 import { api } from '../../api/client';
 import { DynamicField } from '../../components/DynamicField';
 import type { Case, Environment, Form, Priority, RequestType, SubPriority, User } from '../../types';
+import { activePriorities, activeRequestTypes, activeSubPriorities, requestTypesUrl } from './caseCreationSources';
 
 export function CreateCasePage() {
   const navigate = useNavigate();
@@ -20,10 +21,11 @@ export function CreateCasePage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const { data: environments = [] } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
-  const { data: requestTypes = [] } = useQuery({ queryKey: ['request-types', environmentId], queryFn: () => api<RequestType[]>(`/request-types?environment_id=${environmentId}`), enabled: !!environmentId });
+  const { data: requestTypeRows = [] } = useQuery({ queryKey: ['request-types', environmentId, 'active'], queryFn: () => api<RequestType[]>(requestTypesUrl(environmentId)), enabled: !!environmentId });
   const { data: priorities = [] } = useQuery({ queryKey: ['priorities', environmentId], queryFn: () => api<Priority[]>(`/environments/${environmentId}/priorities`), enabled: !!environmentId });
   const { data: subPriorities = [] } = useQuery({ queryKey: ['sub-priorities', environmentId], queryFn: () => api<SubPriority[]>(`/environments/${environmentId}/sub-priorities`), enabled: !!environmentId });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users') });
+  const requestTypes = activeRequestTypes(requestTypeRows, environmentId);
   const selectedType = requestTypes.find((item) => item.id === requestTypeId);
   const { data: form } = useQuery({ queryKey: ['form', selectedType?.form_version_id], queryFn: () => api<Form>(`/forms/${selectedType!.form_version_id}`), enabled: !!selectedType?.form_version_id });
   const { data: caseConfig, error: configError } = useQuery({ queryKey: ['case-config', requestTypeId], queryFn: () => api<{ initial_status_id: string; can_choose_status: boolean; default_priority_id?: string; default_sub_priority_id?: string; statuses: { id: string; label_he: string; is_initial: boolean }[] }>(`/request-types/${requestTypeId}/case-config`), enabled: !!requestTypeId, retry: false });
@@ -51,19 +53,19 @@ export function CreateCasePage() {
     <div><Typography variant="h4" fontWeight={800}>פתיחת קריאה חדשה</Typography><Typography color="text.secondary">מלאו את פרטי הליבה והוסיפו משתתפים לפי הצורך</Typography></div>
     {error && <Alert severity="error">{error}</Alert>}
     <Card variant="outlined"><CardContent><Stack component="form" onSubmit={submit} spacing={2.5}>
-      <FormControl required><InputLabel>סביבה</InputLabel><Select label="סביבה" value={environmentId} onChange={(event) => { setEnvironmentId(event.target.value); setRequestTypeId(''); setPriorityId(''); setSubPriorityId(''); }}>{environments.map((environment) => <MenuItem key={environment.id} value={environment.id}>{environment.name_he}</MenuItem>)}</Select></FormControl>
+      <FormControl required><InputLabel>סביבה</InputLabel><Select label="סביבה" value={environmentId} onChange={(event) => { setEnvironmentId(event.target.value); setRequestTypeId(''); setPriorityId(''); setSubPriorityId(''); setWorkflowStatusId(''); setValues({}); }}>{environments.map((environment) => <MenuItem key={environment.id} value={environment.id}>{environment.name_he}</MenuItem>)}</Select></FormControl>
       <TextField label="נושא" required value={title} onChange={(event) => setTitle(event.target.value)} />
       <TextField label="תיאור" required multiline minRows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
-      <FormControl required disabled={!environmentId}><InputLabel>סוג קריאה</InputLabel><Select label="סוג קריאה" value={requestTypeId} onChange={(event) => setRequestTypeId(event.target.value)}>{requestTypes.filter((type) => type.is_active).map((type) => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}</Select></FormControl>
+      <FormControl required disabled={!environmentId}><InputLabel>סוג קריאה</InputLabel><Select label="סוג קריאה" value={requestTypeId} onChange={(event) => setRequestTypeId(event.target.value)}>{requestTypes.map((type) => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}</Select></FormControl>
       {configError && <Alert severity="error">לא הוגדר סטטוס התחלתי לסוג קריאה זה. יש לפנות למנהל הסביבה.</Alert>}
       {caseConfig?.can_choose_status ? <FormControl required><InputLabel>סטטוס</InputLabel><Select label="סטטוס" value={workflowStatusId} onChange={(event) => setWorkflowStatusId(event.target.value)}>{caseConfig.statuses.map((status) => <MenuItem key={status.id} value={status.id}>{status.label_he}</MenuItem>)}</Select></FormControl> : caseConfig && <TextField label="סטטוס" value={caseConfig.statuses.find((status) => status.id === workflowStatusId)?.label_he || ''} slotProps={{ input: { readOnly: true } }} />}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-        <FormControl required fullWidth disabled={!environmentId}><InputLabel>עדיפות</InputLabel><Select label="עדיפות" value={priorityId} onChange={(event) => { setPriorityId(event.target.value); setSubPriorityId(''); }}>{priorities.filter((priority) => priority.is_active).map((priority) => <MenuItem key={priority.id} value={priority.id}>{priority.label_he}</MenuItem>)}</Select></FormControl>
-        <FormControl fullWidth disabled={!subPriorities.some((item) => item.is_active)}><InputLabel>תת-עדיפות</InputLabel><Select label="תת-עדיפות" value={subPriorityId} onChange={(event) => setSubPriorityId(event.target.value)}>{subPriorities.filter((item) => item.is_active).map((item) => <MenuItem key={item.id} value={item.id}>{item.label_he}</MenuItem>)}</Select></FormControl>
+        <FormControl required fullWidth disabled={!environmentId}><InputLabel>עדיפות</InputLabel><Select label="עדיפות" value={priorityId} onChange={(event) => { setPriorityId(event.target.value); setSubPriorityId(''); }}>{activePriorities(priorities).map((priority) => <MenuItem key={priority.id} value={priority.id}>{priority.label_he}</MenuItem>)}</Select></FormControl>
+        <FormControl fullWidth disabled={!activeSubPriorities(subPriorities).length}><InputLabel>תת-עדיפות</InputLabel><Select label="תת-עדיפות" value={subPriorityId} onChange={(event) => setSubPriorityId(event.target.value)}>{activeSubPriorities(subPriorities).map((item) => <MenuItem key={item.id} value={item.id}>{item.label_he}</MenuItem>)}</Select></FormControl>
       </Stack>
       <FormControl><InputLabel>משתתפים</InputLabel><Select multiple label="משתתפים" value={participantIds} onChange={(event) => setParticipantIds(typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)} renderValue={(selected) => <Stack direction="row" gap={.5} flexWrap="wrap">{selected.map((id) => <Chip key={id} size="small" label={users.find((user) => user.id === id)?.display_name || id} />)}</Stack>}>{users.filter((user) => user.is_active !== false).map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}</Select></FormControl>
       {form?.fields.filter((field) => field.is_active !== false).map((field) => <DynamicField key={field.id} field={field} value={values[field.id!]} users={users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />)}
-      <Button type="submit" variant="contained" size="large" disabled={!form || !caseConfig || submitting}>{submitting ? <><CircularProgress size={20} color="inherit" sx={{ ml: 1 }} />שומר קריאה...</> : 'פתיחת הקריאה'}</Button>
+      <Button type="submit" variant="contained" size="large" disabled={!caseConfig || submitting}>{submitting ? <><CircularProgress size={20} color="inherit" sx={{ ml: 1 }} />שומר קריאה...</> : 'פתיחת הקריאה'}</Button>
     </Stack></CardContent></Card>
   </Stack></Container>;
 }

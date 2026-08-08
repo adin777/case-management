@@ -206,7 +206,9 @@ class Case(TimestampMixin, Base):
     case_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
     environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id"))
     request_type_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("request_types.id"))
-    form_definition_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("form_definitions.id"))
+    form_definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("form_definitions.id"), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[CaseStatus] = mapped_column(

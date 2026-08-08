@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -15,6 +17,7 @@ from app.modules.platform.router import router as platform_router
 from app.modules.system_fields.router import router as system_fields_router
 
 app = FastAPI(title="Case Management API", version="0.1.0")
+logger = logging.getLogger(__name__)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -33,9 +36,16 @@ app.include_router(router)
 
 
 @app.exception_handler(IntegrityError)
-async def integrity_error_handler(_request: Request, _exc: IntegrityError) -> JSONResponse:
+async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+    logger.exception("Unexpected database integrity error on %s %s: %s",
+                     request.method, request.url.path, exc.orig)
     return JSONResponse(
-        status_code=409, content={"detail": "A record with the same unique value already exists"}
+        status_code=500,
+        content={
+            "code": "DATABASE_INTEGRITY_ERROR",
+            "message": "לא ניתן היה להשלים את הפעולה עקב שגיאת תקינות נתונים.",
+            "details": {},
+        },
     )
 
 
