@@ -292,13 +292,21 @@ def case_approvals(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, 
     rows = db.execute(select(ApprovalInstance, ApprovalFlowDefinition).join(
         ApprovalFlowDefinition, ApprovalInstance.approval_flow_id == ApprovalFlowDefinition.id).where(
         ApprovalInstance.case_id == case_id)).all()
-    return [{"id": instance.id, "system_number": instance.system_number, "name": flow.name,
-             "status": instance.status, "current_step_order": instance.current_step_order,
-             "tasks": [{"id": task.id, "approver_user_id": task.approver_user_id,
-                        "status": task.status, "decision": task.decision, "comment": task.comment}
-                       for task in db.scalars(select(ApprovalTask).where(
-                           ApprovalTask.approval_instance_id == instance.id))]}
-            for instance, flow in rows]
+    result = []
+    for instance, flow in rows:
+        tasks = []
+        for task, step in db.execute(select(ApprovalTask, ApprovalStepDefinition).join(
+            ApprovalStepDefinition, ApprovalTask.step_definition_id == ApprovalStepDefinition.id).where(
+            ApprovalTask.approval_instance_id == instance.id).order_by(ApprovalStepDefinition.step_order)):
+            tasks.append({"id": task.id, "step_order": step.step_order, "step_name": step.name,
+                "approver_type": step.approver_type, "approver_user_id": task.approver_user_id,
+                "approver_name": task.approver_name_snapshot, "status": task.status,
+                "decision": task.decision, "comment": task.comment, "requested_at": instance.started_at,
+                "decided_at": task.decided_at, "can_decide": task.approver_user_id == user.id
+                    and task.status == "pending" and step.step_order == instance.current_step_order})
+        result.append({"id": instance.id, "system_number": instance.system_number, "name": flow.name,
+            "status": instance.status, "current_step_order": instance.current_step_order, "tasks": tasks})
+    return result
 
 
 @router.get("/approvals/pending-for-me")
@@ -320,7 +328,7 @@ def pending_approvals_for_me(db: DB, user: Current) -> list[dict[str, Any]]:
     ).all()
     return [{
         "task_id": task.id, "case_id": case_item.id, "case_number": case_item.case_number,
-        "title": case_item.title, "environment": environment.name_he,
+        "title": case_item.title, "description": case_item.description or "", "environment": environment.name_he,
         "request_type": request_type.name_he, "step_name": step.name,
         "requested_at": instance.started_at, "status": task.status,
     } for task, instance, step, case_item, environment, request_type in rows]
@@ -426,7 +434,13 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
         query = query.where(or_(*access_conditions))
     if environment_id: query = query.where(Case.environment_id == environment_id)
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
-    if status: query = query.where(Case.status == status)
+    status_label = select(WorkflowStatus.label_he).where(
+        WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery()
+    priority_label = select(PriorityDefinition.label_he).where(
+        PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery()
+    assignee_label = select(User.display_name).where(
+        User.id == Case.assignee_id).correlate(Case).scalar_subquery()
+    if status: query = query.where(status_label == status)
     if search: query = query.where(or_(Case.case_number.ilike(f"%{search}%"), Case.title.ilike(f"%{search}%")))
     if created_by_id: query = query.where(Case.reporter_id == created_by_id)
     if assignee_id: query = query.where(Case.assignee_id == assignee_id)
@@ -441,9 +455,10 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
     if workflow_status_id: query = query.where(Case.workflow_status_id == workflow_status_id)
     if priority_id: query = query.where(Case.priority_id == priority_id)
     columns = {"case_number": Case.case_number, "created_at": Case.created_at,
-               "updated_at": Case.updated_at, "priority": Case.priority, "status": Case.status,
+               "updated_at": Case.updated_at, "priority": priority_label, "status": status_label,
                "title": Case.title, "environment": Environment.name_he,
-               "request_type": RequestType.name_he, "requester": User.display_name}
+               "request_type": RequestType.name_he, "requester": User.display_name,
+               "assignee": assignee_label}
     column = columns.get(sort, Case.created_at)
     return query.order_by(column.asc() if direction == "asc" else column.desc())
 
@@ -536,6 +551,7 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  updated_from: datetime | None = None, updated_to: datetime | None = None,
                  case_number: str | None = None, title: str | None = None,
                  description: str | None = None, priority: str | None = None,
+                 workflow_status_id: uuid.UUID | None = None, priority_id: uuid.UUID | None = None,
                  include_participating: bool = False) -> Response:
     if not user.is_system_admin:
         if not environment_id:
@@ -543,9 +559,11 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
         require(db, user, environment_id, "report.cases")
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
-                         case_number, title, description, priority,
+                         case_number, title, description, priority, workflow_status_id, priority_id,
                          include_participating=include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
+    query = query.add_columns(select(WorkflowStatus.label_he).where(WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
+    query = query.add_columns(select(PriorityDefinition.label_he).where(PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
     rows = [report_row(row) for row in db.execute(query.limit(5000)).all()]
     content = xlsx_bytes(rows, {"environment_id": str(environment_id or ""), "request_type_id": str(request_type_id or ""), "status": status or "", "search": search or "", "sort": sort, "direction": direction})
     return StreamingResponse(io.BytesIO(content), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="case-report.xlsx"'})

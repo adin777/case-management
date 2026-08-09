@@ -86,6 +86,17 @@ def test_report_filters_and_real_xlsx() -> None:
     create_case(headers)
     report = client.get(f"/api/reports/cases?environment_id={environment['id']}&request_type_id={request_type['id']}&sort=case_number&direction=asc", headers=headers)
     assert report.status_code == 200 and report.json()["total"] >= 1
+    row = next(item for item in report.json()["items"] if item["status"])
+    sources = client.get(f"/api/reports/cases/value-sources?environment_id={environment['id']}", headers=headers).json()
+    status = next(value for value in sources["statuses"] if value["label_he"] == row["status"])
+    matching = client.get(f"/api/reports/cases?environment_id={environment['id']}&workflow_status_id={status['id']}", headers=headers).json()["items"]
+    assert any(value["case_number"] == row["case_number"] for value in matching)
+    other = next((value for value in sources["statuses"] if value["id"] != status["id"]), None)
+    if other:
+        excluded = client.get(f"/api/reports/cases?environment_id={environment['id']}&workflow_status_id={other['id']}", headers=headers).json()["items"]
+        assert all(value["case_number"] != row["case_number"] for value in excluded)
+    descending = client.get(f"/api/reports/cases?environment_id={environment['id']}&sort=case_number&direction=desc&page_size=200", headers=headers).json()["items"]
+    assert [value["case_number"] for value in descending] == sorted((value["case_number"] for value in descending), reverse=True)
     exported = client.get(f"/api/reports/cases/export?environment_id={environment['id']}", headers=headers)
     assert exported.status_code == 200
     with zipfile.ZipFile(io.BytesIO(exported.content)) as workbook:
@@ -112,11 +123,28 @@ def test_two_step_approval_flow() -> None:
     assert any(row["case_id"] == item["id"] and row["step_name"] == "אישור מטפל" for row in pending.json())
     approval = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["name"] == "אישור דו שלבי")
     first = approval["tasks"][0]
+    assert first["approver_name"] and first["requested_at"] and first["step_order"] == 1
     assert client.post(f"/api/approval-tasks/{first['id']}/decision", headers=auth("agent@example.com", "Agent123!"), json={"decision": "approved"}).status_code == 200
     approval = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["name"] == "אישור דו שלבי")
     second = next(row for row in approval["tasks"] if row["status"] == "pending")
     decided = client.post(f"/api/approval-tasks/{second['id']}/decision", headers=auth("envadmin@example.com", "EnvAdmin123!"), json={"decision": "approved"})
     assert decided.json()["status"] == "approved"
+    history = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["id"] == approval["id"])
+    assert all(task["approver_name"] for task in history["tasks"])
+    assert all(task["decided_at"] for task in history["tasks"] if task["decision"])
+
+
+def test_assign_unassign_uses_active_environment_members() -> None:
+    headers = auth(); environment, _, _ = context(headers); item = create_case(headers)
+    eligible = client.get(f"/api/environments/{environment['id']}/eligible-assignees", headers=headers)
+    assert eligible.status_code == 200 and eligible.json()
+    candidate = eligible.json()[0]
+    assigned = client.post(f"/api/cases/{item['id']}/assign", headers=headers,
+        json={"assignee_id": candidate["id"], "version": item["version"]})
+    assert assigned.status_code == 200 and assigned.json()["assignee_id"] == candidate["id"]
+    unassigned = client.post(f"/api/cases/{item['id']}/assign", headers=headers,
+        json={"assignee_id": None, "version": assigned.json()["version"]})
+    assert unassigned.status_code == 200 and unassigned.json()["assignee_id"] is None
 
 
 def test_bulk_permissions_for_users_and_groups() -> None:

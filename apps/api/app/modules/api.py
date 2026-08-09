@@ -1238,10 +1238,19 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.assign")
+    granted = permissions(db, user, item.environment_id)
+    if item.is_locked and not (user.is_system_admin or "environment.manage" in granted):
+        raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לשנות מטפל")
     if item.version != data.version:
         raise HTTPException(409, "Case was updated by another user")
-    if data.assignee_id and not db.get(User, data.assignee_id):
-        raise HTTPException(404, "Assignee not found")
+    if data.assignee_id:
+        candidate = db.get(User, data.assignee_id)
+        membership = db.scalar(select(EnvironmentMembership.id).where(
+            EnvironmentMembership.environment_id == item.environment_id,
+            EnvironmentMembership.user_id == data.assignee_id,
+            EnvironmentMembership.is_active.is_(True)))
+        if not candidate or candidate.status != "active" or not candidate.is_active or not membership:
+            raise HTTPException(422, "ניתן לשייך רק משתמש פעיל המשויך לסביבת הקריאה")
     item.assignee_id = data.assignee_id
     item.version += 1
     if item.status == CaseStatus.submitted:
@@ -1256,6 +1265,17 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
     )
     db.commit()
     return item
+
+
+@router.get("/environments/{environment_id}/eligible-assignees")
+def eligible_assignees(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+    require(db, user, environment_id, "case.assign")
+    rows = db.scalars(select(User).join(EnvironmentMembership,
+        EnvironmentMembership.user_id == User.id).where(
+        EnvironmentMembership.environment_id == environment_id,
+        EnvironmentMembership.is_active.is_(True), User.is_active.is_(True),
+        User.status == "active").distinct().order_by(User.display_name))
+    return [{"id": row.id, "display_name": row.display_name, "email": row.email} for row in rows]
 
 
 @router.get("/cases/{case_id}/allowed-transitions")

@@ -6,7 +6,7 @@ import type { ReportFilters } from './reportFilters';
 import { reportColumns } from './reportColumns';
 
 const filterable = new Set<keyof CaseReportRow>(['case_number', 'title', 'description']);
-const sortable = new Set<keyof CaseReportRow>(['case_number', 'environment', 'request_type', 'title', 'status', 'priority', 'requester', 'created_at', 'updated_at']);
+const sortable = new Set<keyof CaseReportRow>(['case_number', 'environment', 'request_type', 'title', 'status', 'priority', 'requester', 'assignee', 'created_at', 'updated_at']);
 const display = (key: keyof CaseReportRow, value: string) => key === 'status' ? statusLabel(value) : key.endsWith('_at') ? new Date(value).toLocaleString('he-IL') : value;
 
 type Sources = { statuses: { id: string; label_he: string; environment: string }[]; priorities: { id: string; label_he: string }[] };

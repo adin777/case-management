@@ -75,8 +75,11 @@ def create_step_tasks(db: Session, instance: ApprovalInstance, step_order: int) 
         if not approvers:
             raise HTTPException(409, f"לא נמצא משתמש פעיל בתפקיד '{step.approver_job_title}' בסביבה זו")
     for approver in dict.fromkeys(approvers):
+        approver_user = db.get(User, approver)
         db.add(ApprovalTask(approval_instance_id=instance.id, step_definition_id=step.id,
-                            approver_user_id=approver, status="pending"))
+                            approver_user_id=approver,
+                            approver_name_snapshot=approver_user.display_name if approver_user else None,
+                            status="pending"))
         db.add(Notification(
             user_id=approver,
             notification_type="approval_requested",

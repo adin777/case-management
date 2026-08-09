@@ -9,6 +9,7 @@ import { statusLabel } from '../../status';
 import { CaseAttachments } from './details/CaseAttachments';
 import { CaseLockDialog } from './details/CaseLockDialog';
 import { ConversationPanel } from './details/ConversationPanel';
+import { CaseApprovalsPanel } from './details/CaseApprovalsPanel';
 import { InlineTextField } from './details/InlineTextField';
 
 type StatusOption = { id: string; label_he: string; current: boolean; allowed: boolean; reason?: string };
@@ -29,6 +30,7 @@ export function CaseDetailsPage() {
   const { data: statuses = [] } = useQuery({ queryKey: ['status-options', id, item?.workflow_status_id], queryFn: () => api<StatusOption[]>(`/cases/${id}/status-options`), enabled });
   const { data: participants = [] } = useQuery({ queryKey: ['participants', id], queryFn: () => api<Participant[]>(`/cases/${id}/participants`), enabled });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users'), retry: false });
+  const { data: assignees = [] } = useQuery({ queryKey: ['eligible-assignees', item?.environment_id], queryFn: () => api<User[]>(`/environments/${item!.environment_id}/eligible-assignees`), enabled: enabled && !!item?.permissions.can_assign });
   const candidates = useMemo(() => users.filter((user) => user.is_active !== false && !participants.some((row) => row.user_id === user.id)), [users, participants]);
   const refresh = () => qc.invalidateQueries({ queryKey: ['case', id] });
   async function patch(payload: object) {
@@ -41,6 +43,7 @@ export function CaseDetailsPage() {
     try { await api(`/cases/${id}/transitions`, { method: 'POST', body: JSON.stringify({ workflow_status_id }) }); await refresh(); }
     catch (caught) { setError((caught as Error).message); }
   }
+  async function assign(assignee_id: string) { try { await api(`/cases/${id}/assign`, { method: 'POST', body: JSON.stringify({ assignee_id: assignee_id || null, version: item!.version }) }); await refresh(); } catch (caught) { setError((caught as Error).message); } }
   async function addParticipant() {
     try {
       await api(`/cases/${id}/participants`, { method: 'POST', body: JSON.stringify({ user_id: participantId, participant_type: 'participant' }) });
@@ -84,12 +87,13 @@ export function CaseDetailsPage() {
             <Grid size={{ xs: 12, sm: 6 }}><FormControl fullWidth><InputLabel>סטטוס</InputLabel><Select label="סטטוס" value={item.workflow_status_id || ''} disabled={!item.permissions.can_change_status} onChange={(event) => transition(event.target.value)}>{statuses.map((status) => <Tooltip key={status.id} title={status.reason || ''} placement="left"><span><MenuItem value={status.id} disabled={!status.allowed && !status.current}>{status.label_he}{status.current ? ' · נוכחי' : ''}</MenuItem></span></Tooltip>)}</Select></FormControl></Grid>
             <Grid size={{ xs: 12, sm: 6 }}><TextField select fullWidth label="עדיפות" value={item.priority_id || ''} disabled={!editable} onChange={(event) => patch({ priority_id: event.target.value })}>{priorities.filter((row) => row.is_active).map((row) => <MenuItem key={row.id} value={row.id}>{row.label_he}</MenuItem>)}</TextField></Grid>
             <Grid size={{ xs: 12, sm: 6 }}><TextField select fullWidth label="תת־עדיפות" value={item.sub_priority_id || ''} disabled={!editable} onChange={(event) => patch({ sub_priority_id: event.target.value || null })}><MenuItem value="">ללא</MenuItem>{subs.filter((row) => row.is_active).map((row) => <MenuItem key={row.id} value={row.id}>{row.label_he}</MenuItem>)}</TextField></Grid>
+            <Grid size={{ xs: 12, sm: 6 }}><TextField select fullWidth label="מטפל" value={item.assignee_id || ''} disabled={!item.permissions.can_assign} onChange={(event) => assign(event.target.value)}><MenuItem value="">ללא מטפל</MenuItem>{assignees.map((row) => <MenuItem key={row.id} value={row.id}>{row.display_name} · {row.email}</MenuItem>)}</TextField></Grid>
           </Grid>
         </Stack></CardContent></Card>
         <Card><CardContent><Typography variant="h6">משתתפים</Typography><Divider sx={{ my: 2 }}/><Stack direction="row" gap={1} flexWrap="wrap">{participants.length ? participants.map((row) => <Chip key={row.user_id} avatar={<Avatar>{row.display_name[0]}</Avatar>} label={row.display_name} onDelete={item.permissions.can_manage_participants ? () => removeParticipant(row.user_id) : undefined} deleteIcon={item.permissions.can_manage_participants ? <Close/> : undefined}/>) : <Typography color="text.secondary">אין משתתפים נוספים</Typography>}</Stack>
           {item.permissions.can_manage_participants && <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} mt={2}><TextField select fullWidth label="הוספת משתמש" value={participantId} onChange={(event) => setParticipantId(event.target.value)}>{candidates.map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}</TextField><Button startIcon={<PersonAdd/>} disabled={!participantId} onClick={addParticipant}>הוספה</Button></Stack>}
         </CardContent></Card>
-        <Card><CardContent><Typography variant="h6">אישורים</Typography><Divider sx={{ my: 2 }}/><Typography color="text.secondary">מצב האישור: {item.approval_status || 'לא נדרש'}</Typography></CardContent></Card>
+        <CaseApprovalsPanel caseId={item.id}/>
         <CaseAttachments caseId={item.id}/>
       </Stack></Grid>
     </Grid>

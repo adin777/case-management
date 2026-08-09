@@ -565,6 +565,7 @@ class ApprovalTask(Base):
     approval_instance_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_instances.id", ondelete="CASCADE"))
     step_definition_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_step_definitions.id"))
     approver_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    approver_name_snapshot: Mapped[str | None] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(30), default="pending")
     decision: Mapped[str | None] = mapped_column(String(30))
     comment: Mapped[str | None] = mapped_column(Text)

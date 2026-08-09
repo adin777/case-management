@@ -389,6 +389,18 @@ After implementation, do not use an ad-hoc subset as final validation. Always ru
 
 ## הגדרת Done
 
+A feature is not complete when:
+
+- control exists but action does nothing.
+- backend exists but UI cannot use it.
+- UI changes only after browser refresh.
+- list values differ from persisted values.
+- button is missing from the actual workflow.
+- placeholder text replaces functional UI.
+- tests cover endpoint but not the user flow.
+
+Done requires complete E2E behavior.
+
 משימה נחשבת גמורה רק כאשר:
 
 - ההתנהגות המבוקשת פועלת בפועל.

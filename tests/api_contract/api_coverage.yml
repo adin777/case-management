@@ -42,6 +42,12 @@ POST /api/approval-tasks/{task_id}/decision:
   - test_two_step_approval_flow
 GET /api/approvals/pending-for-me:
   - test_two_step_approval_flow
+GET /api/cases/{case_id}/approvals:
+  - test_two_step_approval_flow
+GET /api/environments/{environment_id}/eligible-assignees:
+  - test_assign_unassign_uses_active_environment_members
+POST /api/cases/{case_id}/assign:
+  - test_assign_unassign_uses_active_environment_members
 GET /api/users:
   - test_manual_user_lifecycle_and_role_no_longer_affects_permissions
 POST /api/users:

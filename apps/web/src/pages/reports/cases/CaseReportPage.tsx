@@ -38,6 +38,6 @@ export function CaseReportPage() {
       : report.isLoading ? <Stack alignItems="center" py={7}><CircularProgress/><Typography mt={2}>טוען תוצאות…</Typography></Stack>
       : report.isError ? <Alert severity="error">לא ניתן להריץ את הדוח: {(report.error as Error).message}</Alert>
       : !report.data?.items.length ? <Paper variant="outlined" sx={{ p: 7, textAlign: 'center' }}><Typography variant="h6">לא נמצאו תוצאות</Typography><Typography color="text.secondary">נסו לשנות את המסננים ולהריץ שוב</Typography></Paper>
-      : <><Typography fontWeight={700}>{report.data.total} תוצאות</Typography><CaseReportTable rows={report.data.items} visible={columns} filters={applied} onFilters={setFilters} sources={sources}/><Pagination count={Math.max(1, Math.ceil(report.data.total / report.data.page_size))} page={page} onChange={(_, value) => setPage(value)}/></>}
+      : <><Typography fontWeight={700}>{report.data.total} תוצאות</Typography><CaseReportTable rows={report.data.items} visible={columns} filters={applied} onFilters={(next) => { setFilters(next); setApplied(next); setPage(1); }} sources={sources}/><Pagination count={Math.max(1, Math.ceil(report.data.total / report.data.page_size))} page={page} onChange={(_, value) => setPage(value)}/></>}
   </Stack></Container>;
 }

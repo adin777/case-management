@@ -164,3 +164,11 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 `GET /api/environments/{environment_id}/assignment-rules` מחזיר כללים; `POST /api/environments/{environment_id}/assignment-rules/preview` מחזיר התאמות ללא כתיבה; `POST /api/environments/{environment_id}/assignment-rules` יוצר ומחיל כלל; `PUT /api/environment-assignment-rules/{rule_id}` מעדכן ומחיל אותו. תנאים בתוך כלל הם AND וכללים שונים הם OR. כלל מסיר רק membership שמקורו `rule` ובאותו `source_rule_id`, ולעולם אינו מסיר שיוך ידני.
 
 שלב Approval מסוג `job_title` שומר את ערך התפקיד הארגוני ומייצר snapshot של כל המשתמשים הפעילים, החברים בסביבת הקריאה ובעלי אותו `job_title`. החלטת המשתמש הראשון משלימה את השלב ומבטלת את יתר המשימות. אם אין התאמה, יצירת המשימות נכשלת ב־`409` עם שגיאת קונפיגורציה ברורה.
+
+## דוחות, שיוך ואישור תפעולי
+
+דוח הקריאות משתמש ב־`workflow_status_id` וב־`WorkflowStatus.label_he` כמקור האמת היחיד לתצוגה, סינון, מיון וייצוא. `sort` תומך ב־`case_number`, `title`, `environment`, `request_type`, `status`, `priority`, `requester`, `assignee`, `created_at`, `updated_at`; `direction` הוא `asc` או `desc`, והמיון מתבצע בשרת לפני pagination.
+
+`GET /api/environments/{environment_id}/eligible-assignees` מחזיר רק משתמשים פעילים בעלי שיוך פעיל לסביבה ודורש `case.assign`. `POST /api/cases/{case_id}/assign` מקבל `assignee_id` או `null` ו־`version`. בקריאה נעולה רק מנהל מערכת או בעל `environment.manage` רשאי לשנות מטפל.
+
+`GET /api/cases/{case_id}/approvals` מחזיר לכל משימה מספר ושם שלב, סוג מאשר, snapshot של שם המאשר, מצב, מועד בקשה, החלטה, מועד החלטה והערה. שם המאשר נשמר בעת יצירת המשימה ואינו משתנה בעקבות שינוי עתידי בפרופיל.
