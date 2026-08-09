@@ -51,11 +51,11 @@ def test_workspace_query_and_environment_membership_copy() -> None:
     users = client.get("/api/users", headers=headers).json()
     source = next(row for row in users if row["email"] == "envadmin@example.com")
     target = next(row for row in users if row["email"] == "agent@example.com")
-    original_target = [{"environment_id": row["environment_id"], "role_id": row["role_id"]} for row in target["memberships"]]
+    original_target = [{"environment_id": row["environment_id"]} for row in target["memberships"]]
     copied = client.post("/api/users/environment-memberships/copy", headers=headers, json={"source_user_id": source["id"], "target_user_ids": [target["id"]], "mode": "replace_all"})
     assert copied.status_code == 200
     refreshed = client.get(f"/api/users/{target['id']}", headers=headers).json()
-    assert {(row["environment_id"], row["role_id"]) for row in refreshed["memberships"]} == {(row["environment_id"], row["role_id"]) for row in source["memberships"]}
+    assert {row["environment_id"] for row in refreshed["memberships"]} == {row["environment_id"] for row in source["memberships"]}
     assert client.put(f"/api/users/{target['id']}/environment-memberships", headers=headers, json=original_target).status_code == 200
     workspace = client.get("/api/cases/workspace/query?view=my&activity_state=all", headers=headers)
     assert workspace.status_code == 200

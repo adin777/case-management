@@ -184,6 +184,7 @@ class ApprovalStepIn(BaseModel):
     approver_group_id: uuid.UUID | None = None
     approver_field_key: str | None = None
     approver_environment_role: str | None = None
+    approver_job_title: str | None = None
     approver_user_field_id: uuid.UUID | None = None
     approver_case_field_id: uuid.UUID | None = None
     required_approvals: int = 1
@@ -206,8 +207,11 @@ class ApprovalFlowIn(BaseModel):
 
     @model_validator(mode="after")
     def validate_simple_stages(self) -> "ApprovalFlowIn":
-        if any(step.approver_type != "user" or not step.approver_user_id for step in self.steps):
-            raise ValueError("בשלב זה כל שלב אישור חייב לבחור משתמש מאשר")
+        for step in self.steps:
+            if step.approver_type == "user" and step.approver_user_id: continue
+            if step.approver_type == "job_title" and step.approver_job_title:
+                step.approval_mode = "any"; step.required_approvals = 1; continue
+            raise ValueError("כל שלב אישור חייב לבחור משתמש או תפקיד ארגוני")
         if any(not step.is_active for step in self.steps[:-1]) and self.steps[-1].is_active:
             raise ValueError("שלבים פעילים חייבים להיות רציפים")
         return self
@@ -340,6 +344,13 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
     case_item = db.get(Case, instance.case_id)
     if not case_item: raise HTTPException(409, "הקריאה אינה זמינה")
     task.status = data.decision; task.decision = data.decision; task.comment = data.comment; task.decided_at = datetime.now(UTC)
+    step_definition = db.get(ApprovalStepDefinition, task.step_definition_id)
+    if step_definition and step_definition.approver_type == "job_title":
+        for other in db.scalars(select(ApprovalTask).where(
+            ApprovalTask.approval_instance_id == instance.id,
+            ApprovalTask.step_definition_id == task.step_definition_id,
+            ApprovalTask.id != task.id, ApprovalTask.status == "pending")):
+            other.status = "cancelled"
     if data.decision in {"rejected", "returned"}:
         instance.status = data.decision; instance.completed_at = datetime.now(UTC)
         case_item.approval_status = data.decision; case_item.is_approved = False

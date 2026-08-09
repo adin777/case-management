@@ -59,6 +59,21 @@ class User(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(200))
+    first_name: Mapped[str | None] = mapped_column(String(120))
+    last_name: Mapped[str | None] = mapped_column(String(120))
+    user_principal_name: Mapped[str | None] = mapped_column(String(320), unique=True, index=True)
+    department: Mapped[str | None] = mapped_column(String(200), index=True)
+    job_title: Mapped[str | None] = mapped_column(String(200), index=True)
+    phone: Mapped[str | None] = mapped_column(String(80))
+    mobile_phone: Mapped[str | None] = mapped_column(String(80))
+    employee_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    computer_identifier: Mapped[str | None] = mapped_column(String(200))
+    directory_object_id: Mapped[str | None] = mapped_column(String(200), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(30), default="manual", index=True)
+    directory_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_directory_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_hash: Mapped[str] = mapped_column(String(500))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_system_admin: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -142,9 +157,38 @@ class EnvironmentMembership(Base):
     environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
-    role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id"))
+    role_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("roles.id"))
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    source_rule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     __table_args__ = (UniqueConstraint("environment_id", "user_id", "role_id"),)
+
+
+class DirectorySyncRun(Base):
+    __tablename__ = "directory_sync_runs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(40))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    disabled_count: Mapped[int] = mapped_column(Integer, default=0)
+    unchanged_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    delta_reference: Mapped[str | None] = mapped_column(Text)
+    initiated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+
+
+class EnvironmentAssignmentRule(TimestampMixin, Base):
+    __tablename__ = "environment_assignment_rules"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(200))
+    conditions_json: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
 
 
 class RequestType(TimestampMixin, Base):
@@ -487,6 +531,7 @@ class ApprovalStepDefinition(Base):
     approver_group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id"))
     approver_field_key: Mapped[str | None] = mapped_column(String(80))
     approver_environment_role: Mapped[str | None] = mapped_column(String(80))
+    approver_job_title: Mapped[str | None] = mapped_column(String(200))
     approver_user_field_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     approver_case_field_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     required_approvals: Mapped[int] = mapped_column(Integer, default=1)

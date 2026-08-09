@@ -148,3 +148,19 @@ Audit הוא append-only ושומר actor, environment, before/after ו־timesta
 `GET /health` מחזיר `{"status":"healthy"}`. כל Endpoint או שינוי חוזה מחייב עדכון מסמך,
 מימוש, API contract test ו־regression test באותו commit. יש לבדוק success, validation,
 forbidden ו־not found, ולוודא שה־UI צורך אותו מקור אמת.
+
+## מחזור חיי משתמשים וספר ארגוני
+
+`GET /api/users` מחזיר משתמשים פעילים כברירת מחדל. הפרמטר `active_only=false` מאפשר לכלול משתמשים לא פעילים ובארכיון; ניתן לסנן גם באמצעות `status_filter`, `source`, `department`, `job_title` ו־`search`. `POST /api/users` יוצר משתמש ידני ו־`PATCH /api/users/{user_id}` מעדכן פרטים ארגוניים או מצב `active`, `inactive`, `archived`. השבתה או העברה לארכיון אינה מוחקת היסטוריה, ומשתמש שאינו פעיל אינו יכול להתחבר או לקבל משימת אישור חדשה.
+
+שיוך משתמש לסביבה אינו כולל Role: `PUT /api/users/{user_id}/environment-memberships` מקבל מערך של `{environment_id}`, ו־`POST /api/environments/{environment_id}/memberships` מקבל משתמש או קבוצה ללא `role_id`. נתיבי `/api/roles` ו־`/api/groups/{group_id}/roles` הם מורשת מושבתת ומחזירים `410`; הרשאות נפתרות מקבוצות, רמות גישה וחריגות משתמש בלבד.
+
+Excel: `GET /api/users/import/template` מוריד תבנית; `POST /api/users/import/preview` מקבל קובץ ומחזיר חדשים, לעדכון, ללא שינוי ושגיאות ללא כתיבה; `POST /api/users/import/apply` מחיל רק נתונים שאושרו; `GET /api/users-export` מייצא XLSX לפי מסנני מצב ומקור.
+
+Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה. `POST /api/directory/{name}/test` בודק ספק, ו־`POST /api/directory/{name}/preview` מבצע קריאה ללא שינוי נתונים. `POST /api/directory/apply` מחיל snapshot שאושר ושומר `DirectorySyncRun`; `GET /api/directory/runs` מחזיר יומן ריצות. הספקים הם `fake`, `entra`, `active_directory`. Entra משתמש ב־Graph `/users/delta` ושומר deltaLink לריצה הבאה. `directory_enabled` נפרד ממצב מקומי, ולכן Sync אינו מפעיל מחדש משתמש שהושבת או הועבר לארכיון ידנית.
+
+## כללי שיוך ואישור לפי תפקיד ארגוני
+
+`GET /api/environments/{environment_id}/assignment-rules` מחזיר כללים; `POST /api/environments/{environment_id}/assignment-rules/preview` מחזיר התאמות ללא כתיבה; `POST /api/environments/{environment_id}/assignment-rules` יוצר ומחיל כלל; `PUT /api/environment-assignment-rules/{rule_id}` מעדכן ומחיל אותו. תנאים בתוך כלל הם AND וכללים שונים הם OR. כלל מסיר רק membership שמקורו `rule` ובאותו `source_rule_id`, ולעולם אינו מסיר שיוך ידני.
+
+שלב Approval מסוג `job_title` שומר את ערך התפקיד הארגוני ומייצר snapshot של כל המשתמשים הפעילים, החברים בסביבת הקריאה ובעלי אותו `job_title`. החלטת המשתמש הראשון משלימה את השלב ומבטלת את יתר המשימות. אם אין התאמה, יצירת המשימות נכשלת ב־`409` עם שגיאת קונפיגורציה ברורה.

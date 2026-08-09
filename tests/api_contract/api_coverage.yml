@@ -42,3 +42,35 @@ POST /api/approval-tasks/{task_id}/decision:
   - test_two_step_approval_flow
 GET /api/approvals/pending-for-me:
   - test_two_step_approval_flow
+GET /api/users:
+  - test_manual_user_lifecycle_and_role_no_longer_affects_permissions
+POST /api/users:
+  - test_manual_user_lifecycle_and_role_no_longer_affects_permissions
+PATCH /api/users/{user_id}:
+  - test_manual_user_lifecycle_and_role_no_longer_affects_permissions
+GET /api/users/import/template:
+  - test_excel_preview_import_and_export
+POST /api/users/import/preview:
+  - test_excel_preview_import_and_export
+POST /api/users/import/apply:
+  - test_excel_preview_import_and_export
+GET /api/users-export:
+  - test_excel_preview_import_and_export
+GET /api/directory/status:
+  - test_directory_endpoints_contract
+POST /api/directory/{name}/test:
+  - test_directory_endpoints_contract
+POST /api/directory/{name}/preview:
+  - test_directory_endpoints_contract
+POST /api/directory/apply:
+  - test_directory_endpoints_contract
+GET /api/directory/runs:
+  - test_directory_endpoints_contract
+GET /api/environments/{environment_id}/assignment-rules:
+  - test_environment_assignment_endpoints_contract
+POST /api/environments/{environment_id}/assignment-rules/preview:
+  - test_environment_assignment_endpoints_contract
+POST /api/environments/{environment_id}/assignment-rules:
+  - test_environment_assignment_endpoints_contract
+PUT /api/environment-assignment-rules/{rule_id}:
+  - test_environment_assignment_endpoints_contract

@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -42,6 +43,15 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=200)
     is_active: bool = True
     is_system_admin: bool = False
+    first_name: str | None = None
+    last_name: str | None = None
+    user_principal_name: str | None = None
+    department: str | None = None
+    job_title: str | None = None
+    phone: str | None = None
+    mobile_phone: str | None = None
+    employee_id: str | None = None
+    computer_identifier: str | None = None
 
 
 class UserPatch(BaseModel):
@@ -50,6 +60,16 @@ class UserPatch(BaseModel):
     is_active: bool | None = None
     is_system_admin: bool | None = None
     environment_id: uuid.UUID | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    user_principal_name: str | None = None
+    department: str | None = None
+    job_title: str | None = None
+    phone: str | None = None
+    mobile_phone: str | None = None
+    employee_id: str | None = None
+    computer_identifier: str | None = None
+    status: str | None = Field(default=None, pattern="^(active|inactive|archived)$")
 
 
 class PasswordReset(BaseModel):
@@ -157,17 +177,14 @@ class EnvironmentFieldIn(BaseModel):
 class MembershipCreate(BaseModel):
     user_id: uuid.UUID | None = None
     group_id: uuid.UUID | None = None
-    role_id: uuid.UUID
 
 
 class MembershipPatch(BaseModel):
-    role_id: uuid.UUID | None = None
     is_active: bool | None = None
 
 
 class UserEnvironmentMembershipIn(BaseModel):
     environment_id: uuid.UUID
-    role_id: uuid.UUID
 
 
 class CopyEnvironmentMembershipsIn(BaseModel):
@@ -233,9 +250,8 @@ def user_dict(db: DB, item: User) -> dict[str, Any]:
         select(Group.id, Group.name).join(GroupMember).where(GroupMember.user_id == item.id)
     ).all()
     memberships = db.execute(
-        select(Environment.id, Environment.name_he, Role.id, Role.name)
+        select(Environment.id, Environment.name_he, EnvironmentMembership.source)
         .join(EnvironmentMembership, EnvironmentMembership.environment_id == Environment.id)
-        .join(Role, EnvironmentMembership.role_id == Role.id)
         .where(EnvironmentMembership.user_id == item.id)
     ).all()
     return {
@@ -244,11 +260,18 @@ def user_dict(db: DB, item: User) -> dict[str, Any]:
         "display_name": item.display_name,
         "is_active": item.is_active,
         "is_system_admin": item.is_system_admin,
+        "first_name": item.first_name, "last_name": item.last_name,
+        "user_principal_name": item.user_principal_name, "department": item.department,
+        "job_title": item.job_title, "phone": item.phone, "mobile_phone": item.mobile_phone,
+        "employee_id": item.employee_id, "computer_identifier": item.computer_identifier,
+        "directory_object_id": item.directory_object_id, "source": item.source,
+        "directory_enabled": item.directory_enabled, "status": item.status,
+        "archived_at": item.archived_at, "last_directory_sync_at": item.last_directory_sync_at,
         "created_at": item.created_at,
         "last_login_at": item.last_login_at,
         "groups": [{"id": row[0], "name": row[1]} for row in groups],
         "memberships": [
-            {"environment_id": row[0], "environment_name": row[1], "role_id": row[2], "role_name": row[3]}
+            {"environment_id": row[0], "environment_name": row[1], "source": row[2]}
             for row in memberships
         ],
     }
@@ -260,10 +283,21 @@ def list_users(
     user: Current,
     search: str = "",
     environment_id: uuid.UUID | None = None,
+    active_only: bool = True,
+    status_filter: str | None = None,
+    source: str | None = None,
+    department: str | None = None,
+    job_title: str | None = None,
 ) -> list[dict[str, Any]]:
     query = select(User).order_by(User.display_name)
     if search:
-        query = query.where(or_(User.display_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%")))
+        query = query.where(or_(User.display_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%"),
+                                User.user_principal_name.ilike(f"%{search}%")))
+    if active_only and not status_filter: query = query.where(User.status == "active")
+    if status_filter: query = query.where(User.status == status_filter)
+    if source: query = query.where(User.source == source)
+    if department: query = query.where(User.department == department)
+    if job_title: query = query.where(User.job_title == job_title)
     if environment_id and not user.is_system_admin:
         require(db, user, environment_id, "environment.users.manage")
         query = query.join(EnvironmentMembership).where(
@@ -283,6 +317,8 @@ def create_user(data: UserCreate, db: DB, user: Current) -> dict[str, Any]:
         password_hash=password_hash.hash(data.password),
         is_active=data.is_active,
         is_system_admin=data.is_system_admin,
+        status="active" if data.is_active else "inactive", source="manual",
+        **data.model_dump(exclude={"password", "is_active", "is_system_admin", "display_name", "email"}),
     )
     db.add(item)
     db.flush()
@@ -375,6 +411,12 @@ def update_user(user_id: uuid.UUID, data: UserPatch, db: DB, user: Current) -> d
             raise HTTPException(403, "User is outside this environment")
     for key, value in data.model_dump(exclude_unset=True, exclude={"environment_id"}).items():
         setattr(item, key, value)
+    if data.status is not None:
+        item.is_active = data.status == "active"
+        item.archived_at = datetime.now(UTC) if data.status == "archived" else None
+    elif data.is_active is not None:
+        item.status = "active" if data.is_active else "inactive"
+        item.archived_at = None
     audit(db, user, "user", item.id, "updated")
     db.commit()
     return user_dict(db, item)
@@ -389,19 +431,19 @@ def set_user_environment_memberships(
     if not target:
         raise HTTPException(404, "המשתמש לא נמצא")
     if len({row.environment_id for row in rows}) != len(rows):
-        raise HTTPException(422, "ניתן לבחור תפקיד אחד בלבד לכל סביבת עבודה")
+        raise HTTPException(422, "ניתן לשייך משתמש פעם אחת בלבד לכל סביבת עבודה")
     for row in rows:
-        if not db.get(Environment, row.environment_id) or not db.get(Role, row.role_id):
-            raise HTTPException(422, "סביבה או תפקיד אינם קיימים")
+        if not db.get(Environment, row.environment_id):
+            raise HTTPException(422, "סביבה אינה קיימת")
     before = [
-        {"environment_id": str(item.environment_id), "role_id": str(item.role_id)}
+        {"environment_id": str(item.environment_id)}
         for item in db.scalars(
             select(EnvironmentMembership).where(EnvironmentMembership.user_id == user_id)
         )
     ]
     db.execute(delete(EnvironmentMembership).where(EnvironmentMembership.user_id == user_id))
     for row in rows:
-        db.add(EnvironmentMembership(user_id=user_id, is_active=True, **row.model_dump()))
+        db.add(EnvironmentMembership(user_id=user_id, role_id=None, source="manual", is_active=True, **row.model_dump()))
     audit(
         db,
         user,
@@ -469,7 +511,8 @@ def copy_user_environment_memberships(
                 EnvironmentMembership(
                     environment_id=source.environment_id,
                     user_id=target_id,
-                    role_id=source.role_id,
+                    role_id=None,
+                    source="manual",
                     is_active=True,
                 )
             )
@@ -626,6 +669,7 @@ def remove_group_member(group_id: uuid.UUID, user_id: uuid.UUID, db: DB, user: C
 @router.post("/groups/{group_id}/roles", status_code=201)
 def assign_group_role(group_id: uuid.UUID, data: GroupRoleIn, db: DB, user: Current) -> dict[str, bool]:
     system_admin(user)
+    raise HTTPException(410, "מנגנון התפקידים הישן בוטל; הרשאות מנוהלות באמצעות קבוצות וחריגות משתמש")
     row = GroupEnvironmentRole(group_id=group_id, **data.model_dump())
     db.merge(row)
     audit(db, user, "group", group_id, "environment_role_assigned")
@@ -642,6 +686,7 @@ def list_permissions(db: DB, user: Current) -> list[dict[str, Any]]:
 @router.get("/roles")
 def list_roles(db: DB, user: Current) -> list[dict[str, Any]]:
     system_admin(user)
+    raise HTTPException(410, "מנגנון התפקידים הישן בוטל")
     return [
         {
             "id": r.id,
@@ -668,6 +713,7 @@ def permissions_for_role(db: DB, role: Role) -> set[str]:
 @router.post("/roles", status_code=201)
 def create_role(data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
     system_admin(user)
+    raise HTTPException(410, "מנגנון התפקידים הישן בוטל")
     unknown = set(data.permissions) - set(db.scalars(select(Permission.code)))
     if unknown:
         raise HTTPException(422, f"Unknown permissions: {', '.join(sorted(unknown))}")
@@ -696,6 +742,7 @@ def create_role(data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
 @router.get("/roles/{role_id}")
 def get_role(role_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     system_admin(user)
+    raise HTTPException(410, "מנגנון התפקידים הישן בוטל")
     item = db.get(Role, role_id)
     if not item:
         raise HTTPException(404, "Role not found")
@@ -715,6 +762,7 @@ def get_role(role_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
 @router.patch("/roles/{role_id}")
 def update_role(role_id: uuid.UUID, data: RoleIn, db: DB, user: Current) -> dict[str, Any]:
     system_admin(user)
+    raise HTTPException(410, "מנגנון התפקידים הישן בוטל")
     item = db.get(Role, role_id)
     if not item:
         raise HTTPException(404, "Role not found")
@@ -932,10 +980,9 @@ def set_environment_fields(
 def list_memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.users.manage")
     rows = db.execute(
-        select(EnvironmentMembership, User, Group, Role)
+        select(EnvironmentMembership, User, Group)
         .outerjoin(User, EnvironmentMembership.user_id == User.id)
         .outerjoin(Group, EnvironmentMembership.group_id == Group.id)
-        .join(Role, EnvironmentMembership.role_id == Role.id)
         .where(EnvironmentMembership.environment_id == environment_id)
     ).all()
     return [
@@ -945,12 +992,11 @@ def list_memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[d
             "user_name": u.display_name if u else None,
             "group_id": m.group_id,
             "group_name": g.name if g else None,
-            "role_id": m.role_id,
-            "role_name": r.name,
-            "role_name_he": r.name_he or r.name,
+            "source": m.source,
+            "source_rule_id": m.source_rule_id,
             "is_active": m.is_active,
         }
-        for m, u, g, r in rows
+        for m, u, g in rows
     ]
 
 
@@ -961,7 +1007,7 @@ def create_membership(
     require(db, user, environment_id, "environment.users.manage")
     if bool(data.user_id) == bool(data.group_id):
         raise HTTPException(422, "Exactly one of user_id or group_id is required")
-    item = EnvironmentMembership(environment_id=environment_id, **data.model_dump())
+    item = EnvironmentMembership(environment_id=environment_id, role_id=None, source="manual", **data.model_dump())
     db.add(item)
     db.flush()
     audit(db, user, "environment", environment_id, "membership_created")
@@ -977,7 +1023,6 @@ def update_membership(
     item = db.get(EnvironmentMembership, membership_id)
     if not item or item.environment_id != environment_id:
         raise HTTPException(404, "Membership not found")
-    if data.role_id is not None: item.role_id = data.role_id
     if data.is_active is not None: item.is_active = data.is_active
     audit(db, user, "environment", environment_id, "membership_updated")
     db.commit()

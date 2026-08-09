@@ -1,0 +1,174 @@
+import json
+import uuid
+from typing import Self
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from app.database.session import SessionLocal
+from app.main import app
+from app.modules.api import password_hash, permissions
+from app.modules.approvals.service import create_step_tasks
+from app.modules.directory.entra import EntraDirectoryProvider
+from app.modules.directory.excel import HEADERS, workbook
+from app.modules.directory.fake import FakeDirectoryProvider
+from app.modules.directory.sync_service import UserSyncService
+from app.modules.environment_assignments.service import apply_rule
+from app.modules.models import (
+    ApprovalFlowDefinition,
+    ApprovalInstance,
+    ApprovalStepDefinition,
+    ApprovalTask,
+    Case,
+    Environment,
+    EnvironmentAssignmentRule,
+    EnvironmentMembership,
+    Permission,
+    RequestType,
+    Role,
+    RolePermission,
+    User,
+)
+
+client = TestClient(app)
+
+
+def auth(email: str = "admin@example.com", password: str = "Admin123!") -> dict[str, str]:
+    response = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def test_manual_user_lifecycle_and_role_no_longer_affects_permissions() -> None:
+    headers = auth(); created = client.post("/api/users", headers=headers, json={
+        "first_name": "נועה", "last_name": "ישראלי", "display_name": "נועה ישראלי",
+        "email": "noa.lifecycle@example.com", "password": "Lifecycle123!", "department": "רכש",
+        "job_title": "קניינית", "is_active": True,
+    })
+    assert created.status_code == 201 and created.json()["source"] == "manual"
+    user_id = created.json()["id"]
+    assert client.patch(f"/api/users/{user_id}", headers=headers, json={"status": "inactive"}).json()["status"] == "inactive"
+    assert client.post("/api/auth/login", json={"email": "noa.lifecycle@example.com", "password": "Lifecycle123!"}).status_code == 401
+    archived = client.patch(f"/api/users/{user_id}", headers=headers, json={"status": "archived"}).json()
+    assert archived["status"] == "archived" and archived["archived_at"]
+    with SessionLocal() as db:
+        environment = db.scalar(select(Environment)); user = db.get(User, uuid.UUID(user_id)); assert environment and user
+        before = permissions(db, user, environment.id)
+        role = Role(code=f"legacy_{uuid.uuid4().hex[:8]}", name="Legacy", permissions=["case.lock"])
+        db.add(role); db.flush(); permission = db.get(Permission, "case.lock")
+        if permission: db.add(RolePermission(role_id=role.id, permission_code=permission.code))
+        db.add(EnvironmentMembership(environment_id=environment.id, user_id=user.id, role_id=role.id, source="manual")); db.commit()
+        assert permissions(db, user, environment.id) == before
+
+
+def test_fake_directory_sync_and_manual_inactive_survives() -> None:
+    with SessionLocal() as db:
+        service = UserSyncService(db, "fake"); batch = FakeDirectoryProvider().fetch_users()
+        preview = service.preview(batch); assert preview["created"] == 3
+        run = service.apply(batch); db.commit(); assert run.created_count == 3 and run.disabled_count == 0
+        dana = db.scalar(select(User).where(User.directory_object_id == "fake-dana")); assert dana and dana.department == "procurement"
+        dana.status = "inactive"; dana.is_active = False; db.commit()
+        changed = batch.model_copy(deep=True); changed.users[0].job_title = "סמנכ״לית רכש"
+        service.apply(changed); db.commit(); db.refresh(dana)
+        assert dana.status == "inactive" and dana.is_active is False and dana.job_title == "סמנכ״לית רכש"
+        ronit = db.scalar(select(User).where(User.directory_object_id == "fake-ronit")); assert ronit and ronit.status == "inactive"
+
+
+def test_excel_preview_import_and_export() -> None:
+    headers = auth(); content = workbook([HEADERS, ["מאיה", "כהן", "מאיה כהן", "maya.excel@example.com",
+        "maya.excel@example.com", "IT", "Help Desk", "03-1", "050-1", "E-1", "PC-1", "True"]])
+    preview = client.post("/api/users/import/preview", headers=headers,
+        files={"file": ("users.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert preview.status_code == 200 and preview.json()["created"] == 1
+    applied = client.post("/api/users/import/apply", headers=headers,
+        json=[preview.json()["rows"][0]["data"]])
+    assert applied.status_code == 200 and applied.json()["created_count"] == 1
+    exported = client.get("/api/users-export?source=excel", headers=headers)
+    assert exported.status_code == 200 and exported.content.startswith(b"PK")
+
+
+def test_environment_assignment_rule_preserves_manual_membership() -> None:
+    with SessionLocal() as db:
+        environment = db.scalar(select(Environment)); assert environment
+        manual = User(email="manual.rule@example.com", display_name="ידני", password_hash=password_hash.hash("Manual123!"),
+            department="IT", job_title="Help Desk", status="active", source="manual", is_active=True)
+        generated = User(email="generated.rule@example.com", display_name="כלל", password_hash=password_hash.hash("Rule12345!"),
+            department="IT", job_title="Help Desk", status="active", source="manual", is_active=True)
+        db.add_all([manual, generated]); db.flush()
+        db.add(EnvironmentMembership(environment_id=environment.id, user_id=manual.id, role_id=None, source="manual"))
+        rule = EnvironmentAssignmentRule(environment_id=environment.id, name="IT Help Desk",
+            conditions_json=[{"field": "department", "value": "IT"}, {"field": "job_title", "value": "Help Desk"}], is_active=True)
+        db.add(rule); db.flush(); assert apply_rule(db, rule)["matched"] >= 2; db.commit()
+        generated.department = "Finance"; manual.department = "Finance"; result = apply_rule(db, rule); db.commit()
+        assert result["removed"] >= 1
+        assert db.scalar(select(EnvironmentMembership).where(EnvironmentMembership.user_id == manual.id,
+            EnvironmentMembership.source == "manual")) is not None
+
+
+def test_job_title_approval_first_decision_cancels_snapshot_and_excludes_inactive() -> None:
+    with SessionLocal() as db:
+        environment = db.scalar(select(Environment)); request_type = db.scalar(select(RequestType));
+        reporter = db.scalar(select(User).where(User.email == "admin@example.com")); assert environment and request_type and reporter
+        case_item = Case(case_number=f"CASE-JOB-{uuid.uuid4().hex[:8]}", environment_id=environment.id,
+            request_type_id=request_type.id, form_definition_id=None, title="Job title approval",
+            description="Approval snapshot", reporter_id=reporter.id, requester_id=reporter.id)
+        db.add(case_item); db.flush()
+        agent = db.scalar(select(User).where(User.email == "agent@example.com")); manager = db.scalar(select(User).where(User.email == "envadmin@example.com")); assert agent and manager
+        agent.job_title = manager.job_title = "מאשר רכש"; agent.status = manager.status = "active"; agent.is_active = manager.is_active = True
+        for selected in (agent, manager):
+            if not db.scalar(select(EnvironmentMembership).where(EnvironmentMembership.environment_id == case_item.environment_id, EnvironmentMembership.user_id == selected.id)):
+                db.add(EnvironmentMembership(environment_id=case_item.environment_id, user_id=selected.id, role_id=None, source="manual"))
+        flow = ApprovalFlowDefinition(system_number=f"AF-{uuid.uuid4().hex[:8]}", environment_id=case_item.environment_id,
+            name="אישור תפקיד", trigger_type="case_created", approval_policy="all_active_steps", is_active=True, created_by=agent.id)
+        db.add(flow); db.flush(); step = ApprovalStepDefinition(approval_flow_id=flow.id, step_order=1, name="מאשר רכש",
+            approver_type="job_title", approver_job_title="מאשר רכש", required_approvals=1, approval_mode="any", is_active=True)
+        db.add(step); db.flush(); instance = ApprovalInstance(system_number=f"AI-{uuid.uuid4().hex[:8]}", case_id=case_item.id,
+            approval_flow_id=flow.id, status="pending", current_step_order=1)
+        db.add(instance); db.flush(); create_step_tasks(db, instance, 1); instance_id = instance.id; db.commit()
+        tasks = list(db.scalars(select(ApprovalTask).where(ApprovalTask.approval_instance_id == instance.id))); assert len(tasks) == 2
+        agent_task = next(row for row in tasks if row.approver_user_id == agent.id); task_id = agent_task.id
+    decided = client.post(f"/api/approval-tasks/{task_id}/decision", headers=auth("agent@example.com", "Agent123!"), json={"decision": "approved"})
+    assert decided.status_code == 200
+    with SessionLocal() as db:
+        statuses = set(db.scalars(select(ApprovalTask.status).where(ApprovalTask.approval_instance_id == instance_id)))
+        assert statuses == {"approved", "cancelled"}
+
+
+def test_directory_endpoints_contract() -> None:
+    headers = auth()
+    assert client.get("/api/directory/status", headers=headers).status_code == 200
+    assert client.post("/api/directory/fake/test", headers=headers).status_code == 200
+    preview = client.post("/api/directory/fake/preview", headers=headers)
+    assert preview.status_code == 200 and "users" in preview.json()
+    applied = client.post("/api/directory/apply", headers=headers, json={"provider": "fake", "users": preview.json()["users"]})
+    assert applied.status_code == 200
+    assert client.get("/api/directory/runs", headers=headers).status_code == 200
+
+
+def test_environment_assignment_endpoints_contract() -> None:
+    headers = auth()
+    environment_id = client.get("/api/environments", headers=headers).json()[0]["id"]
+    payload = {"name": f"IT-{uuid.uuid4().hex[:6]}", "conditions": [{"field": "department", "value": "IT"}], "is_active": True}
+    preview = client.post(f"/api/environments/{environment_id}/assignment-rules/preview", headers=headers, json=payload)
+    assert preview.status_code == 200 and "matched" in preview.json()
+    created = client.post(f"/api/environments/{environment_id}/assignment-rules", headers=headers, json=payload)
+    assert created.status_code == 201
+    rule_id = created.json()["id"]
+    assert client.get(f"/api/environments/{environment_id}/assignment-rules", headers=headers).status_code == 200
+    assert client.put(f"/api/environment-assignment-rules/{rule_id}", headers=headers, json={**payload, "is_active": False}).status_code == 200
+
+
+class _GraphResponse:
+    def __init__(self, payload: dict[str, object]): self.payload = payload
+    def __enter__(self) -> Self: return self
+    def __exit__(self, *_: object) -> None: return None
+    def read(self) -> bytes: return json.dumps(self.payload).encode()
+
+
+def test_entra_provider_mocked_graph_delta_flow() -> None:
+    pages = [_GraphResponse({"access_token": "token"}), _GraphResponse({"value": [{"id": "graph-1", "userPrincipalName": "graph@example.com", "displayName": "Graph User", "accountEnabled": True}], "@odata.nextLink": "https://graph/next"}), _GraphResponse({"value": [], "@odata.deltaLink": "https://graph/delta-token"})]
+    with patch("app.modules.directory.entra.settings.entra_tenant_id", "tenant"), patch("app.modules.directory.entra.settings.entra_client_id", "client"), patch("app.modules.directory.entra.settings.entra_client_secret", "secret"), patch("app.modules.directory.entra.urllib.request.urlopen", side_effect=pages):
+        batch = EntraDirectoryProvider().fetch_users()
+    assert batch.delta_link == "https://graph/delta-token"
+    assert batch.users[0].directory_object_id == "graph-1"

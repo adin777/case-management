@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     attachment_allowed_types: str = "application/pdf,image/png,image/jpeg,text/plain"
     attachment_directory: Path = PROJECT_ROOT / "data" / "attachments"
     seed_demo_users: bool = False
+    directory_mode: str = "none"
+    entra_tenant_id: str | None = None
+    entra_client_id: str | None = None
+    entra_client_secret: str | None = None
+    active_directory_server: str | None = None
+    active_directory_base_dn: str | None = None
+    active_directory_bind_user: str | None = None
+    active_directory_bind_password: str | None = None
+    active_directory_use_ssl: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

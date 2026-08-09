@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 from app.modules.access.router import router as access_router
 from app.modules.api import router
 from app.modules.attachments.router import router as attachments_router
+from app.modules.directory.router import router as directory_router
+from app.modules.environment_assignments.router import router as assignment_router
 from app.modules.governance.router import router as governance_router
 from app.modules.operations.router import router as operations_router
 from app.modules.permissions.router import router as permissions_router
@@ -32,6 +34,8 @@ app.include_router(access_router)
 app.include_router(system_fields_router)
 app.include_router(operations_router)
 app.include_router(attachments_router)
+app.include_router(directory_router)
+app.include_router(assignment_router)
 app.include_router(router)
 
 

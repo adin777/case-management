@@ -36,7 +36,6 @@ from app.modules.models import (
     PriorityDefinition,
     RefreshToken,
     RequestType,
-    Role,
     SubPriorityDefinition,
     User,
     Visibility,
@@ -132,7 +131,6 @@ class EnvironmentOut(EnvironmentIn):
 
 class MembershipIn(BaseModel):
     user_id: uuid.UUID
-    role_code: str
 
 
 class RequestTypeIn(BaseModel):
@@ -426,7 +424,7 @@ def case_access(db: Session, user: User, item: Case) -> None:
 @router.post("/auth/login", response_model=TokenOut)
 def login(data: LoginIn, db: DB) -> TokenOut:
     user = db.scalar(select(User).where(func.lower(User.email) == data.email.lower()))
-    if not user or not password_hash.verify(data.password, user.password_hash) or not user.is_active:
+    if not user or not password_hash.verify(data.password, user.password_hash) or not user.is_active or user.status != "active":
         raise HTTPException(401, "Invalid credentials")
     user.last_login_at = datetime.now(UTC)
     token_id = uuid.uuid4()
@@ -457,20 +455,15 @@ def register(data: RegisterIn, db: DB) -> TokenOut:
         password_hash=password_hash.hash(data.password),
         is_active=True,
         is_system_admin=False,
+        source="manual",
+        status="active",
     )
     db.add(user)
     db.flush()
     active_environments = list(db.scalars(select(Environment).where(Environment.is_active.is_(True))))
     if len(active_environments) == 1:
-        requester_role = db.scalar(select(Role).where(Role.code == "requester"))
-        if requester_role:
-            db.add(
-                EnvironmentMembership(
-                    environment_id=active_environments[0].id,
-                    user_id=user.id,
-                    role_id=requester_role.id,
-                )
-            )
+        db.add(EnvironmentMembership(environment_id=active_environments[0].id, user_id=user.id,
+                                     role_id=None, source="manual"))
     else:
         logger.warning(
             "New user %s was not assigned automatically: active environment count is %s",
@@ -578,10 +571,7 @@ def users(db: DB, user: Current) -> list[User]:
 def roles(db: DB, user: Current) -> list[dict]:
     if not user.is_system_admin:
         raise HTTPException(403, "System administrator required")
-    return [
-        {"id": str(r.id), "code": r.code, "name": r.name, "permissions": r.permissions}
-        for r in db.scalars(select(Role))
-    ]
+    raise HTTPException(410, "Role הוסר ממודל המוצר; הרשאות מנוהלות באמצעות קבוצות וחריגות משתמש")
 
 
 @router.get("/groups")
@@ -654,9 +644,8 @@ def update_environment(
 def memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict]:
     require(db, user, environment_id, "environment.manage")
     rows = db.execute(
-        select(EnvironmentMembership, User, Role)
+        select(EnvironmentMembership, User)
         .join(User, EnvironmentMembership.user_id == User.id)
-        .join(Role, EnvironmentMembership.role_id == Role.id)
         .where(EnvironmentMembership.environment_id == environment_id)
     ).all()
     return [
@@ -665,9 +654,9 @@ def memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict]:
             "user_id": str(u.id),
             "display_name": u.display_name,
             "email": u.email,
-            "role_code": r.code,
+            "source": m.source,
         }
-        for m, u, r in rows
+        for m, u in rows
     ]
 
 
@@ -684,10 +673,8 @@ def delete_membership(environment_id: uuid.UUID, membership_id: uuid.UUID, db: D
 @router.post("/environments/{environment_id}/memberships", status_code=201)
 def add_membership(environment_id: uuid.UUID, data: MembershipIn, db: DB, user: Current) -> dict:
     require(db, user, environment_id, "environment.manage")
-    role = db.scalar(select(Role).where(Role.code == data.role_code))
-    if not role:
-        raise HTTPException(404, "Role not found")
-    item = EnvironmentMembership(environment_id=environment_id, user_id=data.user_id, role_id=role.id)
+    item = EnvironmentMembership(environment_id=environment_id, user_id=data.user_id,
+                                 role_id=None, source="manual")
     db.add(item)
     db.commit()
     return {"id": str(item.id)}

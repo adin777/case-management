@@ -11,7 +11,7 @@ from app.modules.models import (
     EnvironmentMembership,
     GroupMember,
     RequestType,
-    Role,
+    User,
 )
 from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import Notification
@@ -61,14 +61,19 @@ def create_step_tasks(db: Session, instance: ApprovalInstance, step_order: int) 
     elif step.approver_type == "group" and step.approver_group_id:
         approvers = list(db.scalars(select(GroupMember.user_id).where(
             GroupMember.group_id == step.approver_group_id)))
-    elif step.approver_type == "environment_role" and step.approver_environment_role:
+    elif step.approver_type == "job_title" and step.approver_job_title:
         case_item = db.get(Case, instance.case_id)
         if case_item:
-            approvers = list(db.scalars(select(EnvironmentMembership.user_id).join(Role).where(
+            approvers = list(db.scalars(select(EnvironmentMembership.user_id).join(
+                User, EnvironmentMembership.user_id == User.id).where(
                 EnvironmentMembership.environment_id == case_item.environment_id,
-                Role.code == step.approver_environment_role,
+                EnvironmentMembership.is_active.is_(True),
                 EnvironmentMembership.user_id.is_not(None),
+                User.status == "active", User.is_active.is_(True),
+                User.job_title == step.approver_job_title,
             )))
+        if not approvers:
+            raise HTTPException(409, f"לא נמצא משתמש פעיל בתפקיד '{step.approver_job_title}' בסביבה זו")
     for approver in dict.fromkeys(approvers):
         db.add(ApprovalTask(approval_instance_id=instance.id, step_definition_id=step.id,
                             approver_user_id=approver, status="pending"))
