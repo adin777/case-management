@@ -1,4 +1,5 @@
 import io
+import uuid
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -49,6 +50,27 @@ def test_numbering_and_case_field_options() -> None:
     })
     assert field.status_code == 201 and field.json()["system_number"].startswith("CF-")
     assert field.json()["options_json"][0]["label_he"] == "SAP"
+
+
+def test_select_field_option_reorder_persists() -> None:
+    headers = auth(); environment, request_type, _ = context(headers)
+    created = client.post(f"/api/environments/{environment['id']}/case-fields", headers=headers,
+        json={"key":f"select_{uuid.uuid4().hex[:8]}","label_he":"בחירה לסידור",
+              "label_en":"Selection","field_type":"single_select","request_type_id":request_type["id"],
+              "options_json":[{"value":"one","label_he":"אחד","sort_order":0},
+                              {"value":"two","label_he":"שתיים","sort_order":1},
+                              {"value":"three","label_he":"שלוש","sort_order":2}],
+              "is_required":False,"is_active":True,"validation_json":{},"sort_order":20})
+    assert created.status_code == 201
+    reordered = client.put(f"/api/environments/{environment['id']}/case-fields/{created.json()['id']}/options/reorder",
+        headers=headers,json={"ids":["three","one","two"]})
+    assert reordered.status_code == 200
+    fetched = client.get(f"/api/environments/{environment['id']}/case-fields", headers=headers).json()
+    field = next(row for row in fetched if row["id"] == created.json()["id"])
+    assert [option["value"] for option in field["options_json"]] == ["three","one","two"]
+    duplicate = client.put(f"/api/environments/{environment['id']}/case-fields/{created.json()['id']}/options/reorder",
+        headers=headers,json={"ids":["one","one","two"]})
+    assert duplicate.status_code == 422
 
 
 def test_direct_permission_deny_overrides_role() -> None:
@@ -121,17 +143,45 @@ def test_two_step_approval_flow() -> None:
     pending = client.get("/api/approvals/pending-for-me", headers=auth("agent@example.com", "Agent123!"))
     assert pending.status_code == 200
     assert any(row["case_id"] == item["id"] and row["step_name"] == "אישור מטפל" for row in pending.json())
-    approval = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["name"] == "אישור דו שלבי")
+    approval = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()["current_approval"]
     first = approval["tasks"][0]
     assert first["approver_name"] and first["requested_at"] and first["step_order"] == 1
     assert client.post(f"/api/approval-tasks/{first['id']}/decision", headers=auth("agent@example.com", "Agent123!"), json={"decision": "approved"}).status_code == 200
-    approval = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["name"] == "אישור דו שלבי")
+    approval = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()["current_approval"]
     second = next(row for row in approval["tasks"] if row["status"] == "pending")
     decided = client.post(f"/api/approval-tasks/{second['id']}/decision", headers=auth("envadmin@example.com", "EnvAdmin123!"), json={"decision": "approved"})
     assert decided.json()["status"] == "approved"
-    history = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["id"] == approval["id"])
+    history = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()["current_approval"]
     assert all(task["approver_name"] for task in history["tasks"])
     assert all(task["decided_at"] for task in history["tasks"] if task["decision"])
+
+
+def test_rejected_approval_can_be_resubmitted_and_approved() -> None:
+    headers = auth(); environment, request_type, _ = context(headers)
+    client.patch(f"/api/request-types/{request_type['id']}", headers=headers,
+                 json={"requires_approval": True})
+    admin_user = next(row for row in client.get("/api/users", headers=headers).json()
+                      if row["email"] == "admin@example.com")
+    flow = client.post(f"/api/environments/{environment['id']}/approval-flows", headers=headers,
+        json={"name": "מחזור אישור חוזר", "request_type_id": request_type["id"],
+              "trigger_type": "case_created",
+              "steps": [{"name": "אישור מנהל", "approver_user_id": admin_user["id"]}]})
+    assert flow.status_code == 201
+    item = create_case(headers)
+    first = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()["current_approval"]
+    rejected = client.post(f"/api/approval-tasks/{first['tasks'][0]['id']}/decision",
+        headers=headers, json={"decision": "rejected", "comment": "נדרש תיקון"})
+    assert rejected.status_code == 200 and rejected.json()["status"] == "rejected"
+    resubmitted = client.post(f"/api/cases/{item['id']}/approvals/resubmit", headers=headers)
+    assert resubmitted.status_code == 200 and resubmitted.json()["attempt_number"] == 2
+    payload = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()
+    assert payload["current_approval"]["attempt_number"] == 2
+    assert payload["approval_history"][0]["attempt_number"] == 1
+    assert payload["approval_history"][0]["tasks"][0]["comment"] == "נדרש תיקון"
+    current_task = payload["current_approval"]["tasks"][0]
+    approved = client.post(f"/api/approval-tasks/{current_task['id']}/decision",
+        headers=headers, json={"decision": "approved"})
+    assert approved.status_code == 200 and approved.json()["status"] == "approved"
 
 
 def test_assign_unassign_uses_active_environment_members() -> None:

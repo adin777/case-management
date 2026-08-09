@@ -172,3 +172,25 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 `GET /api/environments/{environment_id}/eligible-assignees` מחזיר רק משתמשים פעילים בעלי שיוך פעיל לסביבה ודורש `case.assign`. `POST /api/cases/{case_id}/assign` מקבל `assignee_id` או `null` ו־`version`. בקריאה נעולה רק מנהל מערכת או בעל `environment.manage` רשאי לשנות מטפל.
 
 `GET /api/cases/{case_id}/approvals` מחזיר לכל משימה מספר ושם שלב, סוג מאשר, snapshot של שם המאשר, מצב, מועד בקשה, החלטה, מועד החלטה והערה. שם המאשר נשמר בעת יצירת המשימה ואינו משתנה בעקבות שינוי עתידי בפרופיל.
+
+## ניסיונות אישור, העברת משתמשים וסידור ערכים
+
+`GET /api/cases/{case_id}/approvals` מחזיר אובייקט עם `current_approval`, ‏`approval_history`
+ו־`can_resubmit`. לכל ApprovalInstance נשמר `attempt_number` מפורש. הרשימה הראשית מציגה רק את
+הניסיון האחרון; ניסיונות קודמים נשארים כהיסטוריה עם Snapshot המאשר, החלטה, מועד וסיבת דחייה.
+`POST /api/cases/{case_id}/approvals/resubmit` דורש `case.update`, זמין רק לאחר `rejected` או
+`returned`, דוחה ניסיון כשכבר קיים אישור פעיל, ויוצר משימות חדשות מתצורת האישור הפעילה בלי למחוק היסטוריה.
+
+`GET /api/users-export` מחזיר XLSX אמיתי ומכבד `status_filter`, ‏`source`, ‏`department`,
+`job_title` ו־`search`. הקובץ כולל את כל שדות הפרופיל, תאריכי המערכת, קבוצות וסביבות.
+`POST /api/users/import/preview` אינו כותב נתונים ומסווג יצירה, עדכון, ללא שינוי ושגיאה;
+`POST /api/users/import/apply` מחיל רק את ה־snapshot שאושר. התאמה נעשית לפי
+`directory_object_id`, לאחר מכן UPN ולבסוף Email, ללא יצירת משתמש כפול.
+
+`PUT /api/environments/{environment_id}/system-fields/{field_code}/reorder` מקבל מערך IDs מלא
+עבור Status, Request Type, Priority או SubPriority. ‏
+`PUT /api/environments/{environment_id}/case-fields/{field_id}/options/reorder` מסדר אפשרויות של
+שדה בחירה לפי הערכים היציבים שלהן. שני הנתיבים דוחים כפילויות, ערכים חסרים וערכים מהורה אחר.
+
+מנהל מערכת מקבל `edit` באופן דינמי בכל PermissionDomain פעיל, כולל Domain שנוסף בעתיד, בלי ליצור
+Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה מחזירה token של המשתמש המקורי.

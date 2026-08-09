@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ContentCopy } from '@mui/icons-material';
 import { Alert, Box, Button, Checkbox, Container, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Paper, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
@@ -8,6 +8,8 @@ import { AccessLevelSelector, type AccessLevel } from './AccessLevelSelector';
 
 type Domain = { code: string; name_he: string; description_he: string; scope: string };
 type CopyMode = 'replace' | 'merge' | 'missing';
+type AssignmentPayload = { levels:Record<string,AccessLevel|'mixed'> };
+type EffectiveRow = {domain:string;effective_level:AccessLevel;source_name:string;scope:string};
 
 export function AccessPage() {
   const client = useQueryClient();
@@ -19,9 +21,13 @@ export function AccessPage() {
   const [copyMode, setCopyMode] = useState<CopyMode>('replace'); const [copyPreview, setCopyPreview] = useState<Record<string, string>>();
   const [message, setMessage] = useState('');
   const { data: domains = [] } = useQuery({ queryKey: ['access-domains'], queryFn: () => api<Domain[]>('/access/domains') });
-  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users') });
+  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users?active_only=false') });
   const { data: groups = [] } = useQuery({ queryKey: ['groups'], queryFn: () => api<Group[]>('/groups') });
   const { data: environments = [] } = useQuery({ queryKey: ['environments'], queryFn: () => api<Environment[]>('/environments') });
+  const scopeParam=environment?`&environment_id=${environment}`:'';
+  const assignmentQuery=useQuery({queryKey:['access-assignments',tab,selected,environment],queryFn:()=>api<AssignmentPayload>(`/access/assignments?subject_type=${tab===0?'users':'groups'}&subject_ids=${selected.join(',')}${scopeParam}`),enabled:selected.length>0});
+  const effectiveQuery=useQuery({queryKey:['effective-access',selected[0],environment],queryFn:()=>api<EffectiveRow[]>(`/access/users/${selected[0]}/effective-access?${scopeParam.slice(1)}`),enabled:tab===0&&selected.length===1});
+  useEffect(()=>{if(!selected.length)setLevels({});else if(assignmentQuery.data)setLevels(Object.fromEntries(Object.entries(assignmentQuery.data.levels).filter(([,value])=>value!=='mixed')) as Record<string,AccessLevel>)},[assignmentQuery.data,selected.length]);
   const entities = useMemo(() => (tab === 0 ? users : groups).filter((item) => {
     const enabled = item.is_active !== false;
     const text = tab === 0 ? `${(item as User).display_name} ${(item as User).email}` : (item as Group).name;
@@ -30,13 +36,17 @@ export function AccessPage() {
   const sourceItems = copySourceType === 'user' ? users : groups;
   const toggle = (id: string) => setSelected(selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]);
   const payload = { source_type: copySourceType, source_id: copySourceId, target_type: tab === 0 ? 'users' : 'groups', target_ids: selected, environment_id: environment || null, mode: copyMode };
-  async function save() { await api('/access/bulk', { method: 'POST', body: JSON.stringify({ subject_type: tab === 0 ? 'users' : 'groups', subject_ids: selected, environment_id: environment || null, levels }) }); setConfirmOpen(false); setMessage('רמות הגישה נשמרו בהצלחה'); client.invalidateQueries({ queryKey: ['access-assignments'] }); }
+  async function save() { await api('/access/bulk', { method: 'POST', body: JSON.stringify({ subject_type: tab === 0 ? 'users' : 'groups', subject_ids: selected, environment_id: environment || null, levels }) }); setConfirmOpen(false); setMessage('רמות הגישה נשמרו בהצלחה'); await Promise.all([client.invalidateQueries({ queryKey: ['access-assignments'] }),client.invalidateQueries({queryKey:['effective-access']})]); }
   async function previewCopy() { const result = await api<{ source_levels: Record<string, string> }>('/access/copy/preview', { method: 'POST', body: JSON.stringify(payload) }); setCopyPreview(result.source_levels); }
   async function copyAccess() { await api('/access/copy', { method: 'POST', body: JSON.stringify(payload) }); setCopyOpen(false); setCopyPreview(undefined); setMessage(`ההרשאות הועתקו אל ${selected.length} יעדים`); client.invalidateQueries({ queryKey: ['access-assignments'] }); }
 
   return <Container maxWidth="xl"><Stack spacing={2}>
     <Box><Typography variant="h4" fontWeight={800}>ניהול הרשאות</Typography><Typography color="text.secondary">בחירת רמת גישה עסקית; האכיפה המפורטת מתבצעת בשרת</Typography></Box>
     {message && <Alert severity="success" onClose={() => setMessage('')}>{message}</Alert>}
+    {(assignmentQuery.isError||effectiveQuery.isError)&&<Alert severity="error">טעינת ההרשאות הקיימות נכשלה</Alert>}
+    {assignmentQuery.isLoading&&<Alert severity="info">טוען הרשאות קיימות…</Alert>}
+    {tab===0&&selected.length===1&&users.find(item=>item.id===selected[0])?.is_system_admin&&<Alert severity="info">כל הרשאות המערכת – מנהל מערכת</Alert>}
+    {effectiveQuery.data&&<Paper variant="outlined" sx={{p:2}}><Typography fontWeight={800}>הרשאות אפקטיביות</Typography>{effectiveQuery.data.map(row=><Typography key={row.domain} variant="body2">{domains.find(domain=>domain.code===row.domain)?.name_he||row.domain}: {row.effective_level} · {row.source_name} · {row.scope}</Typography>)}</Paper>}
     <Box className="permission-grid">
       <Paper variant="outlined" sx={{ p: 2 }}><Typography variant="h6" fontWeight={800}>תחומי הרשאה</Typography><Stack spacing={1.5} mt={2}>{domains.map((domain) => <Paper key={domain.code} variant="outlined" sx={{ p: 1.5 }}><Typography fontWeight={800}>{domain.name_he}</Typography><Typography variant="body2" color="text.secondary">{domain.description_he} · {domain.scope === 'system' ? 'מערכתי' : 'סביבתי'}</Typography><AccessLevelSelector value={levels[domain.code] || 'none'} onChange={(value) => setLevels({ ...levels, [domain.code]: value })} /></Paper>)}</Stack></Paper>
       <Paper variant="outlined" sx={{ p: 2 }}><Tabs value={tab} onChange={(_, value) => { setTab(value); setSelected([]); }}><Tab label="משתמשים"/><Tab label="קבוצות משתמשים"/></Tabs><Stack direction={{ xs: 'column', sm: 'row' }} gap={1} my={2}><TextField fullWidth label="חיפוש" value={search} onChange={(event) => setSearch(event.target.value)} /><TextField select label="מצב" value={active} onChange={(event) => setActive(event.target.value)}><MenuItem value="all">הכול</MenuItem><MenuItem value="active">פעילים</MenuItem><MenuItem value="inactive">לא פעילים</MenuItem></TextField></Stack><TextField fullWidth select label="תחולה" value={environment} onChange={(event) => setEnvironment(event.target.value)}><MenuItem value="">מערכתית</MenuItem>{environments.map((item) => <MenuItem key={item.id} value={item.id}>{item.name_he}</MenuItem>)}</TextField><FormControlLabel sx={{ mt: 1 }} control={<Checkbox checked={entities.length > 0 && selected.length === entities.length} indeterminate={selected.length > 0 && selected.length < entities.length} onChange={() => setSelected(selected.length === entities.length ? [] : entities.map((item) => item.id))} />} label="בחירת כל התוצאות"/><Stack>{entities.map((item) => <FormControlLabel key={item.id} control={<Checkbox checked={selected.includes(item.id)} onChange={() => toggle(item.id)} />} label={tab === 0 ? `${(item as User).display_name} · ${(item as User).email}` : (item as Group).name} />)}</Stack></Paper>

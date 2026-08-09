@@ -23,7 +23,7 @@ export function UsersPage() {
     <Box><Typography variant="h4" fontWeight={800}>משתמשים והרשאות</Typography><Typography color="text.secondary">ניהול זהויות, קבוצות, סנכרון ושדות משתמש</Typography></Box>
     {error && <Alert severity="error">{error}</Alert>}
     <Paper variant="outlined"><Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable"><Tab label="משתמשים"/><Tab label="קבוצות משתמשים"/><Tab label="משתמשים וסנכרון"/></Tabs></Paper>
-    {tab === 0 && <UsersTab users={users} onCreate={() => setUserOpen(true)} onEdit={setSelectedUser}/>}
+    {tab === 0 && <UsersTab users={users} onCreate={() => setUserOpen(true)} onEdit={setSelectedUser} onChanged={refresh}/>}
     {tab === 1 && <GroupsTab groups={groups} users={users} environments={environments} onCreated={refresh}/>}
     {tab === 2 && <DirectorySyncTab onChanged={refresh}/>}
   </Stack><UserDialog open={userOpen} saving={saving} onClose={() => setUserOpen(false)} onSubmit={createUser}/><UserDetailsPage user={selectedUser} users={users} environments={environments} onSaved={refresh} onClose={() => setSelectedUser(undefined)}/></Container>;

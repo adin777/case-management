@@ -552,6 +552,7 @@ class ApprovalInstance(Base):
     approval_flow_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_flow_definitions.id"))
     request_type_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("request_types.id"))
     approval_policy: Mapped[str] = mapped_column(String(40), default="all_active_steps")
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(30), default="pending")
     current_step_order: Mapped[int] = mapped_column(Integer, default=1)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

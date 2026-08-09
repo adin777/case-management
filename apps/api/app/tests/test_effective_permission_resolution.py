@@ -74,3 +74,24 @@ def test_copy_groups_preview_and_report_permission_403() -> None:
     environment = client.get("/api/environments", headers=headers).json()[0]
     denied = client.get(f"/api/reports/cases?environment_id={environment['id']}", headers={"Authorization": f"Bearer {token}"})
     assert denied.status_code == 403
+
+
+def test_system_admin_automatically_receives_new_domain_and_bulk_loads_existing() -> None:
+    headers = admin_headers()
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.is_system_admin.is_(True)))
+        assert admin
+        domain = PermissionDomain(code=f"future_{uuid.uuid4().hex[:8]}", name_he="יכולת עתידית",
+            description_he="תחום שנוסף לאחר יצירת המנהל", category="מערכת", scope="global",
+            view_permissions="future.read", edit_permissions="future.write", is_active=True)
+        db.add(domain); db.commit()
+        assert EffectivePermissionService(db).resolve(admin, domain, None)["effective_level"] == "edit"
+        assert "future.write" in EffectivePermissionService(db).permission_codes(admin, None)
+    user = client.post("/api/users", headers=headers, json={"display_name":"טעינת הרשאות",
+        "email":f"permissions-{uuid.uuid4()}@example.com","password":"Permission123!",
+        "is_active":True,"is_system_admin":False}).json()
+    saved = client.post("/api/access/bulk", headers=headers, json={"subject_type":"users",
+        "subject_ids":[user["id"]],"environment_id":None,"levels":{domain.code:"view"}})
+    assert saved.status_code == 200
+    loaded = client.get(f"/api/access/assignments?subject_type=users&subject_ids={user['id']}", headers=headers)
+    assert loaded.status_code == 200 and loaded.json()["levels"][domain.code] == "view"

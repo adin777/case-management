@@ -1,5 +1,7 @@
+import io
 import json
 import uuid
+import zipfile
 from typing import Self
 from unittest.mock import patch
 
@@ -86,6 +88,12 @@ def test_excel_preview_import_and_export() -> None:
     assert applied.status_code == 200 and applied.json()["created_count"] == 1
     exported = client.get("/api/users-export?source=excel", headers=headers)
     assert exported.status_code == 200 and exported.content.startswith(b"PK")
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode()
+    assert all(field in sheet for field in ["first_name", "last_login_at", "Groups", "Environments"])
+    second_preview = client.post("/api/users/import/preview", headers=headers,
+        files={"file": ("users.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert second_preview.json()["created"] == 0
 
 
 def test_environment_assignment_rule_preserves_manual_membership() -> None:

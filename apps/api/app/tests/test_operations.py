@@ -178,3 +178,27 @@ def test_system_field_reorder_is_environment_scoped() -> None:
     assert [item["id"] for item in reordered] == list(reversed(original_ids))
     client.put(f"/api/environments/{environment['id']}/system-fields/priority/reorder",
                headers=auth, json={"ids": original_ids})
+
+
+def test_all_system_field_orders_persist_and_duplicate_ids_are_rejected() -> None:
+    auth = headers()
+    environment = next(item for item in client.get("/api/environments", headers=auth).json()
+                       if item["code"] == "IT")
+    for field_code in ("status", "request_type", "priority", "sub_priority"):
+        fields = client.get(f"/api/environments/{environment['id']}/system-fields", headers=auth).json()
+        options = next(field["options"] for field in fields if field["code"] == field_code)
+        if len(options) < 2:
+            continue
+        original_ids = [option["id"] for option in options]
+        reversed_ids = list(reversed(original_ids))
+        changed = client.put(f"/api/environments/{environment['id']}/system-fields/{field_code}/reorder",
+            headers=auth, json={"ids": reversed_ids})
+        assert changed.status_code == 200
+        persisted = client.get(f"/api/environments/{environment['id']}/system-fields", headers=auth).json()
+        assert [option["id"] for option in next(field["options"] for field in persisted
+            if field["code"] == field_code)] == reversed_ids
+        duplicate = client.put(f"/api/environments/{environment['id']}/system-fields/{field_code}/reorder",
+            headers=auth, json={"ids": [original_ids[0]] * len(original_ids)})
+        assert duplicate.status_code == 422
+        client.put(f"/api/environments/{environment['id']}/system-fields/{field_code}/reorder",
+            headers=auth, json={"ids": original_ids})

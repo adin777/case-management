@@ -36,6 +36,9 @@ POST /api/workflow-statuses/{status_id}/set-initial:
   - test_changing_initial_status_affects_new_cases_only
 PUT /api/environments/{environment_id}/system-fields/{field_code}/reorder:
   - test_system_field_reorder_is_environment_scoped
+  - test_all_system_field_orders_persist_and_duplicate_ids_are_rejected
+PUT /api/environments/{environment_id}/case-fields/{field_id}/options/reorder:
+  - test_select_field_option_reorder_persists
 GET /api/reports/cases:
   - test_copy_groups_preview_and_report_permission_403
 POST /api/approval-tasks/{task_id}/decision:
@@ -44,6 +47,9 @@ GET /api/approvals/pending-for-me:
   - test_two_step_approval_flow
 GET /api/cases/{case_id}/approvals:
   - test_two_step_approval_flow
+  - test_rejected_approval_can_be_resubmitted_and_approved
+POST /api/cases/{case_id}/approvals/resubmit:
+  - test_rejected_approval_can_be_resubmitted_and_approved
 GET /api/environments/{environment_id}/eligible-assignees:
   - test_assign_unassign_uses_active_environment_members
 POST /api/cases/{case_id}/assign:

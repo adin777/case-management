@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.models import (
@@ -21,32 +21,55 @@ def start_matching_approvals(db: Session, item: Case) -> list[ApprovalInstance]:
     request_type = db.get(RequestType, item.request_type_id)
     if not request_type or not request_type.requires_approval:
         return []
-    flows = db.scalars(select(ApprovalFlowDefinition).where(
+    flow = db.scalar(select(ApprovalFlowDefinition).where(
         ApprovalFlowDefinition.environment_id == item.environment_id,
         ApprovalFlowDefinition.is_active.is_(True),
         ApprovalFlowDefinition.trigger_type == "case_created",
         ApprovalFlowDefinition.request_type_id == item.request_type_id,
-    )).all()
-    if not flows:
+    ).order_by(ApprovalFlowDefinition.system_number.desc()).limit(1))
+    if not flow:
         raise HTTPException(409, "סוג הקריאה דורש אישור אך לא הוגדרה עבורו תצורת אישורים פעילה")
-    result = []
-    for flow in flows:
-        existing = db.scalar(select(ApprovalInstance).where(
-            ApprovalInstance.case_id == item.id,
-            ApprovalInstance.approval_flow_id == flow.id))
-        if existing:
-            result.append(existing); continue
-        instance = ApprovalInstance(system_number=NumberingService.next(db, "approval_instance", item.environment_id),
-                                    case_id=item.id, approval_flow_id=flow.id,
-                                    request_type_id=item.request_type_id,
-                                    approval_policy=flow.approval_policy,
-                                    status="pending", current_step_order=1)
-        db.add(instance); db.flush()
-        item.approval_status = "pending"
-        item.is_approved = False
-        create_step_tasks(db, instance, 1)
-        result.append(instance)
-    return result
+    existing = db.scalar(select(ApprovalInstance).where(
+        ApprovalInstance.case_id == item.id,
+        ApprovalInstance.approval_flow_id == flow.id))
+    if existing:
+        return [existing]
+    instance = ApprovalInstance(system_number=NumberingService.next(db, "approval_instance", item.environment_id),
+                                case_id=item.id, approval_flow_id=flow.id,
+                                request_type_id=item.request_type_id,
+                                approval_policy=flow.approval_policy,
+                                attempt_number=1, status="pending", current_step_order=1)
+    db.add(instance); db.flush()
+    item.approval_status = "pending"
+    item.is_approved = False
+    create_step_tasks(db, instance, 1)
+    return [instance]
+
+
+def resubmit_approval(db: Session, item: Case) -> ApprovalInstance:
+    latest = db.scalar(select(ApprovalInstance).where(
+        ApprovalInstance.case_id == item.id,
+    ).order_by(ApprovalInstance.attempt_number.desc(),
+               func.coalesce(ApprovalInstance.completed_at, ApprovalInstance.started_at).desc()))
+    if not latest or latest.status not in {"rejected", "returned"}:
+        raise HTTPException(409, "ניתן לשלוח מחדש רק קריאה שנדחתה או הוחזרה לתיקון")
+    pending = db.scalar(select(ApprovalInstance.id).where(
+        ApprovalInstance.case_id == item.id, ApprovalInstance.status == "pending"))
+    if pending:
+        raise HTTPException(409, "כבר קיים ניסיון אישור פעיל לקריאה")
+    flow = db.get(ApprovalFlowDefinition, latest.approval_flow_id)
+    if not flow or not flow.is_active or flow.request_type_id != item.request_type_id:
+        raise HTTPException(409, "תצורת האישור הרלוונטית אינה פעילה עוד")
+    instance = ApprovalInstance(
+        system_number=NumberingService.next(db, "approval_instance", item.environment_id),
+        case_id=item.id, approval_flow_id=flow.id, request_type_id=item.request_type_id,
+        approval_policy=flow.approval_policy, attempt_number=latest.attempt_number + 1,
+        status="pending", current_step_order=1,
+    )
+    db.add(instance); db.flush()
+    item.approval_status = "pending"; item.is_approved = False
+    create_step_tasks(db, instance, 1)
+    return instance
 
 
 def create_step_tasks(db: Session, instance: ApprovalInstance, step_order: int) -> None:

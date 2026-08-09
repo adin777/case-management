@@ -15,7 +15,7 @@ from app.modules.access.mapping import codes
 from app.modules.access.models import PermissionDomain
 from app.modules.access.service import replace_levels
 from app.modules.api import DB, Current, audit, case_access, permissions, require
-from app.modules.approvals.service import create_step_tasks
+from app.modules.approvals.service import create_step_tasks, resubmit_approval
 from app.modules.models import (
     ApprovalFlowDefinition,
     ApprovalInstance,
@@ -46,6 +46,10 @@ class OptionIn(BaseModel):
     label_en: str = ""
     is_active: bool = True
     sort_order: int = 0
+
+
+class OptionReorderIn(BaseModel):
+    ids: list[str] = Field(min_length=1)
 
 
 class CaseFieldIn(BaseModel):
@@ -116,6 +120,25 @@ def update_case_field(environment_id: uuid.UUID, field_id: uuid.UUID, data: Case
     payload = data.model_dump(); payload["options_json"] = [row.model_dump() for row in data.options_json]
     for key, value in payload.items(): setattr(item, key, value)
     audit(db, user, "case_field", item.id, "updated"); db.commit(); return case_field_dict(item)
+
+
+@router.put("/environments/{environment_id}/case-fields/{field_id}/options/reorder")
+def reorder_case_field_options(environment_id: uuid.UUID, field_id: uuid.UUID,
+                               data: OptionReorderIn, db: DB, user: Current) -> dict[str, Any]:
+    require(db, user, environment_id, "environment.fields.manage")
+    item = db.get(CaseFieldDefinition, field_id)
+    if not item or item.environment_id != environment_id:
+        raise HTTPException(404, "שדה הקריאה לא נמצא")
+    if item.field_type not in {"single_select", "multi_select"}:
+        raise HTTPException(422, "רק שדה בחירה תומך בסידור אפשרויות")
+    options = list(item.options_json or [])
+    by_id = {str(option.get("value")): option for option in options}
+    if len(data.ids) != len(set(data.ids)) or set(data.ids) != set(by_id):
+        raise HTTPException(422, "רשימת הסידור אינה תואמת לאפשרויות השדה")
+    item.options_json = [{**by_id[value], "sort_order": index} for index, value in enumerate(data.ids)]
+    audit(db, user, "case_field", item.id, "options_reordered", after={"ids": data.ids})
+    db.commit()
+    return case_field_dict(item)
 
 
 class PermissionAssignmentIn(BaseModel):
@@ -285,13 +308,15 @@ class ApprovalDecisionIn(BaseModel):
 
 
 @router.get("/cases/{case_id}/approvals")
-def case_approvals(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+def case_approvals(case_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     item = db.get(Case, case_id)
     if not item: raise HTTPException(404, "הקריאה לא נמצאה")
     case_access(db, user, item)
     rows = db.execute(select(ApprovalInstance, ApprovalFlowDefinition).join(
         ApprovalFlowDefinition, ApprovalInstance.approval_flow_id == ApprovalFlowDefinition.id).where(
-        ApprovalInstance.case_id == case_id)).all()
+        ApprovalInstance.case_id == case_id).order_by(
+            ApprovalInstance.attempt_number.desc(),
+            func.coalesce(ApprovalInstance.completed_at, ApprovalInstance.started_at).desc())).all()
     result = []
     for instance, flow in rows:
         tasks = []
@@ -305,8 +330,27 @@ def case_approvals(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, 
                 "decided_at": task.decided_at, "can_decide": task.approver_user_id == user.id
                     and task.status == "pending" and step.step_order == instance.current_step_order})
         result.append({"id": instance.id, "system_number": instance.system_number, "name": flow.name,
-            "status": instance.status, "current_step_order": instance.current_step_order, "tasks": tasks})
-    return result
+            "attempt_number": instance.attempt_number, "status": instance.status,
+            "current_step_order": instance.current_step_order, "started_at": instance.started_at,
+            "completed_at": instance.completed_at, "tasks": tasks})
+    current = result[0] if result else None
+    can_resubmit = bool(current and current["status"] in {"rejected", "returned"} and (
+        user.is_system_admin or "case.update" in permissions(db, user, item.environment_id)))
+    return {"current_approval": current, "approval_history": result[1:],
+            "can_resubmit": can_resubmit}
+
+
+@router.post("/cases/{case_id}/approvals/resubmit")
+def resubmit_case_approval(case_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
+    item = db.get(Case, case_id)
+    if not item: raise HTTPException(404, "הקריאה לא נמצאה")
+    case_access(db, user, item)
+    require(db, user, item.environment_id, "case.update")
+    instance = resubmit_approval(db, item)
+    audit(db, user, "approval_instance", instance.id, "resubmitted",
+          after={"attempt_number": instance.attempt_number})
+    db.commit()
+    return {"id": instance.id, "attempt_number": instance.attempt_number, "status": instance.status}
 
 
 @router.get("/approvals/pending-for-me")

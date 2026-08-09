@@ -4,17 +4,17 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.core.config import settings
 from app.modules.api import DB, Current, audit
 from app.modules.directory.active_directory import ActiveDirectoryProvider
 from app.modules.directory.entra import EntraDirectoryProvider
-from app.modules.directory.excel import FIELDS, HEADERS, parse, workbook
+from app.modules.directory.excel import HEADERS, parse, workbook
 from app.modules.directory.fake import FakeDirectoryProvider
 from app.modules.directory.provider import DirectoryBatch, DirectoryProvider, NormalizedDirectoryUser
 from app.modules.directory.sync_service import UserSyncService
-from app.modules.models import DirectorySyncRun, User
+from app.modules.models import DirectorySyncRun, Environment, EnvironmentMembership, Group, GroupMember, User
 
 router = APIRouter(prefix="/api", tags=["directory"])
 
@@ -87,9 +87,29 @@ def import_apply(data: list[NormalizedDirectoryUser], db: DB, user: Current) -> 
 
 
 @router.get("/users-export")
-def export_users(db: DB, user: Current, status_filter: str | None = Query(None), source: str | None = Query(None)) -> Response:
+def export_users(db: DB, user: Current, status_filter: str | None = Query(None),
+                 source: str | None = Query(None), department: str | None = Query(None),
+                 job_title: str | None = Query(None), search: str | None = Query(None)) -> Response:
     admin(user); query = select(User).order_by(User.display_name)
     if status_filter: query = query.where(User.status == status_filter)
     if source: query = query.where(User.source == source)
-    rows = [HEADERS] + [[getattr(row, field) if field != "directory_enabled" else row.status == "active" for field in FIELDS] for row in db.scalars(query)]
+    if department: query = query.where(User.department == department)
+    if job_title: query = query.where(User.job_title == job_title)
+    if search:
+        term = f"%{search.lower()}%"
+        query = query.where(or_(func.lower(User.display_name).like(term), func.lower(User.email).like(term),
+                                func.lower(User.user_principal_name).like(term)))
+    export_headers = ["first_name", "last_name", "display_name", "email", "user_principal_name",
+        "department", "job_title", "phone", "mobile_phone", "employee_id", "computer_identifier",
+        "source", "status", "directory_enabled", "created_at", "updated_at", "last_login_at",
+        "last_directory_sync_at", "Groups", "Environments"]
+    rows = [export_headers]
+    for row in db.scalars(query):
+        groups = db.scalars(select(Group.name).join(GroupMember, GroupMember.group_id == Group.id).where(
+            GroupMember.user_id == row.id).order_by(Group.name)).all()
+        environments = db.scalars(select(Environment.name_he).join(
+            EnvironmentMembership, EnvironmentMembership.environment_id == Environment.id).where(
+            EnvironmentMembership.user_id == row.id, EnvironmentMembership.is_active.is_(True)).order_by(
+            Environment.name_he)).all()
+        rows.append([getattr(row, field) for field in export_headers[:-2]] + [", ".join(groups), ", ".join(environments)])
     return Response(workbook(rows), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=users.xlsx"})

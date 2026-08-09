@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from pwdlib import PasswordHash
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.directory.provider import DirectoryBatch, NormalizedDirectoryUser
@@ -20,16 +20,20 @@ class UserSyncService:
     def __init__(self, db: Session, source: str) -> None: self.db, self.source = db, source
 
     def _match(self, row: NormalizedDirectoryUser) -> User | None:
-        conditions = [func.lower(User.email) == row.email.lower()]
-        if row.directory_object_id: conditions.append(User.directory_object_id == row.directory_object_id)
-        if row.user_principal_name: conditions.append(func.lower(User.user_principal_name) == row.user_principal_name.lower())
-        return self.db.scalar(select(User).where(or_(*conditions)))
+        if row.directory_object_id:
+            matched = self.db.scalar(select(User).where(User.directory_object_id == row.directory_object_id))
+            if matched: return matched
+        if row.user_principal_name:
+            matched = self.db.scalar(select(User).where(
+                func.lower(User.user_principal_name) == row.user_principal_name.lower()))
+            if matched: return matched
+        return self.db.scalar(select(User).where(func.lower(User.email) == row.email.lower()))
 
     def preview(self, batch: DirectoryBatch) -> dict:
         rows = []; counts = {"created": 0, "updated": 0, "disabled": 0, "unchanged": 0, "errors": 0}
         seen: set[str] = set()
         for incoming in batch.users:
-            key = incoming.directory_object_id or incoming.email.lower()
+            key = incoming.directory_object_id or (incoming.user_principal_name or incoming.email).lower()
             if key in seen: action, errors = "error", ["רשומה כפולה בקלט"]
             else:
                 seen.add(key); user = self._match(incoming); errors = []
