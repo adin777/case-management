@@ -28,6 +28,7 @@ export function parseValidationErrors(errors: ApiValidationError[] = []): {messa
 
 export const token = {
   get: () => localStorage.getItem(ACCESS_KEY),
+  setAccess: (access: string) => { localStorage.setItem(ACCESS_KEY, access); window.dispatchEvent(new Event('case-management-auth')); },
   set: (access: string, refresh: string) => { localStorage.setItem(ACCESS_KEY, access); localStorage.setItem(REFRESH_KEY, refresh); window.dispatchEvent(new Event('case-management-auth')); },
   clear: () => { localStorage.removeItem(ACCESS_KEY); localStorage.removeItem(REFRESH_KEY); window.dispatchEvent(new Event('case-management-auth')); },
 };

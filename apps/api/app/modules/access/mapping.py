@@ -9,6 +9,7 @@ DOMAIN_DEFINITIONS = [
     ("user_fields", "ניהול שדות משתמש גלובליים", "ניהול שדות משתמש וערכיהם", "שדות", "global", "system.fields.read", "system.fields.manage"),
     ("case_fields", "ניהול שדות קריאה", "ניהול שדות וטפסי קריאה", "שדות", "environment", "environment.read", "environment.fields.manage,environment.forms.manage"),
     ("system_settings", "ניהול הגדרות מערכת", "ניהול תצורת מערכת רוחבית", "מערכת", "global", "system.roles.read", "system.roles.manage"),
+    ("impersonation", "התחזות למשתמש", "צפייה מאובטחת במערכת בזהות משתמש אחר", "מערכת", "global", "system.impersonate_users", "system.impersonate_users"),
     ("audit_system", "צפייה ב-Audit מערכת", "צפייה ביומן הביקורת המערכתי", "מערכת", "global", "audit.read_system", "audit.read_system"),
     ("cases_create", "פתיחת קריאות", "פתיחת קריאות שירות", "קריאות שירות", "environment", "environment.read,request_type.read,case.create", "environment.read,request_type.read,case.create"),
     ("cases_view", "צפייה בקריאות", "צפייה בקריאות מורשות", "קריאות שירות", "environment", "case.read,case.read_environment,case.read_participating,case.comment,comment.public.read,comment.public.create,attachment.read,attachment.upload", "case.read,case.read_environment,case.read_participating,case.comment,comment.public.read,comment.public.create,attachment.read,attachment.upload"),

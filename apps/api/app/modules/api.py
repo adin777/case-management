@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
+from typing import cast as typing_cast
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -102,6 +103,10 @@ class TokenOut(BaseModel):
 
 class RefreshIn(BaseModel):
     refresh_token: str
+
+
+class ImpersonationIn(BaseModel):
+    user_id: uuid.UUID
 
 
 class UserOut(BaseModel):
@@ -293,6 +298,7 @@ class FormPatch(BaseModel):
 class CasePatch(BaseModel):
     title: str | None = None
     description: str | None = None
+    request_type_id: uuid.UUID | None = None
     priority: str | None = None
     priority_id: uuid.UUID | None = None
     sub_priority_id: uuid.UUID | None = None
@@ -326,11 +332,14 @@ class TransitionIn(BaseModel):
     comment: str | None = None
 
 
-def issue(user: User, token_type: str, expires: timedelta, token_id: uuid.UUID | None = None) -> str:
+def issue(user: User, token_type: str, expires: timedelta, token_id: uuid.UUID | None = None,
+          real_actor_id: uuid.UUID | None = None) -> str:
     now = datetime.now(UTC)
     payload = {"sub": str(user.id), "type": token_type, "iat": now, "exp": now + expires}
     if token_id:
         payload["jti"] = str(token_id)
+    if real_actor_id:
+        payload["real_actor_id"] = str(real_actor_id)
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
@@ -345,9 +354,12 @@ def decode(token: str, expected: str) -> dict[str, Any]:
 
 
 def current_user(db: DB, token: Annotated[str, Depends(oauth)]) -> User:
-    user = db.get(User, uuid.UUID(decode(token, "access")["sub"]))
+    payload = decode(token, "access")
+    user = db.get(User, uuid.UUID(payload["sub"]))
     if not user or not user.is_active:
         raise HTTPException(401, "Inactive or unknown user")
+    if payload.get("real_actor_id"):
+        typing_cast(Any, user)._real_actor_user_id = uuid.UUID(payload["real_actor_id"])
     return user
 
 
@@ -374,6 +386,8 @@ def audit(
     before: dict | None = None,
     after: dict | None = None,
 ) -> None:
+    real_actor_id = getattr(user, "_real_actor_user_id", None)
+    metadata = {"real_actor_user_id": str(real_actor_id), "impersonated_user_id": str(user.id)} if real_actor_id else {}
     db.add(
         AuditEvent(
             entity_type=entity,
@@ -384,9 +398,14 @@ def audit(
             actor_email_snapshot=user.email,
             before_json=before,
             after_json=after,
-            metadata_json={},
+            metadata_json=metadata,
         )
     )
+
+
+def require_impersonation_permission(db: Session, user: User) -> None:
+    if not user.is_system_admin and "system.impersonate_users" not in domain_permissions(db, user.id, None):
+        raise HTTPException(403, "חסרה הרשאת התחזות למשתמש")
 
 
 def case_access(db: Session, user: User, item: Case) -> None:
@@ -507,6 +526,45 @@ def logout(data: RefreshIn, db: DB) -> None:
 @router.get("/auth/me", response_model=UserOut)
 def me(user: Current) -> User:
     return user
+
+
+@router.post("/impersonation/start")
+def start_impersonation(data: ImpersonationIn, db: DB, user: Current) -> dict[str, Any]:
+    if getattr(user, "_real_actor_user_id", None):
+        raise HTTPException(409, "יש לסיים את ההתחזות הפעילה לפני התחזות אחרת")
+    require_impersonation_permission(db, user)
+    target = db.get(User, data.user_id)
+    if not target or not target.is_active:
+        raise HTTPException(404, "המשתמש המבוקש אינו פעיל או אינו קיים")
+    audit(db, user, "user", target.id, "impersonation_started",
+          after={"real_actor_user_id": str(user.id), "impersonated_user_id": str(target.id)})
+    db.commit()
+    return {"access_token": issue(target, "access", timedelta(minutes=settings.access_token_minutes),
+                                  real_actor_id=user.id)}
+
+
+@router.post("/impersonation/stop")
+def stop_impersonation(db: DB, user: Current) -> dict[str, Any]:
+    real_actor_id = getattr(user, "_real_actor_user_id", None)
+    if not real_actor_id:
+        raise HTTPException(409, "אין התחזות פעילה")
+    actor = db.get(User, real_actor_id)
+    if not actor or not actor.is_active:
+        raise HTTPException(401, "המשתמש המקורי אינו פעיל")
+    audit(db, user, "user", user.id, "impersonation_stopped")
+    db.commit()
+    return {"access_token": issue(actor, "access", timedelta(minutes=settings.access_token_minutes))}
+
+
+@router.get("/impersonation/status")
+def impersonation_status(db: DB, user: Current) -> dict[str, Any]:
+    real_actor_id = getattr(user, "_real_actor_user_id", None)
+    actor = db.get(User, real_actor_id) if real_actor_id else None
+    return {"active": bool(real_actor_id), "real_actor_user_id": real_actor_id,
+            "real_actor_name": actor.display_name if actor else None,
+            "impersonated_user_id": user.id if real_actor_id else None,
+            "impersonated_user_name": user.display_name if real_actor_id else None,
+            "can_start": not real_actor_id and (user.is_system_admin or "system.impersonate_users" in domain_permissions(db, user.id, None))}
 
 
 @router.get("/users", response_model=list[UserOut])
@@ -1090,7 +1148,7 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
         or "comment.manager.read" in permissions(db, user, item.environment_id)
     ]
     granted = permissions(db, user, item.environment_id)
-    can_override_lock = user.is_system_admin or "case.lock" in granted
+    can_override_lock = user.is_system_admin or "environment.manage" in granted
     reporter = db.get(User, item.reporter_id)
     return CaseOut.model_validate(item).model_copy(
         update={
@@ -1101,8 +1159,8 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
                 "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
                 "can_lock": can_override_lock,
                 "can_assign": "case.assign" in granted,
-                "can_change_status": "case.change_status" in granted or "case.update" in granted,
-                "can_manage_participants": "case.manage_participants" in granted,
+                "can_change_status": ("case.change_status" in granted or "case.update" in granted) and (not item.is_locked or can_override_lock),
+                "can_manage_participants": "case.manage_participants" in granted and (not item.is_locked or can_override_lock),
                 "can_read_manager_comments": "comment.manager.read" in granted,
                 "can_create_manager_comments": "comment.manager.create" in granted,
             },
@@ -1117,11 +1175,23 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
     require(db, user, item.environment_id, "case.update")
-    if item.is_locked and not (user.is_system_admin or "case.lock" in permissions(db, user, item.environment_id)):
-        raise HTTPException(423, "הקריאה נעולה לשינויים")
+    granted = permissions(db, user, item.environment_id)
+    if item.is_locked and not (user.is_system_admin or "environment.manage" in granted):
+        raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לערוך אותה")
     if item.version != data.version:
         raise HTTPException(409, "Case was updated by another user")
     changes = data.model_dump(exclude={"version", "values"}, exclude_unset=True)
+    if data.request_type_id and data.request_type_id != item.request_type_id:
+        current_type = db.get(RequestType, item.request_type_id)
+        target_type = db.get(RequestType, data.request_type_id)
+        if not target_type or target_type.environment_id != item.environment_id or not target_type.is_active:
+            raise HTTPException(422, "סוג הקריאה אינו פעיל באותה סביבת עבודה")
+        if not current_type or target_type.workflow_definition_id != current_type.workflow_definition_id:
+            raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם תהליך עבודה שונה")
+        if target_type.form_version_id != item.form_definition_id:
+            raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם טופס שונה בלי תהליך המרה מפורש")
+        if target_type.requires_approval != current_type.requires_approval:
+            raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם מדיניות אישורים שונה")
     if data.priority_id:
         priority = db.get(PriorityDefinition, data.priority_id)
         if not priority or priority.environment_id != item.environment_id or not priority.is_active:
@@ -1157,7 +1227,9 @@ def set_case_lock(case_id: uuid.UUID, data: CaseLockIn, db: DB, user: Current) -
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "הקריאה לא נמצאה")
-    require(db, user, item.environment_id, "case.lock")
+    granted = permissions(db, user, item.environment_id)
+    if not user.is_system_admin and "environment.manage" not in granted:
+        raise HTTPException(403, "רק מנהל מערכת או מנהל הסביבה רשאי לנעול קריאה")
     if item.version != data.version:
         raise HTTPException(409, "הקריאה עודכנה על ידי משתמש אחר")
     if data.locked and not (data.reason or "").strip():
@@ -1273,6 +1345,8 @@ def add_participant(case_id: uuid.UUID, data: ParticipantIn, db: DB, user: Curre
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.manage_participants")
+    if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
+        raise HTTPException(403, "הקריאה נעולה לשינוי משתתפים")
     row = CaseParticipant(
         case_id=case_id, user_id=data.user_id, participant_type=data.participant_type, added_by=user.id
     )
@@ -1305,6 +1379,8 @@ def remove_participant(case_id: uuid.UUID, participant_user_id: uuid.UUID, db: D
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.manage_participants")
+    if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
+        raise HTTPException(403, "הקריאה נעולה לשינוי משתתפים")
     if participant_user_id in {item.requester_id, item.reporter_id}:
         raise HTTPException(409, "לא ניתן להסיר את פותח הקריאה")
     if participant_user_id == item.assignee_id:
@@ -1354,6 +1430,8 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.change_status")
+    if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
+        raise HTTPException(403, "הקריאה נעולה לשינוי סטטוס")
     transition_row = db.scalar(select(WorkflowTransition).where(
         WorkflowTransition.from_status_id == item.workflow_status_id,
         WorkflowTransition.to_status_id == data.workflow_status_id,

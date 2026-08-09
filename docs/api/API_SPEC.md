@@ -21,6 +21,9 @@
 | קיים | POST | `/api/auth/login` |
 | קיים | GET | `/api/auth/me` |
 | קיים | POST | `/api/auth/register` |
+| קיים | GET | `/api/impersonation/status` |
+| קיים | POST | `/api/impersonation/start` |
+| קיים | POST | `/api/impersonation/stop` |
 | יעד | POST | `/api/auth/refresh` |
 | יעד | POST | `/api/auth/logout` |
 
@@ -30,6 +33,9 @@
 יעד: מחיקה בטוחה, חברות במספר קבוצות, העתקת קבוצות והרשאות ו־effective access מוסבר.
 סדר ההכרעה: חריגת משתמש בסביבה, קבוצות בסביבה, חריגה כללית, קבוצות כלליות, none.
 מנהל מערכת מקבל edit בכל domain אך אינו עוקף כלל עסקי כגון זהות מאשר.
+התחזות דורשת `system.impersonate_users`, מנפיקה access token קצר־חיים לזהות היעד ואינה
+מבצעת Login או שינוי סיסמה. ה־token שומר `real_actor_id`, וכל Audit בזמן התחזות שומר
+`real_actor_user_id` ו־`impersonated_user_id` ב־metadata.
 
 ## סביבות
 
@@ -94,14 +100,24 @@ Request Type, Priority, Sub-priority, Workflow Status ושדות דינמיים 
 ולטופס הרלוונטיים. הפרה מחזירה `422` עם הודעה עסקית. מותר ליצור מספר בלתי מוגבל של
 קריאות בעלות אותם ערכים עסקיים; הזהויות הייחודיות היחידות הן `Case.id` ו־`case_number`.
 עדכון inline משתמש ב־`PATCH` וב־`version`; conflict מחזיר `409`.
+`request_type_id` ניתן לעדכון רק לסוג פעיל באותה סביבה. שינוי נשמר ללא אובדן ערכים רק
+כאשר ה־Form וה־Workflow תואמים; אחרת מוחזר `409` ונדרש תהליך המרה מפורש.
 
 ## משתתפים, תגובות ואישורים
 
 - `GET/POST /api/cases/{id}/participants`; `DELETE /api/cases/{id}/participants/{user_id}`.
 - `include_participating=false` כברירת מחדל; `true` אינו עוקף הרשאת צפייה.
-- תגובות ציבוריות והודעות מנהלים מופרדות והרשאת visibility נאכפת בשרת.
+- `GET/POST /api/cases/{id}/public-comments` מיועד לשיחה הציבורית של בעלי גישה לקריאה.
+- `GET /api/cases/{id}/manager-comments` דורש `comment.manager.read`; `POST` דורש
+  `comment.manager.create`. הערוץ אינו נחשף כלל ב־UI ללא הרשאת הקריאה.
+- תגובות ציבוריות והודעות מנהלים נשמרות ומוחזרות בנפרד; הרשאת visibility נאכפת בשרת
+  ואינה תלויה בהסתרת רכיבים ב־UI.
 - החלטת אישור: `POST /api/approval-tasks/{task_id}/decision`. רק המאשר של task פעיל רשאי
   להחליט; מנהל מערכת אינו מאשר במקום אדם אחר.
+- `GET /api/approvals/pending-for-me` מחזיר רק משימות פעילות בשלב הפעיל של המשתמש המחובר.
+- נעילה ושחרור נעילה מותרים רק למנהל מערכת או לבעל `environment.manage` באותה סביבה.
+  בקריאה נעולה משתמש אחר מקבל `403` בעדכון שדות, סטטוס או משתתפים; תגובה ציבורית נשארת
+  מותרת לפי הרשאת התגובה.
 
 ## אוטומציות, דוחות וקבצים
 

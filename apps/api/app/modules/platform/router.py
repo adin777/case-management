@@ -297,6 +297,31 @@ def case_approvals(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, 
             for instance, flow in rows]
 
 
+@router.get("/approvals/pending-for-me")
+def pending_approvals_for_me(db: DB, user: Current) -> list[dict[str, Any]]:
+    rows = db.execute(
+        select(ApprovalTask, ApprovalInstance, ApprovalStepDefinition, Case, Environment, RequestType)
+        .join(ApprovalInstance, ApprovalTask.approval_instance_id == ApprovalInstance.id)
+        .join(ApprovalStepDefinition, ApprovalTask.step_definition_id == ApprovalStepDefinition.id)
+        .join(Case, ApprovalInstance.case_id == Case.id)
+        .join(Environment, Case.environment_id == Environment.id)
+        .join(RequestType, Case.request_type_id == RequestType.id)
+        .where(
+            ApprovalTask.approver_user_id == user.id,
+            ApprovalTask.status == "pending",
+            ApprovalInstance.status == "pending",
+            ApprovalStepDefinition.step_order == ApprovalInstance.current_step_order,
+        )
+        .order_by(ApprovalInstance.started_at)
+    ).all()
+    return [{
+        "task_id": task.id, "case_id": case_item.id, "case_number": case_item.case_number,
+        "title": case_item.title, "environment": environment.name_he,
+        "request_type": request_type.name_he, "step_name": step.name,
+        "requested_at": instance.started_at, "status": task.status,
+    } for task, instance, step, case_item, environment, request_type in rows]
+
+
 @router.post("/approval-tasks/{task_id}/decision")
 def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) -> dict[str, Any]:
     task = db.get(ApprovalTask, task_id)
@@ -374,7 +399,11 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
                  include_participating: bool = False) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
-    if not user.is_system_admin:
+    can_read_environment = bool(environment_id and (
+        "case.read_environment" in permissions(db, user, environment_id)
+        or "environment.manage" in permissions(db, user, environment_id)
+    ))
+    if not user.is_system_admin and not can_read_environment:
         access_conditions = [
             Case.requester_id == user.id,
             Case.reporter_id == user.id,

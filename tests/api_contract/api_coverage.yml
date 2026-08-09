@@ -2,6 +2,12 @@ POST /api/auth/login:
   - test_valid_login_and_current_user
 GET /api/auth/me:
   - test_valid_login_and_current_user
+POST /api/impersonation/start:
+  - test_impersonation_uses_target_permissions_and_can_be_stopped
+POST /api/impersonation/stop:
+  - test_impersonation_uses_target_permissions_and_can_be_stopped
+GET /api/impersonation/status:
+  - test_impersonation_uses_target_permissions_and_can_be_stopped
 GET /api/environments:
   - test_admin_can_create_environment_and_audit_is_written
 PATCH /api/environments/{environment_id}:
@@ -16,6 +22,14 @@ POST /api/cases:
   - test_create_two_cases_with_same_business_values_and_without_dynamic_form
 PATCH /api/cases/{case_id}:
   - test_case_lock_blocks_edit_but_allows_public_comment
+GET /api/cases/{case_id}/public-comments:
+  - test_participant_access_public_comments_and_manager_isolation
+POST /api/cases/{case_id}/public-comments:
+  - test_participant_access_public_comments_and_manager_isolation
+GET /api/cases/{case_id}/manager-comments:
+  - test_participant_access_public_comments_and_manager_isolation
+POST /api/cases/{case_id}/manager-comments:
+  - test_participant_access_public_comments_and_manager_isolation
 GET /api/cases/{case_id}/status-options:
   - test_status_options_return_all_active_statuses_and_mark_invalid_targets
 POST /api/workflow-statuses/{status_id}/set-initial:
@@ -25,4 +39,6 @@ PUT /api/environments/{environment_id}/system-fields/{field_code}/reorder:
 GET /api/reports/cases:
   - test_copy_groups_preview_and_report_permission_403
 POST /api/approval-tasks/{task_id}/decision:
+  - test_two_step_approval_flow
+GET /api/approvals/pending-for-me:
   - test_two_step_approval_flow

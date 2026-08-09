@@ -107,6 +107,9 @@ def test_two_step_approval_flow() -> None:
     })
     assert flow.status_code == 201
     item = create_case(headers)
+    pending = client.get("/api/approvals/pending-for-me", headers=auth("agent@example.com", "Agent123!"))
+    assert pending.status_code == 200
+    assert any(row["case_id"] == item["id"] and row["step_name"] == "אישור מטפל" for row in pending.json())
     approval = next(row for row in client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json() if row["name"] == "אישור דו שלבי")
     first = approval["tasks"][0]
     assert client.post(f"/api/approval-tasks/{first['id']}/decision", headers=auth("agent@example.com", "Agent123!"), json={"decision": "approved"}).status_code == 200
@@ -157,13 +160,29 @@ def test_case_lock_blocks_edit_but_allows_public_comment() -> None:
     blocked = client.patch(f"/api/cases/{item['id']}", headers=agent_headers, json={
         "title": "עריכה אסורה", "version": locked.json()["version"],
     })
-    assert blocked.status_code == 423
+    assert blocked.status_code == 403
+    assert client.post(f"/api/cases/{item['id']}/lock", headers=agent_headers, json={
+        "locked": False, "version": locked.json()["version"],
+    }).status_code == 403
     comment = client.post(f"/api/cases/{item['id']}/public-comments", headers=agent_headers, json={"body": "תגובה מותרת"})
     assert comment.status_code == 201
     unlocked = client.post(f"/api/cases/{item['id']}/lock", headers=admin_headers, json={
         "locked": False, "version": locked.json()["version"],
     })
     assert unlocked.status_code == 200 and unlocked.json()["is_locked"] is False
+
+
+def test_participant_add_remove_and_locked_case_permissions() -> None:
+    admin = auth(); item = create_case(admin)
+    users = client.get("/api/users", headers=admin).json()
+    participant = next(row for row in users if row["email"] == "requester@example.com")
+    added = client.post(f"/api/cases/{item['id']}/participants", headers=admin, json={"user_id": participant["id"]})
+    assert added.status_code == 201
+    removed = client.delete(f"/api/cases/{item['id']}/participants/{participant['id']}", headers=admin)
+    assert removed.status_code == 204
+    unauthorized = auth("requester@example.com", "Requester123!")
+    assert client.post(f"/api/cases/{item['id']}/participants", headers=unauthorized, json={"user_id": participant["id"]}).status_code == 403
+    assert client.delete(f"/api/cases/{item['id']}/participants/{participant['id']}", headers=unauthorized).status_code == 403
 
 
 def test_report_filters_creator_assignee_and_updated_date() -> None:

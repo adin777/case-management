@@ -264,6 +264,23 @@ def test_create_two_cases_with_same_business_values_and_without_dynamic_form() -
         assert first.json()["id"] != second.json()["id"]
         assert first.json()["case_number"] != second.json()["case_number"]
         assert first.json()["form_definition_id"] is None
+        with SessionLocal() as db:
+            source = db.get(RequestType, uuid.UUID(request_type["id"]))
+            assert source is not None
+            target = RequestType(
+                system_number=f"RT-SWITCH-{uuid.uuid4().hex[:8]}", environment_id=source.environment_id,
+                code=f"switch_{uuid.uuid4().hex[:8]}", name_he="סוג חלופי", name_en="Alternative",
+                is_active=True, sort_order=99, requires_approval=source.requires_approval,
+                workflow_definition_id=source.workflow_definition_id, form_version_id=None,
+            )
+            db.add(target); db.commit(); target_id = target.id
+        changed = client.patch(f"/api/cases/{first.json()['id']}", headers=login_headers("admin@example.com", "Admin123!"), json={
+            "request_type_id": str(target_id), "version": first.json()["version"],
+        })
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["request_type_id"] == str(target_id)
+        assert changed.json()["environment_id"] == environment["id"]
+        assert changed.json()["values"] == first.json()["values"]
     finally:
         with SessionLocal() as db:
             stored = db.get(RequestType, uuid.UUID(request_type["id"]))
@@ -323,3 +340,20 @@ def test_status_options_return_all_active_statuses_and_mark_invalid_targets() ->
     assert len(rows) >= 2
     assert any(row["current"] for row in rows)
     assert any(not row["allowed"] and row["reason"] for row in rows)
+
+
+def test_impersonation_uses_target_permissions_and_can_be_stopped() -> None:
+    admin = login_headers("admin@example.com", "Admin123!")
+    requester = next(row for row in client.get("/api/users", headers=admin).json()
+                     if row["email"] == "requester@example.com")
+    started = client.post("/api/impersonation/start", headers=admin, json={"user_id": requester["id"]})
+    assert started.status_code == 200
+    impersonated = {"Authorization": f"Bearer {started.json()['access_token']}"}
+    assert client.get("/api/auth/me", headers=impersonated).json()["id"] == requester["id"]
+    assert client.get("/api/impersonation/status", headers=impersonated).json()["active"] is True
+    assert client.post("/api/impersonation/start", headers=impersonated,
+                       json={"user_id": requester["id"]}).status_code == 409
+    stopped = client.post("/api/impersonation/stop", headers=impersonated)
+    assert stopped.status_code == 200
+    restored = {"Authorization": f"Bearer {stopped.json()['access_token']}"}
+    assert client.get("/api/auth/me", headers=restored).json()["is_system_admin"] is True
