@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
@@ -5,12 +6,52 @@ from sqlalchemy import case as sql_case
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.models import Case, RequestType
+from app.modules.models import Case, RequestType, User
 from app.modules.operations.models import SlaPolicy, WorkflowDefinition, WorkflowStatus
 
 
+def ensure_environment_statuses(
+    db: Session, environment_id: uuid.UUID, created_by: uuid.UUID | None = None
+) -> tuple[WorkflowDefinition, WorkflowStatus]:
+    """Use the legacy workflow tables as storage without requiring workflow setup."""
+    workflow = db.scalar(select(WorkflowDefinition).where(
+        WorkflowDefinition.environment_id == environment_id,
+        WorkflowDefinition.is_default.is_(True),
+        WorkflowDefinition.is_active.is_(True),
+    ))
+    if not workflow:
+        owner_id = created_by or db.scalar(select(User.id).order_by(User.is_system_admin.desc(), User.created_at))
+        if not owner_id:
+            raise HTTPException(409, "לא ניתן ליצור סטטוס התחלתי ללא משתמש מערכת")
+        workflow = WorkflowDefinition(
+            system_number=f"WF-{str(environment_id).replace('-', '')[:8].upper()}",
+            environment_id=environment_id, name_he="סטטוסים", name_en="Statuses",
+            description="תצורת הסטטוסים הפנימית של הסביבה", is_active=True,
+            is_default=True, created_by=owner_id,
+        )
+        db.add(workflow)
+        db.flush()
+    initial = db.scalar(select(WorkflowStatus).where(
+        WorkflowStatus.workflow_id == workflow.id,
+        WorkflowStatus.is_initial.is_(True),
+        WorkflowStatus.is_active.is_(True),
+    ))
+    if not initial:
+        initial = WorkflowStatus(
+            workflow_id=workflow.id, code="open", label_he="פתוח", label_en="Open",
+            description=None, color="#2563eb", sort_order=0, semantic_category="open",
+            is_initial=True, is_final=False, is_closed=False, is_active=True,
+        )
+        db.add(initial)
+        db.flush()
+    return workflow, initial
+
+
 def resolve_workflow(db: Session, request_type: RequestType) -> tuple[WorkflowDefinition, WorkflowStatus]:
-    workflow = db.get(WorkflowDefinition, request_type.workflow_definition_id)
+    workflow = (
+        db.get(WorkflowDefinition, request_type.workflow_definition_id)
+        if request_type.workflow_definition_id else None
+    )
     if not workflow or not workflow.is_active:
         workflow = db.scalar(
             select(WorkflowDefinition).where(
@@ -20,7 +61,7 @@ def resolve_workflow(db: Session, request_type: RequestType) -> tuple[WorkflowDe
             )
         )
     if not workflow:
-        raise HTTPException(409, "לא הוגדר תהליך עבודה לסוג הקריאה שנבחר")
+        return ensure_environment_statuses(db, request_type.environment_id)
     initial = db.scalar(
         select(WorkflowStatus).where(
             WorkflowStatus.workflow_id == workflow.id,
@@ -29,7 +70,7 @@ def resolve_workflow(db: Session, request_type: RequestType) -> tuple[WorkflowDe
         )
     )
     if not initial:
-        raise HTTPException(409, "לא הוגדר סטטוס התחלתי לתהליך העבודה")
+        return ensure_environment_statuses(db, request_type.environment_id)
     return workflow, initial
 
 

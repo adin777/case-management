@@ -1,4 +1,4 @@
-export type Environment = { id: string; code: string; name_he: string; name_en: string; description?: string; is_active: boolean };
+export type Environment = { id: string; system_number: string; code: string; name_he: string; name_en: string; description?: string; is_active: boolean };
 export type RequestType = { id: string; system_number?: string; environment_id: string; code: string; name_he: string; name_en: string; description?: string; is_active: boolean; form_version_id?: string; workflow_definition_id?: string; default_priority_id?: string; default_sub_priority_id?: string; default_assignee_user_id?: string; default_assignee_group_id?: string };
 export type Field = { id?: string; key: string; label_he: string; label_en: string; field_type: string; is_required: boolean; is_read_only: boolean; is_active?: boolean; sort_order: number; configuration_json: { options?: string[] } };
 export type Form = { id: string; request_type_id: string; version: number; status: 'draft' | 'published'; fields: Field[] };
@@ -15,7 +15,7 @@ export type Role = { id: string; system_number?: string; code: string; name: str
 export type Permission = { code: string; description?: string; name_he?: string; description_he?: string; category?: string; scope?: string; is_active?: boolean; user_count?: number; group_count?: number };
 export type UserFieldType = 'short_text' | 'long_text' | 'number' | 'date' | 'boolean' | 'single_select' | 'multi_select' | 'user' | 'email' | 'phone';
 export type UserFieldOption = { value: string; label_he: string; label_en: string; is_active: boolean; sort_order: number };
-export type UserField = { id: string; key: string; label_he: string; label_en: string; field_type: UserFieldType; is_required: boolean; is_active: boolean; options_json: UserFieldOption[]; default_value_json?: unknown; validation_json: Record<string, unknown>; sort_order: number; environment_ids: string[] };
+export type UserField = { id: string; scope?: 'global'|'environment'; environment_id?: string; key: string; label_he: string; label_en: string; field_type: UserFieldType; is_required: boolean; is_active: boolean; options_json: UserFieldOption[]; default_value_json?: unknown; validation_json: Record<string, unknown>; sort_order: number; environment_ids: string[] };
 export type UserFieldCreatePayload = { key: string; label_he: string; label_en: string; field_type: UserFieldType; is_required: boolean; is_active: boolean; options_json: UserFieldOption[]; default_value_json: unknown; validation_json: Record<string, unknown>; sort_order: number; environment_ids: string[] };
 export type ApiValidationError = { type: string; loc: (string | number)[]; msg: string; input?: unknown; ctx?: Record<string, unknown> };
 export type Priority = { id: string; system_number?: string; code: string; label_he: string; label_en?: string; description?: string; color: string; sort_order: number; is_active: boolean; sub_priorities: SubPriority[] };

@@ -106,3 +106,7 @@ POST /api/environments/{environment_id}/assignment-rules:
   - test_environment_assignment_endpoints_contract
 PUT /api/environment-assignment-rules/{rule_id}:
   - test_environment_assignment_endpoints_contract
+POST /api/environments/{environment_id}/clone:
+  - test_environment_number_is_automatic_and_case_does_not_require_workflow
+POST /api/environments/{environment_id}/user-field-definitions:
+  - test_global_and_environment_user_fields_are_scoped

@@ -12,7 +12,7 @@ const baseLinks: LinkItem[] = [
   { url: '/reports/cases', label: 'דוח קריאות שירות', icon: <Assessment/> },
   { url: '/admin/environments', label: 'סביבות וסוגי קריאות', icon: <Settings/> },
   { url: '/admin/users', label: 'משתמשים והרשאות', icon: <Groups/>, admin: true },
-  { url: '/admin/user-fields', label: 'הגדרות מערכת — שדות משתמש', icon: <Settings/>, admin: true },
+  { url: '/admin/user-fields', label: 'שדות משתמש', icon: <Settings/>, admin: true },
   { url: '/admin/permissions', label: 'ניהול הרשאות גורף', icon: <LockPerson/>, admin: true },
 ];
 

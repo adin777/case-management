@@ -10,6 +10,7 @@ from app.modules.models import (
     AutomationRule,
     Case,
     CaseFieldDefinition,
+    Environment,
     Group,
     NumberingSeries,
     PriorityDefinition,
@@ -22,6 +23,7 @@ PREFIXES = {
     "case": "CASE", "request_type": "RT", "case_field": "CF", "user_field": "UF",
     "user_group": "UG", "approval_flow": "AF", "approval_instance": "AI",
     "automation_rule": "AR", "priority": "PR", "sub_priority": "SP",
+    "environment": "ENV",
 }
 NUMBERED_MODELS: dict[str, tuple[type[Any], str]] = {
     "case": (Case, "case_number"), "request_type": (RequestType, "system_number"),
@@ -32,6 +34,7 @@ NUMBERED_MODELS: dict[str, tuple[type[Any], str]] = {
     "automation_rule": (AutomationRule, "system_number"),
     "priority": (PriorityDefinition, "system_number"),
     "sub_priority": (SubPriorityDefinition, "system_number"),
+    "environment": (Environment, "system_number"),
 }
 
 

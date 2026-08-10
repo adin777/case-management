@@ -21,6 +21,8 @@ from app.database.session import get_db
 from app.modules.access.service import domain_permissions
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
+from app.modules.employees.service import sync_employee_for_user
+from app.modules.environment_clone.service import clone_configuration
 from app.modules.models import (
     AuditEvent,
     Case,
@@ -33,6 +35,7 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    Group,
     PriorityDefinition,
     RefreshToken,
     RequestType,
@@ -47,7 +50,11 @@ from app.modules.operations.models import (
     WorkflowStatus,
     WorkflowTransition,
 )
-from app.modules.operations.service import initialize_operations, resolve_workflow
+from app.modules.operations.service import (
+    ensure_environment_statuses,
+    initialize_operations,
+    resolve_workflow,
+)
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -118,7 +125,6 @@ class UserOut(BaseModel):
 
 
 class EnvironmentIn(BaseModel):
-    code: str = Field(pattern=r"^[A-Z0-9_-]+$")
     name_he: str
     name_en: str
     description: str | None = None
@@ -126,8 +132,18 @@ class EnvironmentIn(BaseModel):
 
 class EnvironmentOut(EnvironmentIn):
     id: uuid.UUID
+    system_number: str
+    code: str
     is_active: bool
     model_config = {"from_attributes": True}
+
+
+class EnvironmentCloneIn(BaseModel):
+    name_he: str
+    name_en: str
+    description: str | None = None
+    copy_memberships: bool = False
+    copy_knowledge: bool = False
 
 
 class MembershipIn(BaseModel):
@@ -461,6 +477,7 @@ def register(data: RegisterIn, db: DB) -> TokenOut:
     )
     db.add(user)
     db.flush()
+    sync_employee_for_user(db, user)
     active_environments = list(db.scalars(select(Environment).where(Environment.is_active.is_(True))))
     if len(active_environments) == 1:
         db.add(EnvironmentMembership(environment_id=active_environments[0].id, user_id=user.id,
@@ -576,8 +593,12 @@ def roles(db: DB, user: Current) -> list[dict]:
 
 
 @router.get("/groups")
-def groups(user: Current) -> list[dict]:
-    return []
+def groups(db: DB, user: Current) -> list[dict]:
+    if not user.is_system_admin:
+        raise HTTPException(403, "System administrator required")
+    return [{"id": row.id, "name": row.name, "description": row.description,
+             "is_active": row.is_active, "member_count": 0}
+            for row in db.scalars(select(Group).order_by(Group.name))]
 
 
 @router.get("/environments", response_model=list[EnvironmentOut])
@@ -585,7 +606,15 @@ def environments(db: DB, user: Current) -> list[Environment]:
     query = select(Environment).order_by(Environment.name_he)
     if not user.is_system_admin:
         query = query.join(EnvironmentMembership).where(EnvironmentMembership.user_id == user.id)
-    return list(db.scalars(query).unique())
+    rows = list(db.scalars(query).unique())
+    changed = False
+    for row in rows:
+        if not row.system_number:
+            row.system_number = NumberingService.next(db, "environment")
+            changed = True
+    if changed:
+        db.commit()
+    return rows
 
 
 @router.get("/case-creation/environments", response_model=list[EnvironmentOut])
@@ -596,15 +625,26 @@ def case_creation_environments(db: DB, user: Current) -> list[Environment]:
             EnvironmentMembership.user_id == user.id,
             EnvironmentMembership.is_active.is_(True),
         )
-    return list(db.scalars(query).unique())
+    rows = list(db.scalars(query).unique())
+    changed = False
+    for row in rows:
+        if not row.system_number:
+            row.system_number = NumberingService.next(db, "environment")
+            changed = True
+    if changed:
+        db.commit()
+    return rows
 
 
 @router.post("/environments", response_model=EnvironmentOut, status_code=201)
 def create_environment(data: EnvironmentIn, db: DB, user: Current) -> Environment:
     if not user.is_system_admin:
         raise HTTPException(403, "System administrator required")
-    item = Environment(**data.model_dump())
+    system_number = NumberingService.next(db, "environment")
+    item = Environment(code=system_number, system_number=system_number, **data.model_dump())
     db.add(item)
+    db.flush()
+    ensure_environment_statuses(db, item.id, user.id)
     try:
         db.flush()
     except IntegrityError as exc:
@@ -614,6 +654,27 @@ def create_environment(data: EnvironmentIn, db: DB, user: Current) -> Environmen
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.post("/environments/{environment_id}/clone", status_code=201)
+def clone_environment(environment_id: uuid.UUID, data: EnvironmentCloneIn, db: DB, user: Current) -> dict[str, Any]:
+    if not user.is_system_admin:
+        raise HTTPException(403, "System administrator required")
+    source = db.get(Environment, environment_id)
+    if not source:
+        raise HTTPException(404, "Environment not found")
+    system_number = NumberingService.next(db, "environment")
+    target = Environment(code=system_number, system_number=system_number, name_he=data.name_he,
+        name_en=data.name_en, description=data.description, is_active=True)
+    db.add(target); db.flush()
+    counts = clone_configuration(db, source, target, user.id, data.copy_memberships, data.copy_knowledge)
+    ensure_environment_statuses(db, target.id, user.id)
+    audit(db, user, "environment", target.id, "cloned", after={
+        "source_environment_id": str(source.id), **counts,
+        "copy_memberships": data.copy_memberships, "copy_knowledge": data.copy_knowledge,
+    })
+    db.commit(); db.refresh(target)
+    return {"environment": EnvironmentOut.model_validate(target), "summary": counts}
 
 
 @router.get("/environments/{environment_id}", response_model=EnvironmentOut)
@@ -1294,8 +1355,18 @@ def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[
         WorkflowTransition.is_active.is_(True),
         WorkflowStatus.is_active.is_(True),
     ).order_by(WorkflowTransition.sort_order)).all()
-    return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
-             "requires_comment": transition.requires_comment} for transition, status in rows]
+    if rows:
+        return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
+                 "requires_comment": transition.requires_comment} for transition, status in rows]
+    statuses = db.scalars(select(WorkflowStatus).join(
+        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id,
+    ).where(
+        WorkflowDefinition.environment_id == item.environment_id,
+        WorkflowStatus.is_active.is_(True),
+        WorkflowStatus.id != item.workflow_status_id,
+    ).order_by(WorkflowStatus.sort_order))
+    return [{"id": status.id, "label_he": status.label_he, "transition_id": None,
+             "requires_comment": False} for status in statuses]
 
 
 @router.get("/cases/{case_id}/status-options")
@@ -1315,13 +1386,14 @@ def status_options(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, 
         WorkflowTransition.is_active.is_(True),
     )).scalars().all()
     allowed_ids = {row.to_status_id for row in allowed_rows}
+    unrestricted = not allowed_ids
     can_change = "case.change_status" in permissions(db, user, item.environment_id)
     return [{
         "id": str(status.id),
         "label_he": status.label_he,
         "current": status.id == item.workflow_status_id,
-        "allowed": can_change and status.id in allowed_ids,
-        "reason": None if can_change and status.id in allowed_ids else (
+        "allowed": can_change and status.id != item.workflow_status_id and (unrestricted or status.id in allowed_ids),
+        "reason": None if can_change and status.id != item.workflow_status_id and (unrestricted or status.id in allowed_ids) else (
             "זהו הסטטוס הנוכחי" if status.id == item.workflow_status_id
             else "לא ניתן לעבור ישירות מהסטטוס הנוכחי"
         ),
@@ -1447,11 +1519,18 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
         WorkflowTransition.is_active.is_(True),
     ))
     target = db.get(WorkflowStatus, data.workflow_status_id)
-    if not transition_row or not target or not target.is_active:
+    configured_transitions = db.scalar(select(func.count()).select_from(WorkflowTransition).where(
+        WorkflowTransition.from_status_id == item.workflow_status_id,
+        WorkflowTransition.is_active.is_(True),
+    ))
+    if (configured_transitions and not transition_row) or not target or not target.is_active:
         raise HTTPException(409, "מעבר הסטטוס אינו חוקי בתהליך העבודה")
-    if transition_row.required_permission_code:
+    current_status = db.get(WorkflowStatus, item.workflow_status_id)
+    if not current_status or target.workflow_id != current_status.workflow_id:
+        raise HTTPException(409, "סטטוס היעד אינו שייך לסביבה")
+    if transition_row and transition_row.required_permission_code:
         require(db, user, item.environment_id, transition_row.required_permission_code)
-    if transition_row.requires_comment and not (data.comment or "").strip():
+    if transition_row and transition_row.requires_comment and not (data.comment or "").strip():
         raise HTTPException(422, "המעבר מחייב הערה")
     before = item.workflow_status_id
     item.workflow_status_id = target.id
@@ -1459,7 +1538,7 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     if target.is_closed:
         item.closed_at = datetime.now(UTC)
     db.add(CaseStatusHistory(case_id=item.id, from_status_id=before, to_status_id=target.id,
-                             transition_id=transition_row.id, changed_by=user.id,
+                             transition_id=transition_row.id if transition_row else None, changed_by=user.id,
                              comment=(data.comment or "").strip() or None))
     AutomationEngine.run(db, item, "status_changed", {
         "status": str(target.id), "status_id": str(target.id),

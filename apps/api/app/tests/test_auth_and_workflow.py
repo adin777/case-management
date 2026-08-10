@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.database.session import SessionLocal
 from app.main import app
 from app.modules.api import password_hash
-from app.modules.models import EnvironmentMembership, RequestType, User
+from app.modules.models import Employee, EnvironmentMembership, RequestType, User
 
 client = TestClient(app)
 
@@ -54,6 +54,9 @@ def test_registration_hashes_password_and_assigns_requester() -> None:
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.email == "new.requester@example.com"))
         assert user is not None and user.is_active and not user.is_system_admin
+        assert user.employee_record_id is not None
+        employee = db.get(Employee, user.employee_record_id)
+        assert employee is not None and employee.email == user.email
         assert user.password_hash != "Secure123" and password_hash.verify("Secure123", user.password_hash)
         membership = db.scalar(select(EnvironmentMembership).where(EnvironmentMembership.user_id == user.id))
         assert membership is not None
@@ -94,6 +97,56 @@ def test_admin_can_create_environment_and_audit_is_written() -> None:
     assert response.status_code in (201, 409)
     audit = client.get("/api/audit", headers=headers)
     assert audit.status_code == 200
+
+
+def test_environment_number_is_automatic_and_case_does_not_require_workflow() -> None:
+    headers = login_headers("admin@example.com", "Admin123!")
+    created = []
+    for suffix in ("A", "B"):
+        response = client.post("/api/environments", headers=headers, json={
+            "code": f"USER_CHOSEN_{suffix}",
+            "name_he": f"סביבת בדיקה {suffix}",
+            "name_en": f"No workflow {suffix}",
+        })
+        assert response.status_code == 201, response.text
+        created.append(response.json())
+    assert created[0]["system_number"].startswith("ENV-")
+    assert created[1]["system_number"].startswith("ENV-")
+    assert int(created[1]["system_number"].split("-")[1]) == int(created[0]["system_number"].split("-")[1]) + 1
+    assert all(item["code"] == item["system_number"] for item in created)
+    assert all(item["code"] not in {"USER_CHOSEN_A", "USER_CHOSEN_B"} for item in created)
+
+    request_type = client.post("/api/request-types", headers=headers, json={
+        "environment_id": created[0]["id"], "code": "plain", "name_he": "רגיל", "name_en": "Plain",
+    })
+    assert request_type.status_code == 201, request_type.text
+    assert request_type.json()["workflow_definition_id"] is None
+    priority = client.post(f"/api/environments/{created[0]['id']}/priorities", headers=headers, json={
+        "code": "normal", "label_he": "רגילה", "label_en": "Normal", "is_active": True,
+    })
+    assert priority.status_code == 201, priority.text
+    case = client.post("/api/cases", headers=headers, json={
+        "environment_id": created[0]["id"], "request_type_id": request_type.json()["id"],
+        "title": "קריאה ללא תהליך", "description": "פתיחה רגילה",
+        "priority_id": priority.json()["id"], "values": [],
+    })
+    assert case.status_code == 201, case.text
+    assert case.json()["workflow_status_id"]
+
+    cloned = client.post(f"/api/environments/{created[0]['id']}/clone", headers=headers, json={
+        "name_he": "סביבה משוכפלת", "name_en": "Cloned environment",
+        "copy_memberships": False, "copy_knowledge": False,
+    })
+    assert cloned.status_code == 201, cloned.text
+    cloned_environment = cloned.json()["environment"]
+    assert cloned_environment["system_number"] not in {item["system_number"] for item in created}
+    cloned_types = client.get(
+        f"/api/request-types?environment_id={cloned_environment['id']}", headers=headers
+    ).json()
+    assert [item["name_he"] for item in cloned_types] == ["רגיל"]
+    assert all(item["environment_id"] == cloned_environment["id"] for item in cloned_types)
+    assert not [item for item in client.get("/api/cases", headers=headers).json()
+                if item["environment_id"] == cloned_environment["id"]]
 
 
 def login_headers(email: str, password: str) -> dict[str, str]:

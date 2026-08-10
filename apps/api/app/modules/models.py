@@ -78,6 +78,27 @@ class User(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_system_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    employee_record_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("employees.id"), unique=True)
+
+
+class Employee(TimestampMixin, Base):
+    __tablename__ = "employees"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    first_name: Mapped[str | None] = mapped_column(String(120))
+    last_name: Mapped[str | None] = mapped_column(String(120))
+    display_name: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    department: Mapped[str | None] = mapped_column(String(200), index=True)
+    job_title: Mapped[str | None] = mapped_column(String(200), index=True)
+    phone: Mapped[str | None] = mapped_column(String(80))
+    mobile_phone: Mapped[str | None] = mapped_column(String(80))
+    employee_number: Mapped[str | None] = mapped_column(String(120), unique=True, index=True)
+    computer_identifier: Mapped[str | None] = mapped_column(String(200))
+    directory_object_id: Mapped[str | None] = mapped_column(String(200), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    directory_data_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Group(TimestampMixin, Base):
@@ -145,6 +166,7 @@ class Environment(TimestampMixin, Base):
     __tablename__ = "environments"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(80), unique=True)
+    system_number: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
     name_he: Mapped[str] = mapped_column(String(200))
     name_en: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
@@ -367,6 +389,8 @@ class UserFieldDefinition(TimestampMixin, Base):
     default_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
     validation_json: Mapped[dict] = mapped_column(JSON, default=dict)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    scope: Mapped[str] = mapped_column(String(20), default="global")
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"))
 
 
 class UserFieldValue(Base):

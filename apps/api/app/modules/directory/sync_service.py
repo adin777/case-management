@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.directory.provider import DirectoryBatch, NormalizedDirectoryUser
+from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_assignments.service import apply_all_rules
 from app.modules.models import DirectorySyncRun, User
 
@@ -22,6 +23,9 @@ class UserSyncService:
     def _match(self, row: NormalizedDirectoryUser) -> User | None:
         if row.directory_object_id:
             matched = self.db.scalar(select(User).where(User.directory_object_id == row.directory_object_id))
+            if matched: return matched
+        if row.employee_id:
+            matched = self.db.scalar(select(User).where(User.employee_id == row.employee_id))
             if matched: return matched
         if row.user_principal_name:
             matched = self.db.scalar(select(User).where(
@@ -63,6 +67,8 @@ class UserSyncService:
             user.source = self.source; user.last_directory_sync_at = now
             if not incoming.directory_enabled and user.status == "active": user.status = "inactive"
             user.is_active = user.status == "active" and incoming.directory_enabled
+            self.db.flush()
+            sync_employee_for_user(self.db, user)
         run.created_count, run.updated_count = preview["created"], preview["updated"]
         run.disabled_count, run.unchanged_count = preview["disabled"], preview["unchanged"]
         run.error_count, run.delta_reference = preview["errors"], batch.delta_link

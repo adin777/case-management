@@ -214,3 +214,13 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 
 מנהל מערכת מקבל `edit` באופן דינמי בכל PermissionDomain פעיל, כולל Domain שנוסף בעתיד, בלי ליצור
 Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה מחזירה token של המשתמש המקורי.
+
+## סביבות, עובדים וסטטוסים פשוטים
+
+- `POST /api/environments` מקבל `name_he`, ‏`name_en` ו־`description` בלבד. `code` שנשלח בידי לקוח נזנח; השרת מקצה `system_number` רציף בפורמט `ENV-######` ומשתמש בו גם כמפתח הטכני התואם־לאחור.
+- `POST /api/environments/{environment_id}/clone` דורש מנהל מערכת ומקבל שמות, תיאור ושני דגלים אופציונליים: `copy_memberships` ו־`copy_knowledge` (ברירת מחדל `false`). התגובה כוללת `environment` חדש ו־`summary`. תצורת סוגי הקריאה, טפסים, סטטוסים, עדיפויות, שדות, אוטומציות, אישורים ו־SLA מועתקת עם IDs ומספרים חדשים; Cases, תגובות, קבצים, היסטוריית אישורים, Audit ומספור אינם מועתקים.
+- `Employee` הוא רשומת האדם הארגונית ו־`User.employee_record_id` הוא קישור יחיד אופציונלי לחשבון כניסה. יצירה ידנית, רישום, Import וסנכרון Directory יוצרים או מעדכנים את שתי הרשומות יחד. סדר ההתאמה הוא Directory Object ID, מספר עובד, UPN ולבסוף Email.
+- `GET/POST/PATCH /api/user-fields` מנהלים הגדרות גלובליות (`scope=global`). `POST /api/environments/{environment_id}/user-field-definitions` יוצר הגדרה סביבתית (`scope=environment`) שאינה מוצגת בסביבה אחרת. השבתה אינה מוחקת `UserFieldValue` קיים.
+- יצירת Request Type אינה דורשת `workflow_definition_id`. לכל סביבה נשמרת פנימית תצורת סטטוסים עם סטטוס התחלתי פעיל יחיד; Case חדש מקבל אותו אוטומטית. היעדר Workflow מפורש אינו מחזיר שגיאת "Workflow not configured".
+- `GET /api/cases/{case_id}/allowed-transitions` ו־`status-options`: אם קיימים כללי מעבר פעילים הם נאכפים; אם אין כלל יוצא, כל סטטוס פעיל אחר מותר בכפוף ל־`case.change_status`.
+- `POST /api/environments/{environment_id}/memberships` מקבל בדיוק אחד מבין `user_id` או `group_id`. כללי Department/Job Title מנוהלים דרך `/assignment-rules`; Preview מחזיר גם `matched` וגם רשימת `users`. חישוב מחדש מסיר רק Memberships שמקורם באותו כלל ולעולם לא Membership ידני.

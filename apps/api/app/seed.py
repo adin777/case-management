@@ -8,6 +8,7 @@ from app.database.session import SessionLocal
 from app.modules.access.mapping import DOMAIN_DEFINITIONS, codes
 from app.modules.access.models import AccessLevelAssignment, PermissionDomain
 from app.modules.api import ALL_PERMISSIONS, password_hash
+from app.modules.employees.service import sync_employee_for_user
 from app.modules.models import (
     Environment,
     EnvironmentMembership,
@@ -24,6 +25,7 @@ from app.modules.models import (
     SubPriorityDefinition,
     User,
 )
+from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import SlaPolicy, WorkflowDefinition, WorkflowStatus, WorkflowTransition
 
 
@@ -165,6 +167,7 @@ def run(*, include_demo_data: bool = False) -> None:
                     valid = False
                 if not valid:
                     user.password_hash = password_hash.hash(password)
+            sync_employee_for_user(db, user)
             users[email] = user
 
         ensure_foundation(db, users["admin@example.com"])
@@ -174,10 +177,13 @@ def run(*, include_demo_data: bool = False) -> None:
 
         env = db.scalar(select(Environment).where(Environment.code == "IT"))
         if not env:
-            env = Environment(code="IT", name_he="שירותי IT", name_en="IT Service",
+            env = Environment(code="IT", system_number=NumberingService.next(db, "environment"),
+                              name_he="שירותי IT", name_en="IT Service",
                               description="סביבת שירותי טכנולוגיה")
             db.add(env)
             db.flush()
+        elif not env.system_number:
+            env.system_number = NumberingService.next(db, "environment")
         for email, role_code in ([
             ("envadmin@example.com", "environment_admin"),
             ("requester@example.com", "requester"),

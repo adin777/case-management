@@ -110,6 +110,29 @@ def test_environment_admin_manages_only_a_user_in_own_environment() -> None:
     assert denied.status_code == 403
 
 
+def test_global_and_environment_user_fields_are_scoped() -> None:
+    headers = auth("admin@example.com", "Admin123!")
+    environments = client.get("/api/environments", headers=headers).json()[:2]
+    global_field = client.post("/api/user-fields", headers=headers, json={
+        "key": f"global_{uuid.uuid4().hex[:8]}", "label_he": "שדה כללי", "field_type": "short_text",
+        "environment_ids": [environments[0]["id"]],
+    })
+    assert global_field.status_code == 201, global_field.text
+    assert global_field.json()["scope"] == "global"
+    assert global_field.json()["environment_ids"] == [environments[0]["id"]]
+    environment_field = client.post(
+        f"/api/environments/{environments[0]['id']}/user-field-definitions", headers=headers, json={
+            "key": f"environment_{uuid.uuid4().hex[:8]}", "label_he": "שדה סביבתי",
+            "field_type": "short_text",
+        })
+    assert environment_field.status_code == 201, environment_field.text
+    assert environment_field.json()["scope"] == "environment"
+    first = client.get(f"/api/environments/{environments[0]['id']}/user-fields", headers=headers).json()
+    second = client.get(f"/api/environments/{environments[1]['id']}/user-fields", headers=headers).json()
+    assert any(row["definition"]["id"] == environment_field.json()["id"] for row in first)
+    assert not any(row["definition"]["id"] == environment_field.json()["id"] for row in second)
+
+
 def test_group_permissions_are_unioned_and_removed_with_membership() -> None:
     headers = auth("admin@example.com", "Admin123!")
     environment = it_environment(headers)

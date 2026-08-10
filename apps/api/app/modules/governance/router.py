@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from sqlalchemy import delete, func, or_, select
 
 from app.modules.api import DB, Current, audit, case_access, password_hash, require
+from app.modules.employees.service import sync_employee_for_user
 from app.modules.models import (
     AutomationRule,
     Case,
@@ -322,6 +323,7 @@ def create_user(data: UserCreate, db: DB, user: Current) -> dict[str, Any]:
     )
     db.add(item)
     db.flush()
+    sync_employee_for_user(db, item)
     audit(db, user, "user", item.id, "created")
     db.commit()
     return user_dict(db, item)
@@ -798,6 +800,8 @@ def user_field_dict(item: UserFieldDefinition) -> dict[str, Any]:
         "default_value_json": item.default_value_json,
         "validation_json": item.validation_json,
         "sort_order": item.sort_order,
+        "scope": item.scope,
+        "environment_id": item.environment_id,
     }
 
 
@@ -826,7 +830,9 @@ def validate_environments(db: DB, environment_ids: list[uuid.UUID]) -> list[Envi
 def list_user_fields(db: DB, user: Current) -> list[dict[str, Any]]:
     system_admin(user)
     result = []
-    for item in db.scalars(select(UserFieldDefinition).order_by(UserFieldDefinition.sort_order)):
+    for item in db.scalars(select(UserFieldDefinition).where(
+        UserFieldDefinition.scope == "global"
+    ).order_by(UserFieldDefinition.sort_order)):
         environment_ids = list(
             db.scalars(
                 select(EnvironmentUserField.environment_id).where(
@@ -844,7 +850,8 @@ def create_user_field(data: UserFieldIn, db: DB, user: Current) -> dict[str, Any
     environments = validate_environments(db, data.environment_ids)
     payload = data.model_dump(exclude={"environment_ids"})
     payload["options_json"] = [option.model_dump() for option in data.options_json]
-    item = UserFieldDefinition(system_number=NumberingService.next(db, "user_field"), **payload)
+    item = UserFieldDefinition(system_number=NumberingService.next(db, "user_field"),
+                               scope="global", environment_id=None, **payload)
     db.add(item)
     db.flush()
     for environment in environments:
@@ -941,7 +948,10 @@ def environment_fields(environment_id: uuid.UUID, db: DB, user: Current) -> list
     result = []
     for field in db.scalars(
         select(UserFieldDefinition)
-        .where(UserFieldDefinition.is_active.is_(True))
+        .where(UserFieldDefinition.is_active.is_(True), or_(
+            UserFieldDefinition.scope == "global",
+            UserFieldDefinition.environment_id == environment_id,
+        ))
         .order_by(UserFieldDefinition.sort_order)
     ):
         selection = selected.get(field.id)
@@ -961,6 +971,24 @@ def environment_fields(environment_id: uuid.UUID, db: DB, user: Current) -> list
             }
         )
     return result
+
+
+@router.post("/environments/{environment_id}/user-field-definitions", status_code=201)
+def create_environment_user_field(environment_id: uuid.UUID, data: UserFieldIn, db: DB, user: Current) -> dict[str, Any]:
+    require(db, user, environment_id, "environment.fields.manage")
+    if not db.get(Environment, environment_id):
+        raise HTTPException(404, "Environment not found")
+    payload = data.model_dump(exclude={"environment_ids"})
+    payload["options_json"] = [option.model_dump() for option in data.options_json]
+    item = UserFieldDefinition(system_number=NumberingService.next(db, "user_field"),
+        scope="environment", environment_id=environment_id, **payload)
+    db.add(item); db.flush()
+    db.add(EnvironmentUserField(environment_id=environment_id, user_field_definition_id=item.id,
+        is_visible=True, is_required=item.is_required, is_editable_by_user=False,
+        is_editable_by_environment_admin=True, sort_order=item.sort_order))
+    audit(db, user, "user_field", item.id, "created", after={"scope": "environment"})
+    db.commit()
+    return user_field_dict(item)
 
 
 @router.put("/environments/{environment_id}/user-fields")

@@ -1,10 +1,9 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect } from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { Alert, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, TextField } from '@mui/material';
 import { ApiError } from '../../../api/client';
 import type { Environment, UserField, UserFieldCreatePayload, UserFieldType } from '../../../types';
-import { EnvironmentMultiSelect } from './EnvironmentMultiSelect';
 import { FieldOptionsEditor } from './FieldOptionsEditor';
 import { buildOptions, FIELD_TYPES, fieldSchema, suggestKey, type UserFieldFormValues } from './fieldValidation';
 
@@ -13,7 +12,7 @@ function initialValues(field?: UserField): UserFieldFormValues { if (!field) ret
 function optionalNumber(value: string) { return value === '' ? undefined : Number(value); }
 function payload(values: UserFieldFormValues): UserFieldCreatePayload { const validation: Record<string, unknown> = {}; if (['short_text','long_text'].includes(values.field_type)) Object.assign(validation, { min_length: optionalNumber(values.min_length), max_length: optionalNumber(values.max_length), placeholder: values.placeholder || undefined }); if (values.field_type === 'long_text') validation.rows = optionalNumber(values.rows); if (values.field_type === 'number') Object.assign(validation, { minimum: optionalNumber(values.minimum), maximum: optionalNumber(values.maximum), decimals: optionalNumber(values.decimals) }); if (['email','phone'].includes(values.field_type)) validation.placeholder = values.placeholder || undefined; if (values.field_type === 'phone') validation.pattern = values.pattern || undefined; Object.keys(validation).forEach((key) => validation[key] === undefined && delete validation[key]); let defaultValue: unknown = values.default_value || null; if (values.field_type === 'boolean') defaultValue = values.default_value === '' ? null : values.default_value === 'true'; if (values.field_type === 'number' && values.default_value !== '') defaultValue = Number(values.default_value); return { key: values.key.trim(), label_he: values.label_he.trim(), label_en: values.label_en.trim() || values.label_he.trim(), field_type: values.field_type, is_required: values.is_required, is_active: values.is_active, options_json: ['single_select','multi_select'].includes(values.field_type) ? buildOptions(values.options_text) : [], default_value_json: defaultValue, validation_json: validation, sort_order: values.sort_order, environment_ids: values.environment_ids }; }
 
-export function UserFieldDialog({ open, saving, environments, field, onClose, onSubmit }: { open: boolean; saving: boolean; environments: Environment[]; field?: UserField; onClose: () => void; onSubmit: (payload: UserFieldCreatePayload) => Promise<void> }) {
+export function UserFieldDialog({ open, saving, field, onClose, onSubmit }: { open: boolean; saving: boolean; environments: Environment[]; field?: UserField; onClose: () => void; onSubmit: (payload: UserFieldCreatePayload) => Promise<void> }) {
   const { control, handleSubmit, reset, setError, setValue, formState: { errors } } = useForm<UserFieldFormValues>({ resolver: zodResolver(fieldSchema), defaultValues: emptyValues });
   const type = useWatch({ control, name: 'field_type' }); const label = useWatch({ control, name: 'label_he' }); const key = useWatch({ control, name: 'key' });
   useEffect(() => { if (open) reset(initialValues(field)); }, [field, open, reset]);
@@ -32,8 +31,6 @@ export function UserFieldDialog({ open, saving, environments, field, onClose, on
     {['short_text','long_text','email','phone'].includes(type) && <Controller name="placeholder" control={control} render={({ field: input }) => <TextField {...input} label="Placeholder" />} />}
     {type === 'phone' && <Controller name="pattern" control={control} render={({ field: input }) => <TextField {...input} label="Pattern" />} />}
     {type !== 'user' && type !== 'multi_select' && <Controller name="default_value" control={control} render={({ field: input }) => type === 'boolean' ? <TextField select {...input} label="ערך ברירת מחדל"><MenuItem value="">ללא ערך</MenuItem><MenuItem value="true">כן</MenuItem><MenuItem value="false">לא</MenuItem></TextField> : <TextField {...input} type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'} label="ערך ברירת מחדל" slotProps={type === 'date' ? { inputLabel: { shrink: true } } : undefined} />} />}
-    <Controller name="environment_ids" control={control} render={({ field: input }) => <EnvironmentMultiSelect environments={environments} value={input.value} onChange={input.onChange} />} />
-    <Typography variant="caption" color="text.secondary">אפשר להשאיר ללא סביבה כדי לשמור בקטלוג הגלובלי בלבד.</Typography>
     <Controller name="is_required" control={control} render={({ field: input }) => <FormControlLabel control={<Checkbox checked={input.value} onChange={input.onChange} />} label="שדה חובה" />} />
     {field && <Controller name="is_active" control={control} render={({ field: input }) => <FormControlLabel control={<Checkbox checked={input.value} onChange={input.onChange} />} label="שדה פעיל" />} />}
   </Stack></DialogContent><DialogActions><Button onClick={onClose} disabled={saving}>ביטול</Button><Button type="submit" variant="contained" disabled={saving}>{saving ? 'שומר...' : 'שמירה'}</Button></DialogActions></Stack></Dialog>;
