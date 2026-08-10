@@ -13,10 +13,12 @@ from app.modules.attachments.router import router as attachments_router
 from app.modules.directory.router import router as directory_router
 from app.modules.environment_assignments.router import router as assignment_router
 from app.modules.governance.router import router as governance_router
+from app.modules.knowledge.router import router as knowledge_router
 from app.modules.operations.router import router as operations_router
 from app.modules.permissions.router import router as permissions_router
 from app.modules.platform.router import router as platform_router
 from app.modules.system_fields.router import router as system_fields_router
+from app.modules.transfer.router import router as transfer_router
 
 app = FastAPI(title="Case Management API", version="0.1.0")
 logger = logging.getLogger(__name__)
@@ -36,13 +38,16 @@ app.include_router(operations_router)
 app.include_router(attachments_router)
 app.include_router(directory_router)
 app.include_router(assignment_router)
+app.include_router(transfer_router)
+app.include_router(knowledge_router)
 app.include_router(router)
 
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
-    logger.exception("Unexpected database integrity error on %s %s: %s",
-                     request.method, request.url.path, exc.orig)
+    logger.exception(
+        "Unexpected database integrity error on %s %s: %s", request.method, request.url.path, exc.orig
+    )
     return JSONResponse(
         status_code=500,
         content={

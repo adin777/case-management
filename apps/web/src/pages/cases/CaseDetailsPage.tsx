@@ -11,6 +11,7 @@ import { CaseLockDialog } from './details/CaseLockDialog';
 import { ConversationPanel } from './details/ConversationPanel';
 import { CaseApprovalsPanel } from './details/CaseApprovalsPanel';
 import { InlineTextField } from './details/InlineTextField';
+import { CaseTransferWizard } from './details/CaseTransferWizard';
 
 type StatusOption = { id: string; label_he: string; current: boolean; allowed: boolean; reason?: string };
 
@@ -21,6 +22,7 @@ export function CaseDetailsPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [lockOpen, setLockOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
   const { data: item, isLoading } = useQuery({ queryKey: ['case', id], queryFn: () => api<Case>(`/cases/${id}`) });
   const enabled = !!item;
@@ -73,6 +75,7 @@ export function CaseDetailsPage() {
         <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center"><Chip color="primary" label={currentStatus}/><Chip variant="outlined" label={priorities.find((row) => row.id === item.priority_id)?.label_he || item.priority}/>
           {item.is_locked && <Chip color="warning" icon={<Lock/>} label="נעולה לשינויים"/>}
           {item.permissions.can_lock && <Button variant="outlined" color="warning" startIcon={item.is_locked ? <LockOpen/> : <Lock/>} onClick={() => setLockOpen(true)}>{item.is_locked ? 'פתיחת נעילה' : 'נעילת קריאה'}</Button>}
+          {item.permissions.can_transfer && <Button variant="outlined" onClick={() => setTransferOpen(true)}>העברת קריאה לסביבה אחרת</Button>}
         </Stack>
       </Stack>
     </Paper>
@@ -98,5 +101,6 @@ export function CaseDetailsPage() {
       </Stack></Grid>
     </Grid>
     <CaseLockDialog open={lockOpen} locked={item.is_locked} onClose={() => setLockOpen(false)} onSave={saveLock}/>
+    <CaseTransferWizard caseId={item.id} currentEnvironmentId={item.environment_id} open={transferOpen} onClose={()=>setTransferOpen(false)} onTransferred={()=>{setSuccess('הקריאה הועברה בהצלחה');refresh()}}/>
   </Stack></Container></Box>;
 }

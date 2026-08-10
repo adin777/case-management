@@ -175,6 +175,26 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 
 ## ניסיונות אישור, העברת משתמשים וסידור ערכים
 
+## העברת קריאה בין סביבות
+
+- `GET /api/cases/{case_id}/transfer-preview?target_environment_id={id}` דורש `case.transfer_environment` הן במקור והן ביעד ומחזיר סוגי קריאה פעילים, משתתפים ומטפל שיוסרו ושדות המקור.
+- `GET /api/cases/{case_id}/transfer-requirements?request_type_id={id}` מחזיר סטטוס התחלתי, מיפויי שדות לפי `key` יציב וסוג תואם, שדות שיוסרו ושדות יעד נדרשים.
+- `POST /api/cases/{case_id}/transfer` מקבל `target_environment_id`, `target_request_type_id`, `priority_id`, `sub_priority_id`, `assignee_id`, `new_field_values` ו־`reason`.
+- השרת מאמת מחדש את כל מזהי היעד ואינו סומך על ה־Preview. הפעולה אטומית: כשל מבטל את כל השינויים.
+- מספר הקריאה, Reporter, Requester, תגובות וקבצים נשמרים. שיוכי שדות, משתתפים ומטפל שאינם תקפים ביעד מוסרים מן הקריאה הפעילה ונשמרים ב־`CaseTransferHistory` וב־Audit.
+- Approval פעיל מבוטל עם `environment_transfer`; תצורת אישור ו־SLA של היעד מאותחלות מחדש. נעילה נעקפת רק בידי מנהל מורשה.
+
+## מאגר ידע סביבתי
+
+- `GET/POST /api/environments/{environment_id}/knowledge/documents` דורשים בהתאמה `knowledge.read` או `knowledge.manage`. העלאה תומכת ב־PDF, DOCX, XLSX, TXT ו־MD, שומרת את הקובץ מחוץ ל־Git ומאנדקסת chunks מבודדים לסביבה.
+- `GET /api/environments/{environment_id}/knowledge/documents/{document_id}/download` דורש `knowledge.read`.
+- `POST /api/environments/{environment_id}/knowledge/documents/{document_id}/reindex` מפעיל מחדש חילוץ ואינדוקס ודורש `knowledge.manage`.
+- `PATCH /api/environments/{environment_id}/knowledge/documents/{document_id}/active?enabled={boolean}` משבית או מפעיל גרסה בלי למחוק היסטוריה ודורש `knowledge.manage`.
+- `POST /api/environments/{environment_id}/knowledge/documents/{document_id}/reindex` ו־`PATCH .../active?enabled=` דורשים `knowledge.manage`.
+- `POST /api/environments/{environment_id}/knowledge/query` דורש `knowledge.query`, מקבל `{question}` ומחזיר `{answer, sources, provider}`. מקורות כוללים מסמך, section אם קיים ו־chunk index.
+- גרסה חדשה בעלת אותו שם משביתה את הגרסה הקודמת; רק מסמכים פעילים במצב `ready` משתתפים בשליפה.
+- `GET /api/system/ai-settings` זמין למנהל מערכת ומחזיר רק provider/model ומצב `api_key_configured`; הוא לעולם אינו מחזיר Secret. בהיעדר Secret Store המפתח מוגדר רק באמצעות `OPENAI_API_KEY` בצד השרת.
+- `LLMProvider` ו־`EmbeddingProvider` הם ממשקים נפרדים. ברירת המחדל המקומית אינה מבצעת קריאת API ואינה גוררת חיוב.
 `GET /api/cases/{case_id}/approvals` מחזיר אובייקט עם `current_approval`, ‏`approval_history`
 ו־`can_resubmit`. לכל ApprovalInstance נשמר `attempt_number` מפורש. הרשימה הראשית מציגה רק את
 הניסיון האחרון; ניסיונות קודמים נשארים כהיסטוריה עם Snapshot המאשר, החלטה, מועד וסיבת דחייה.

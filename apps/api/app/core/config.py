@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     attachment_directory: Path = PROJECT_ROOT / "data" / "attachments"
     seed_demo_users: bool = False
     directory_mode: str = "none"
+    knowledge_directory: Path = PROJECT_ROOT / "data" / "knowledge"
+    knowledge_max_bytes: int = 20 * 1024 * 1024
+    ai_provider: str = "local"
+    ai_model: str = "local-extractive"
+    embedding_model: str = "local-hash-96"
+    openai_api_key: str | None = None
     entra_tenant_id: str | None = None
     entra_client_id: str | None = None
     entra_client_secret: str | None = None

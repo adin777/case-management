@@ -76,6 +76,26 @@ POST /api/directory/{name}/preview:
   - test_directory_endpoints_contract
 POST /api/directory/apply:
   - test_directory_endpoints_contract
+GET /api/cases/{case_id}/transfer-preview:
+  - test_transfer_is_atomic_removes_invalid_links_and_preserves_identity
+GET /api/cases/{case_id}/transfer-requirements:
+  - test_transfer_is_atomic_removes_invalid_links_and_preserves_identity
+POST /api/cases/{case_id}/transfer:
+  - test_transfer_is_atomic_removes_invalid_links_and_preserves_identity
+GET /api/environments/{environment_id}/knowledge/documents:
+  - test_knowledge_upload_query_versioning_and_environment_isolation
+POST /api/environments/{environment_id}/knowledge/documents:
+  - test_knowledge_upload_query_versioning_and_environment_isolation
+GET /api/environments/{environment_id}/knowledge/documents/{document_id}/download:
+  - test_knowledge_upload_query_versioning_and_environment_isolation
+POST /api/environments/{environment_id}/knowledge/documents/{document_id}/reindex:
+  - test_knowledge_upload_query_versioning_and_environment_isolation
+PATCH /api/environments/{environment_id}/knowledge/documents/{document_id}/active:
+  - test_knowledge_upload_query_versioning_and_environment_isolation
+POST /api/environments/{environment_id}/knowledge/query:
+  - test_knowledge_upload_query_versioning_and_environment_isolation
+GET /api/system/ai-settings:
+  - test_ai_settings_never_returns_secret
 GET /api/directory/runs:
   - test_directory_endpoints_contract
 GET /api/environments/{environment_id}/assignment-rules:

@@ -571,3 +571,54 @@ class ApprovalTask(Base):
     decision: Mapped[str | None] = mapped_column(String(30))
     comment: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CaseTransferHistory(Base):
+    __tablename__ = "case_transfer_histories"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    from_environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id"))
+    to_environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id"))
+    from_request_type_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("request_types.id"))
+    to_request_type_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("request_types.id"))
+    from_status_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    to_status_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    transferred_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    transferred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    removed_participants: Mapped[list] = mapped_column(JSON, default=list)
+    removed_assignee: Mapped[dict | None] = mapped_column(JSON)
+    removed_fields_snapshot: Mapped[list] = mapped_column(JSON, default=list)
+    new_values: Mapped[list] = mapped_column(JSON, default=list)
+    approval_effect: Mapped[dict] = mapped_column(JSON, default=dict)
+    sla_effect: Mapped[dict] = mapped_column(JSON, default=dict)
+    reason: Mapped[str | None] = mapped_column(Text)
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    original_filename: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(120))
+    size: Mapped[int] = mapped_column(Integer)
+    storage_path: Mapped[str] = mapped_column(String(500), unique=True)
+    status: Mapped[str] = mapped_column(String(30), default="uploaded")
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"), index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    section: Mapped[str | None] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    embedding_json: Mapped[list] = mapped_column(JSON, default=list)
+    __table_args__ = (UniqueConstraint("document_id", "chunk_index"),)

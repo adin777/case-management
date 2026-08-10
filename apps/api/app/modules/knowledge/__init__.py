@@ -1,0 +1,1 @@
+"""Environment-isolated knowledge base."""
