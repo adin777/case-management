@@ -1,11 +1,16 @@
+from typing import Any
+
 from app.modules.directory.provider import DirectoryBatch, NormalizedDirectoryUser
 
 
 class FakeDirectoryProvider:
     name = "fake"
 
-    def test_connection(self) -> dict[str, str | bool]:
-        return {"ok": True, "message": "Fake Directory זמין לבדיקות"}
+    def test_connection(self) -> dict[str, Any]:
+        return {"ok": True, "message": "Fake Directory זמין לבדיקות", "steps": [
+            {"code": "provider", "label": "ספק בדיקות זמין", "ok": True, "message": "מוכן"},
+            {"code": "users", "label": "מקור משתמשים נגיש", "ok": True, "message": "3 משתמשי בדיקה"},
+        ]}
 
     def fetch_users(self, delta_link: str | None = None) -> DirectoryBatch:
         rows = [

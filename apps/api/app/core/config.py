@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     refresh_token_days: int = 7
     environment: str = "development"
     attachment_max_bytes: int = 10 * 1024 * 1024
-    attachment_allowed_types: str = "application/pdf,image/png,image/jpeg,text/plain"
+    attachment_allowed_types: str = "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/csv,text/tab-separated-values,text/markdown,text/rtf,application/rtf,application/vnd.oasis.opendocument.text,application/vnd.oasis.opendocument.spreadsheet,application/vnd.oasis.opendocument.presentation,application/json,application/xml,text/xml,application/yaml,text/yaml,image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,application/zip,application/x-7z-compressed,application/vnd.rar,message/rfc822,application/vnd.ms-outlook"
     attachment_directory: Path = PROJECT_ROOT / "data" / "attachments"
     seed_demo_users: bool = False
     directory_mode: str = "none"

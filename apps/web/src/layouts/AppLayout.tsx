@@ -2,23 +2,23 @@ import { type ReactNode, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Approval, Assessment, Dashboard, Groups, LockPerson, Logout, Menu, Notifications, Settings, SwitchAccount } from '@mui/icons-material';
-import { Alert, AppBar, Avatar, Badge, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, TextField, Toolbar, Tooltip, Typography } from '@mui/material';
+import { Alert, AppBar, Avatar, Badge, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Stack, TextField, Toolbar, Tooltip, Typography } from '@mui/material';
 import { api, token } from '../api/client';
 import type { User } from '../types';
+import { applyIdentityToken } from './identitySwitch';
 
 type LinkItem = { url: string; label: string; icon: ReactNode; admin?: boolean };
 const baseLinks: LinkItem[] = [
   { url: '/', label: 'ראשי', icon: <Dashboard/> },
-  { url: '/reports/cases', label: 'דוח קריאות שירות', icon: <Assessment/> },
+  { url: '/reports', label: 'דוחות', icon: <Assessment/> },
   { url: '/admin/environments', label: 'סביבות וסוגי קריאות', icon: <Settings/> },
   { url: '/admin/users', label: 'משתמשים והרשאות', icon: <Groups/>, admin: true },
-  { url: '/admin/user-fields', label: 'שדות משתמש', icon: <Settings/>, admin: true },
   { url: '/admin/permissions', label: 'ניהול הרשאות גורף', icon: <LockPerson/>, admin: true },
 ];
 
 export function AppLayout() {
   const navigate = useNavigate(); const client=useQueryClient(); const routeLocation = useLocation(); const [open, setOpen] = useState(false); const [impersonationOpen, setImpersonationOpen] = useState(false); const [targetId, setTargetId] = useState('');
-  async function adoptIdentity(accessToken:string){token.setAccess(accessToken);client.clear();setImpersonationOpen(false);setTargetId('');navigate('/')}
+  async function adoptIdentity(accessToken:string){applyIdentityToken(accessToken,client);setImpersonationOpen(false);setTargetId('');navigate('/')}
   const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
   const { data: impersonation } = useQuery({ queryKey: ['impersonation-status'], queryFn: () => api<{ active: boolean; can_start: boolean; impersonated_user_name?: string }>('/impersonation/status') });
   const { data: users = [] } = useQuery({ queryKey: ['users-for-impersonation'], queryFn: () => api<User[]>('/users'), enabled: !!impersonation?.can_start });
@@ -27,7 +27,7 @@ export function AppLayout() {
   const visibleLinks = links.filter((link) => !link.admin || user?.is_system_admin);
   const drawer = <Box sx={{ width: 260 }}><Box className="drawer-brand">◆ מרכז השירות</Box><Divider/><List>{visibleLinks.map((link) => <ListItemButton selected={routeLocation.pathname === link.url} key={link.url} onClick={() => { navigate(link.url); setOpen(false); }}><ListItemIcon>{link.icon}</ListItemIcon><ListItemText primary={link.label}/></ListItemButton>)}</List></Box>;
   return <Box sx={{ display: 'flex' }}>
-    <AppBar position="fixed" color="inherit" elevation={0} sx={{ borderBottom: '1px solid #e1e7f0', width: { md: 'calc(100% - 260px)' }, backdropFilter: 'blur(12px)', bgcolor: 'rgba(255,255,255,.92)' }}><Toolbar><IconButton aria-label="פתיחת תפריט" sx={{ display: { md: 'none' } }} onClick={() => setOpen(true)}><Menu/></IconButton><Box sx={{ flex: 1 }}/>{impersonation?.can_start && <Tooltip title="התחזות למשתמש"><IconButton onClick={() => setImpersonationOpen(true)}><SwitchAccount/></IconButton></Tooltip>}<Tooltip title="התראות"><IconButton aria-label="התראות"><Notifications/></IconButton></Tooltip><Avatar>{user?.display_name?.[0]}</Avatar><Typography sx={{ mx: 1 }}>{user?.display_name}</Typography><Tooltip title="יציאה"><IconButton aria-label="יציאה" onClick={() => { token.clear(); location.href = '/login'; }}><Logout/></IconButton></Tooltip></Toolbar></AppBar>
+    <AppBar position="fixed" color="inherit" elevation={0} sx={{ borderBottom: '1px solid #e1e7f0', width: { md: 'calc(100% - 260px)' }, backdropFilter: 'blur(12px)', bgcolor: 'rgba(255,255,255,.92)' }}><Toolbar><IconButton aria-label="פתיחת תפריט" sx={{ display: { md: 'none' } }} onClick={() => setOpen(true)}><Menu/></IconButton>{impersonation?.active&&<Stack direction="row" alignItems="center" gap={1}><Typography fontWeight={800}>צופה כ: {impersonation.impersonated_user_name}</Typography><Button color="warning" variant="contained" onClick={async()=>{const result=await api<{access_token:string}>('/impersonation/stop',{method:'POST'});await adoptIdentity(result.access_token)}}>חזרה למשתמש שלי</Button></Stack>}<Box sx={{ flex: 1 }}/>{impersonation?.can_start && <Tooltip title="התחזות למשתמש"><IconButton onClick={() => setImpersonationOpen(true)}><SwitchAccount/></IconButton></Tooltip>}<Tooltip title="התראות"><IconButton aria-label="התראות"><Notifications/></IconButton></Tooltip><Avatar>{user?.display_name?.[0]}</Avatar><Typography sx={{ mx: 1 }}>{user?.display_name}</Typography><Tooltip title="יציאה"><IconButton aria-label="יציאה" onClick={() => { token.clear(); location.href = '/login'; }}><Logout/></IconButton></Tooltip></Toolbar></AppBar>
     <Drawer variant="permanent" anchor="right" sx={{ display: { xs: 'none', md: 'block' }, '& .MuiDrawer-paper': { width: 260 } }}>{drawer}</Drawer>
     <Drawer open={open} anchor="right" onClose={() => setOpen(false)} sx={{ display: { md: 'none' } }}>{drawer}</Drawer>
     <Box component="main" sx={{ flex: 1, p: { xs: 2, md: 4 }, mt: 8, mr: { md: '260px' }, minWidth: 0 }}>{impersonation?.active && <Alert severity="warning" sx={{ mb: 2 }} action={<Button color="inherit" onClick={async () => { const result = await api<{access_token:string}>('/impersonation/stop', { method: 'POST' }); await adoptIdentity(result.access_token); }}>סיום התחזות</Button>}>אתה צופה במערכת כ־{impersonation.impersonated_user_name}</Alert>}<Outlet/></Box>

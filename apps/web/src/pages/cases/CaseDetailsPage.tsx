@@ -14,6 +14,7 @@ import { InlineTextField } from './details/InlineTextField';
 import { CaseTransferWizard } from './details/CaseTransferWizard';
 
 type StatusOption = { id: string; label_he: string; current: boolean; allowed: boolean; reason?: string };
+type CaseWithEnvironment = Case & { environment_name?: string };
 
 export function CaseDetailsPage() {
   const { id } = useParams();
@@ -24,7 +25,7 @@ export function CaseDetailsPage() {
   const [lockOpen, setLockOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
-  const { data: item, isLoading } = useQuery({ queryKey: ['case', id], queryFn: () => api<Case>(`/cases/${id}`) });
+  const { data: item, isLoading } = useQuery({ queryKey: ['case', id], queryFn: () => api<CaseWithEnvironment>(`/cases/${id}`) });
   const enabled = !!item;
   const { data: types = [] } = useQuery({ queryKey: ['request-types', item?.environment_id], queryFn: () => api<RequestType[]>(`/request-types?environment_id=${item!.environment_id}`), enabled });
   const { data: priorities = [] } = useQuery({ queryKey: ['priorities', item?.environment_id], queryFn: () => api<Priority[]>(`/environments/${item!.environment_id}/priorities`), enabled });
@@ -67,7 +68,7 @@ export function CaseDetailsPage() {
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
     {success && <Alert severity="success" onClose={() => setSuccess('')}>{success}</Alert>}
     <Paper className="case-hero" elevation={0}>
-      <Typography color="primary" fontWeight={850}>{item.case_number}</Typography>
+      <Stack direction="row" gap={2} alignItems="center"><Typography color="primary" fontWeight={850}>{item.case_number}</Typography><Typography variant="body2"><strong>סביבה:</strong> {item.environment_name||'לא זמינה'}</Typography></Stack>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}>
         <Box sx={{ flex: 1 }}><InlineTextField label="נושא" value={item.title} editable={editable} onSave={(title) => patch({ title })}/>
           <Stack direction={{ xs: 'column', sm: 'row' }} gap={{ xs: .5, sm: 2 }} mt={1} color="text.secondary"><Typography variant="body2"><strong>פותח הקריאה:</strong> {item.reporter_name || 'לא זמין'} · {item.reporter_email || 'לא זמין'}</Typography><Typography variant="body2"><strong>נפתחה:</strong> {new Date(item.created_at).toLocaleString('he-IL')}</Typography><Typography variant="body2"><strong>עודכנה לאחרונה:</strong> {item.updated_at ? new Date(item.updated_at).toLocaleString('he-IL') : 'לא זמין'}</Typography></Stack>

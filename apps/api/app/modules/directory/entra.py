@@ -19,8 +19,19 @@ class EntraDirectoryProvider:
         with urllib.request.urlopen(request, timeout=15) as response:
             return str(json.load(response)["access_token"])
 
-    def test_connection(self) -> dict[str, str | bool]:
-        self._token(); return {"ok": True, "message": "החיבור ל־Microsoft Entra תקין"}
+    def test_connection(self) -> dict:
+        configured = [("tenant", "Tenant ID מוגדר", bool(settings.entra_tenant_id)), ("client", "Client ID מוגדר", bool(settings.entra_client_id)), ("secret", "Client Secret מוגדר", bool(settings.entra_client_secret))]
+        steps = [{"code": code, "label": label, "ok": ok, "message": "מוגדר" if ok else "חסר"} for code, label, ok in configured]
+        if not all(ok for _, _, ok in configured): return {"ok": False, "message": "תצורת Microsoft Entra חסרה", "steps": steps}
+        try:
+            token = self._token(); steps.append({"code": "token", "label": "קבלת token", "ok": True, "message": "הצליחה"})
+            request = urllib.request.Request("https://graph.microsoft.com/v1.0/users?$top=1&$select=id", headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(request, timeout=15) as response: json.load(response)
+            steps.extend([{"code":"graph","label":"Microsoft Graph נגיש","ok":True,"message":"תקין"},{"code":"users","label":"Users endpoint נגיש","ok":True,"message":"תקין"}])
+            return {"ok": True, "message": "החיבור ל־Microsoft Entra תקין", "steps": steps}
+        except (ValueError, OSError, KeyError, json.JSONDecodeError) as exc:
+            steps.append({"code":"connection","label":"אימות וגישה ל־Graph","ok":False,"message":str(exc)})
+            return {"ok": False, "message": "בדיקת Microsoft Entra נכשלה", "steps": steps}
 
     def fetch_users(self, delta_link: str | None = None) -> DirectoryBatch:
         url = delta_link or ("https://graph.microsoft.com/v1.0/users/delta?" + urllib.parse.urlencode({

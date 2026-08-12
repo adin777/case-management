@@ -24,6 +24,10 @@ After implementation, do not use an ad-hoc subset as final validation. Always ru
 
 ## מקורות אמת ותלויות UI
 
+An option displayed to a user must be valid for submission. UI option sources and backend validation must use the same domain service/source of truth.
+
+Permission to perform a business action includes read access to the configuration values required to complete that action.
+
 לכל Select יש מקור אמת מפורש: סביבה מתוך Environments; סוג קריאה מתוך RequestTypes של הסביבה שנבחרה; סטטוס מתוך ה־Workflow של הסביבה; עדיפות ותת־עדיפות מתוך ערכי הסביבה; משתמשים מתוך משתמשים פעילים ומורשים. אין לעשות reuse למערך אחר רק משום שהמבנה דומה.
 
 לפני השלמת UI שתלוי בבחירה אחרת יש לבדוק בפועל את ה־IDs ואת התוויות שה־API מחזיר. שינוי בתחום configurable חייב להיבדק בכל הצרכנים שלו: הגדרות, יצירה, פרטי קריאה, Workflow, Automation, דוחות, Dashboard ומסננים.
@@ -293,6 +297,13 @@ After implementation, do not use an ad-hoc subset as final validation. Always ru
 
 - שינוי במודל עסקי חייב להיבדק ולעבור באופן עקבי דרך Database, Models, Services, API, Permissions, Automations, Reports, UI ו-Tests.
 - אין לבצע שינוי לוגי נקודתי במסך אחד בלבד.
+
+## חוזי קבצים, Payloads ומסננים
+
+- כאשר המערכת מייצרת קובץ או תבנית שהיא צורכת לאחר מכן, בדיקת Round-trip אוטומטית חייבת להשתמש בתוצר של Endpoint היצירה עצמו.
+- כאשר ה-Frontend שולח Payload מטיפוס מוגדר, Contract test חייב לאמת אותו מול Schema ה-Backend.
+- אין להחזיק הגדרות Schema כפולות ונפרדות עבור Template, Parser, Validation או Export; יש להשתמש במקור אמת משותף.
+- אזור מסננים משתמש רק באחד משני דפוסים ברורים: סינון חי עם משוב חזותי מפורש, או מסננים שמוחלים רק בלחיצה על `חיפוש`/`הרצה`. במסכים עסקיים מורכבים ברירת המחדל היא כפתור מפורש, בצירוף `איפוס` ומספר תוצאות.
 
 ## אין Hardcoded business configuration
 

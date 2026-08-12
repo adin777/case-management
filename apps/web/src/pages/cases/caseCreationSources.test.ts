@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { activeRequestTypes, requestTypesUrl } from './caseCreationSources';
+import { activeRequestTypes, caseCreationConfigurationUrl } from './caseCreationSources';
 import type { RequestType } from '../../types';
 
 describe('case creation sources', () => {
   it('requests active request types for the selected environment', () => {
-    expect(requestTypesUrl('environment-a')).toBe(
-      '/request-types?environment_id=environment-a&active_only=true',
+    expect(caseCreationConfigurationUrl('environment-a')).toBe(
+      '/case-creation/environments/environment-a/configuration',
     );
   });
 

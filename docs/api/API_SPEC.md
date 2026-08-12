@@ -46,6 +46,15 @@
 | יעד | DELETE | `/api/environments/{environment_id}` |
 | קיים | GET | `/api/case-creation/environments` |
 
+`GET /api/case-creation/environments/{environment_id}/configuration` דורש `case.create`
+ומחזיר מקור קריאה מצומצם לקריאה בלבד: סוגי קריאה פעילים, עדיפויות ותתי־עדיפויות פעילות,
+סטטוס התחלתי ואפשרויות סטטוס, טופס דינמי ומשתתפים זכאים רק כאשר קיימת הרשאת ניהול
+משתתפים. הנתיב אינו מעניק הרשאת יצירה, עריכה או מחיקה של Configuration. מסך פתיחת
+קריאה צורך רק נתיב זה, והשרת מאמת שוב את אותם IDs בעת `POST /api/cases`.
+
+הרשאה לפעולה עסקית כוללת קריאה מצומצמת של ערכי הקונפיגורציה הנדרשים להשלמתה;
+`case.create` אינו מחייב ואינו מעניק `request_type.manage` או `environment.manage`.
+
 עדכון `is_active` משפיע רק על Path ID. סביבה לא פעילה אינה מוצעת ליצירה אך נשארת
 קריאה בהיסטוריה.
 
@@ -155,17 +164,25 @@ forbidden ו־not found, ולוודא שה־UI צורך אותו מקור אמת
 
 שיוך משתמש לסביבה אינו כולל Role: `PUT /api/users/{user_id}/environment-memberships` מקבל מערך של `{environment_id}`, ו־`POST /api/environments/{environment_id}/memberships` מקבל משתמש או קבוצה ללא `role_id`. נתיבי `/api/roles` ו־`/api/groups/{group_id}/roles` הם מורשת מושבתת ומחזירים `410`; הרשאות נפתרות מקבוצות, רמות גישה וחריגות משתמש בלבד.
 
-Excel: `GET /api/users/import/template` מוריד תבנית; `POST /api/users/import/preview` מקבל קובץ ומחזיר חדשים, לעדכון, ללא שינוי ושגיאות ללא כתיבה; `POST /api/users/import/apply` מחיל רק נתונים שאושרו; `GET /api/users-export` מייצא XLSX לפי מסנני מצב ומקור.
+Excel: `GET /api/users/import/template` מוריד תבנית; `POST /api/users/import/preview` מקבל קובץ שנוצר מאותו Schema משותף ומחזיר חדשים, לעדכון, ללא שינוי ושגיאות ללא כתיבה; `POST /api/users/import/apply` מחיל רק נתונים שאושרו; `GET /api/users-export` מייצא XLSX לפי מסנני מצב, מקור, מחלקה, תפקיד ארגוני וחיפוש. תבנית ה-Endpoint עצמה משמשת בבדיקת Round-trip אוטומטית.
 
-Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה. `POST /api/directory/{name}/test` בודק ספק, ו־`POST /api/directory/{name}/preview` מבצע קריאה ללא שינוי נתונים. `POST /api/directory/apply` מחיל snapshot שאושר ושומר `DirectorySyncRun`; `GET /api/directory/runs` מחזיר יומן ריצות. הספקים הם `fake`, `entra`, `active_directory`. Entra משתמש ב־Graph `/users/delta` ושומר deltaLink לריצה הבאה. `directory_enabled` נפרד ממצב מקומי, ולכן Sync אינו מפעיל מחדש משתמש שהושבת או הועבר לארכיון ידנית.
+ביצירת משתמש ידני `email` הוא מזהה הכניסה. `user_principal_name` אופציונלי; כאשר הוא ריק השרת שומר בו את כתובת ה-email המנורמלת. `display_name` ו-email תקין הם חובה, וסיסמה ידנית חייבת לכלול לפחות 8 תווים.
+
+Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה. `POST /api/directory/{name}/test` בודק ספק ומחזיר `ok`, הודעה ומערך `steps` של `{code,label,ok,message}` ללא Secrets; Entra בודק Configuration, Tenant, Client, קיום Secret, Token, Graph ו־Users endpoint, ו־AD מקומי בודק Server, Base DN, Bind, חיבור LDAP/LDAPS ושאילתת משתמש. `POST /api/directory/{name}/preview` מבצע קריאה ללא שינוי נתונים. `POST /api/directory/apply` מחיל snapshot שאושר ושומר `DirectorySyncRun`; `GET /api/directory/runs` מחזיר יומן ריצות. הספקים הם `fake`, `entra`, `active_directory`. Entra משתמש ב־Graph `/users/delta` ושומר deltaLink לריצה הבאה. `directory_enabled` נפרד ממצב מקומי, ולכן Sync אינו מפעיל מחדש משתמש שהושבת או הועבר לארכיון ידנית.
 
 ## כללי שיוך ואישור לפי תפקיד ארגוני
 
 `GET /api/environments/{environment_id}/assignment-rules` מחזיר כללים; `POST /api/environments/{environment_id}/assignment-rules/preview` מחזיר התאמות ללא כתיבה; `POST /api/environments/{environment_id}/assignment-rules` יוצר ומחיל כלל; `PUT /api/environment-assignment-rules/{rule_id}` מעדכן ומחיל אותו. תנאים בתוך כלל הם AND וכללים שונים הם OR. כלל מסיר רק membership שמקורו `rule` ובאותו `source_rule_id`, ולעולם אינו מסיר שיוך ידני.
 
+`GET /api/environment-assignment-options` מחזיר Selectors בלבד מתוך משתמשים וקבוצות
+פעילים ומערכי Department/Job Title הייחודיים הקיימים. ערכים מרובים באותו ממד הם OR;
+ממדים שונים הם AND. Preview מחזיר את המשתמשים המדויקים לפני Apply.
+
 שלב Approval מסוג `job_title` שומר את ערך התפקיד הארגוני ומייצר snapshot של כל המשתמשים הפעילים, החברים בסביבת הקריאה ובעלי אותו `job_title`. החלטת המשתמש הראשון משלימה את השלב ומבטלת את יתר המשימות. אם אין התאמה, יצירת המשימות נכשלת ב־`409` עם שגיאת קונפיגורציה ברורה.
 
 ## דוחות, שיוך ואישור תפעולי
+
+`GET /api/reports/available` מחזיר רק דוחות שהמשתמש מורשה לראות. מרכז הדוחות כולל דוח קריאות (`report.cases`), אישורים (`report.approvals`), משתמשים והרשאות (`report.users`) ו־Audit (`report.audit`). `GET /api/reports/approvals`, ‏`/reports/users` ו־`/reports/audit` מחזירים נתוני אמת מה־Database ואוכפים את Permission Domain המתאים בשרת.
 
 דוח הקריאות משתמש ב־`workflow_status_id` וב־`WorkflowStatus.label_he` כמקור האמת היחיד לתצוגה, סינון, מיון וייצוא. `sort` תומך ב־`case_number`, `title`, `environment`, `request_type`, `status`, `priority`, `requester`, `assignee`, `created_at`, `updated_at`; `direction` הוא `asc` או `desc`, והמיון מתבצע בשרת לפני pagination.
 
@@ -224,3 +241,26 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 - יצירת Request Type אינה דורשת `workflow_definition_id`. לכל סביבה נשמרת פנימית תצורת סטטוסים עם סטטוס התחלתי פעיל יחיד; Case חדש מקבל אותו אוטומטית. היעדר Workflow מפורש אינו מחזיר שגיאת "Workflow not configured".
 - `GET /api/cases/{case_id}/allowed-transitions` ו־`status-options`: אם קיימים כללי מעבר פעילים הם נאכפים; אם אין כלל יוצא, כל סטטוס פעיל אחר מותר בכפוף ל־`case.change_status`.
 - `POST /api/environments/{environment_id}/memberships` מקבל בדיוק אחד מבין `user_id` או `group_id`. כללי Department/Job Title מנוהלים דרך `/assignment-rules`; Preview מחזיר גם `matched` וגם רשימת `users`. חישוב מחדש מסיר רק Memberships שמקורם באותו כלל ולעולם לא Membership ידני.
+
+### Transfer, reports and files
+
+`GET /api/cases/{case_id}/transfer-requirements?request_type_id=...` הוא מקור האמת המשותף
+ל־UI ולוולידציית ההעברה ומחזיר סטטוס התחלתי, שדות יעד, עדיפויות, תתי־עדיפויות ומטפלים
+פעילים השייכים לסביבת היעד. שינוי סביבת היעד ב־UI מנקה את כל הבחירות התלויות.
+`GET /api/cases/{case_id}` מחזיר גם `environment_name`; הסביבה אינה נערכת ישירות.
+
+מסנן הסטטוס בדוח הקריאות שולח `workflow_status_id` יציב מתוך
+`GET /api/reports/cases/value-sources`; ללא סביבה מוחזר איחוד הסטטוסים הפעילים מהסביבות
+המורשות, ועם סביבה מוחזרים ערכיה בלבד. נתיבי `/api/reports/approvals`, `/users` ו־`/audit`
+תומכים במסננים וב־pagination בצד השרת. דוח האישורים מחזיר `task_id` ו־`can_decide`
+ומשתמש בנתיב ההחלטה המשותף `POST /api/approval-tasks/{task_id}/decision`.
+
+קבצים מצורפים מאומתים לפי שם, סיומת חסומה, MIME וגודל configurable. הרשימה המותרת
+כוללת מסמכים, קובצי נתונים, תמונות, ארכיונים ודואר נתמכים; קובצי הרצה נדחים תמיד.
+האחסון מחוץ ל־web root והורדה מתבצעת רק דרך API מורשה. תמיכה כ־Attachment אינה
+מבטיחה תמיכה ב־Knowledge ingestion, שממשיך להחזיק רשימת extractors מצומצמת ובטוחה.
+מחזור חיי סביבה מנוהל בנתיבים מפורשים: `POST /api/environments/{id}/archive` משבית
+סביבה ושומר את הקריאות וההיסטוריה, ו־`POST /api/environments/{id}/restore` משחזר אותה.
+`GET /api/environments/{id}/delete-impact` ו־`DELETE /api/environments/{id}?confirmation=<name>`
+דורשים `environment.delete`. מחיקה פיזית מותרת רק כאשר אין קריאות או תלויות ודורשת
+הקלדת שם מדויקת; אחרת מוחזר `409` עם ספירת התלויות ואין Cascade שקט.

@@ -312,6 +312,8 @@ def create_user(data: UserCreate, db: DB, user: Current) -> dict[str, Any]:
     system_admin(user)
     if db.scalar(select(User.id).where(func.lower(User.email) == data.email.lower())):
         raise HTTPException(409, "Email already exists")
+    profile = data.model_dump(exclude={"password", "is_active", "is_system_admin", "display_name", "email"})
+    profile["user_principal_name"] = profile["user_principal_name"] or data.email.lower()
     item = User(
         display_name=data.display_name,
         email=data.email.lower(),
@@ -319,7 +321,7 @@ def create_user(data: UserCreate, db: DB, user: Current) -> dict[str, Any]:
         is_active=data.is_active,
         is_system_admin=data.is_system_admin,
         status="active" if data.is_active else "inactive", source="manual",
-        **data.model_dump(exclude={"password", "is_active", "is_system_admin", "display_name", "email"}),
+        **profile,
     )
     db.add(item)
     db.flush()

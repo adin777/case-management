@@ -4,12 +4,12 @@ from collections.abc import Sequence
 from html import escape
 from xml.etree import ElementTree
 
+from pydantic import ValidationError
+
 from app.modules.directory.provider import NormalizedDirectoryUser
 
-HEADERS = ["First Name", "Last Name", "Display Name", "Email", "Username", "Department",
-           "Job Title", "Phone", "Mobile Phone", "Employee ID", "Computer Identifier", "Active"]
-FIELDS = ["first_name", "last_name", "display_name", "email", "user_principal_name", "department",
-          "job_title", "phone", "mobile_phone", "employee_id", "computer_identifier", "directory_enabled"]
+USER_IMPORT_SCHEMA = (("First Name","first_name"),("Last Name","last_name"),("Display Name","display_name"),("Email","email"),("Username","user_principal_name"),("Department","department"),("Job Title","job_title"),("Phone","phone"),("Mobile Phone","mobile_phone"),("Employee ID","employee_id"),("Computer Identifier","computer_identifier"),("Active","directory_enabled"))
+HEADERS=[column[0] for column in USER_IMPORT_SCHEMA];FIELDS=[column[1] for column in USER_IMPORT_SCHEMA]
 
 
 def workbook(rows: Sequence[Sequence[object]], sheet_name: str = "Users") -> bytes:
@@ -38,10 +38,10 @@ def parse(content: bytes) -> list[NormalizedDirectoryUser]:
     result = []
     for number, values_row in enumerate(values[1:], 2):
         padded = values_row + [""] * (len(FIELDS) - len(values_row)); data = dict(zip(FIELDS, padded, strict=True))
-        if not data["email"]: raise ValueError(f"חסר Email בשורה {number}")
+        if not data["email"]: raise ValueError(f"שורה {number}, Email: התקבל ערך ריק; צפויה כתובת דוא״ל תקינה; שדה חובה")
         data["display_name"] = data["display_name"] or f'{data["first_name"]} {data["last_name"]}'.strip()
         enabled = str(data["directory_enabled"]).strip().casefold() in {"true", "1", "yes", "כן", "active"}
-        result.append(NormalizedDirectoryUser(
+        try: result.append(NormalizedDirectoryUser(
             first_name=data["first_name"] or None, last_name=data["last_name"] or None,
             display_name=str(data["display_name"]), email=str(data["email"]),
             user_principal_name=data["user_principal_name"] or None,
@@ -50,4 +50,6 @@ def parse(content: bytes) -> list[NormalizedDirectoryUser]:
             employee_id=data["employee_id"] or None, computer_identifier=data["computer_identifier"] or None,
             directory_enabled=enabled,
         ))
+        except ValidationError as exc:
+            field=str(exc.errors()[0].get("loc",["value"])[0]);received=data.get(field,"");raise ValueError(f"שורה {number}, {field}: התקבל '{received}'; צפוי פורמט תקין; {exc.errors()[0]['msg']}") from exc
     return result

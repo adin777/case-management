@@ -4,8 +4,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, CardContent, Chip, CircularProgress, Container, FormControl, InputLabel, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
 import { api } from '../../api/client';
 import { DynamicField } from '../../components/DynamicField';
-import type { Case, Environment, Form, Priority, RequestType, SubPriority, User } from '../../types';
-import { activePriorities, activeRequestTypes, activeSubPriorities, requestTypesUrl } from './caseCreationSources';
+import type { Case, Environment, Form, RequestType, User } from '../../types';
+import { activeRequestTypes, caseCreationConfigurationUrl } from './caseCreationSources';
+
+type CreationType=RequestType&{initial_status_id:string;can_choose_status:boolean;statuses:{id:string;label_he:string;is_initial:boolean}[];form?:Form;default_priority_id?:string;default_sub_priority_id?:string};
+type CreationConfig={request_types:CreationType[];priorities:{id:string;label_he:string;is_active:boolean}[];sub_priorities:{id:string;priority_id?:string;label_he:string;is_active:boolean}[];participants:User[]};
 
 export function CreateCasePage() {
   const navigate = useNavigate();
@@ -21,15 +24,12 @@ export function CreateCasePage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const { data: environments = [] } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
-  const { data: requestTypeRows = [] } = useQuery({ queryKey: ['request-types', environmentId, 'active'], queryFn: () => api<RequestType[]>(requestTypesUrl(environmentId)), enabled: !!environmentId });
-  const { data: priorities = [] } = useQuery({ queryKey: ['priorities', environmentId], queryFn: () => api<Priority[]>(`/environments/${environmentId}/priorities`), enabled: !!environmentId });
-  const { data: subPriorities = [] } = useQuery({ queryKey: ['sub-priorities', environmentId], queryFn: () => api<SubPriority[]>(`/environments/${environmentId}/sub-priorities`), enabled: !!environmentId });
-  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users') });
+  const { data: creationConfig, error: configError } = useQuery({ queryKey: ['case-creation-configuration', environmentId], queryFn: () => api<CreationConfig>(caseCreationConfigurationUrl(environmentId)), enabled: !!environmentId, retry:false });
+  const requestTypeRows=creationConfig?.request_types||[];const priorities=creationConfig?.priorities||[];const subPriorities=creationConfig?.sub_priorities||[];const users=creationConfig?.participants||[];
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
   const requestTypes = activeRequestTypes(requestTypeRows, environmentId);
   const selectedType = requestTypes.find((item) => item.id === requestTypeId);
-  const { data: form } = useQuery({ queryKey: ['form', selectedType?.form_version_id], queryFn: () => api<Form>(`/forms/${selectedType!.form_version_id}`), enabled: !!selectedType?.form_version_id });
-  const { data: caseConfig, error: configError } = useQuery({ queryKey: ['case-config', requestTypeId], queryFn: () => api<{ initial_status_id: string; can_choose_status: boolean; default_priority_id?: string; default_sub_priority_id?: string; statuses: { id: string; label_he: string; is_initial: boolean }[] }>(`/request-types/${requestTypeId}/case-config`), enabled: !!requestTypeId, retry: false });
+  const caseConfig=selectedType as CreationType|undefined;const form=caseConfig?.form;
   useEffect(() => { if (caseConfig) { setWorkflowStatusId(caseConfig.initial_status_id); setPriorityId(caseConfig.default_priority_id || ''); setSubPriorityId(caseConfig.default_sub_priority_id || ''); } }, [caseConfig]);
 
   async function submit(event: FormEvent) {
@@ -61,8 +61,8 @@ export function CreateCasePage() {
       {configError && <Alert severity="error" action={me?.is_system_admin ? <Button color="inherit" href="/admin/environments">מעבר להגדרות סטטוס</Button> : undefined}>{me?.is_system_admin ? `לא ניתן לפתוח קריאה מסוג "${selectedType?.name_he || ''}". לא הוגדר סטטוס התחלתי בתהליך העבודה המשויך לסוג קריאה זה.` : 'לא ניתן לפתוח כרגע קריאה מסוג זה. יש לפנות למנהל הסביבה.'}</Alert>}
       {caseConfig?.can_choose_status ? <FormControl required><InputLabel>סטטוס</InputLabel><Select label="סטטוס" value={workflowStatusId} onChange={(event) => setWorkflowStatusId(event.target.value)}>{caseConfig.statuses.map((status) => <MenuItem key={status.id} value={status.id}>{status.label_he}</MenuItem>)}</Select></FormControl> : caseConfig && <TextField label="סטטוס" value={caseConfig.statuses.find((status) => status.id === workflowStatusId)?.label_he || ''} slotProps={{ input: { readOnly: true } }} />}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-        <FormControl required fullWidth disabled={!environmentId}><InputLabel>עדיפות</InputLabel><Select label="עדיפות" value={priorityId} onChange={(event) => { setPriorityId(event.target.value); setSubPriorityId(''); }}>{activePriorities(priorities).map((priority) => <MenuItem key={priority.id} value={priority.id}>{priority.label_he}</MenuItem>)}</Select></FormControl>
-        <FormControl fullWidth disabled={!activeSubPriorities(subPriorities).length}><InputLabel>תת-עדיפות</InputLabel><Select label="תת-עדיפות" value={subPriorityId} onChange={(event) => setSubPriorityId(event.target.value)}>{activeSubPriorities(subPriorities).map((item) => <MenuItem key={item.id} value={item.id}>{item.label_he}</MenuItem>)}</Select></FormControl>
+        <FormControl required fullWidth disabled={!environmentId}><InputLabel>עדיפות</InputLabel><Select label="עדיפות" value={priorityId} onChange={(event) => { setPriorityId(event.target.value); setSubPriorityId(''); }}>{priorities.map((priority) => <MenuItem key={priority.id} value={priority.id}>{priority.label_he}</MenuItem>)}</Select></FormControl>
+        <FormControl fullWidth disabled={!subPriorities.some(row=>!row.priority_id||row.priority_id===priorityId)}><InputLabel>תת-עדיפות</InputLabel><Select label="תת-עדיפות" value={subPriorityId} onChange={(event) => setSubPriorityId(event.target.value)}>{subPriorities.filter(row=>!row.priority_id||row.priority_id===priorityId).map((item) => <MenuItem key={item.id} value={item.id}>{item.label_he}</MenuItem>)}</Select></FormControl>
       </Stack>
       <FormControl><InputLabel>משתתפים</InputLabel><Select multiple label="משתתפים" value={participantIds} onChange={(event) => setParticipantIds(typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)} renderValue={(selected) => <Stack direction="row" gap={.5} flexWrap="wrap">{selected.map((id) => <Chip key={id} size="small" label={users.find((user) => user.id === id)?.display_name || id} />)}</Stack>}>{users.filter((user) => user.is_active !== false).map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}</Select></FormControl>
       {form?.fields.filter((field) => field.is_active !== false).map((field) => <DynamicField key={field.id} field={field} value={values[field.id!]} users={users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />)}

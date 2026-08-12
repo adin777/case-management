@@ -17,6 +17,7 @@ from app.modules.knowledge.router import router as knowledge_router
 from app.modules.operations.router import router as operations_router
 from app.modules.permissions.router import router as permissions_router
 from app.modules.platform.router import router as platform_router
+from app.modules.reports.router import router as reports_router
 from app.modules.system_fields.router import router as system_fields_router
 from app.modules.transfer.router import router as transfer_router
 
@@ -37,6 +38,7 @@ app.include_router(system_fields_router)
 app.include_router(operations_router)
 app.include_router(attachments_router)
 app.include_router(directory_router)
+app.include_router(reports_router)
 app.include_router(assignment_router)
 app.include_router(transfer_router)
 app.include_router(knowledge_router)

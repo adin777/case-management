@@ -16,6 +16,7 @@ from app.modules.models import (
     FormStatus,
     PriorityDefinition,
     RequestType,
+    SubPriorityDefinition,
     User,
 )
 from app.modules.operations.models import SlaPolicy, WorkflowDefinition, WorkflowStatus
@@ -28,7 +29,7 @@ def headers(email: str = "admin@example.com", password: str = "Admin123!") -> di
     return {"Authorization": f"Bearer {token}"}
 
 
-def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     with SessionLocal() as db:
         admin = db.scalar(select(User).where(User.email == "admin@example.com"))
         assert admin
@@ -46,7 +47,9 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             .where(WorkflowDefinition.environment_id == source.id, WorkflowStatus.is_initial.is_(True))
         )
         assert source_status
-        target = Environment(code=f"TARGET-{uuid.uuid4().hex[:6].upper()}", name_he="סביבת יעד", name_en="Target")
+        target = Environment(
+            code=f"TARGET-{uuid.uuid4().hex[:6].upper()}", name_he="סביבת יעד", name_en="Target"
+        )
         db.add(target)
         db.flush()
         workflow = WorkflowDefinition(
@@ -107,6 +110,17 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
         )
         db.add_all([required, priority])
         db.flush()
+        sub_priority = SubPriorityDefinition(
+            system_number=f"SUB-{uuid.uuid4().hex[:8]}",
+            environment_id=target.id,
+            priority_id=priority.id,
+            code="target-sub",
+            label_he="תת־עדיפות יעד",
+            is_active=True,
+            sort_order=0,
+        )
+        db.add(sub_priority)
+        db.flush()
         case = Case(
             case_number=f"CASE-TRANSFER-{uuid.uuid4().hex[:6]}",
             environment_id=source.id,
@@ -141,12 +155,12 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             )
         )
         db.commit()
-        return case.id, target.id, request_type.id, priority.id, required.id
+        return case.id, target.id, request_type.id, priority.id, sub_priority.id, required.id
 
 
 def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> None:
     auth = headers()
-    case_id, target_id, request_type_id, priority_id, required_id = transfer_fixture()
+    case_id, target_id, request_type_id, priority_id, sub_priority_id, required_id = transfer_fixture()
     preview = client.get(
         f"/api/cases/{case_id}/transfer-preview?target_environment_id={target_id}", headers=auth
     )
@@ -156,10 +170,15 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> No
     )
     assert requirements.status_code == 200
     assert requirements.json()["required_fields"][0]["id"] == str(required_id)
+    assert requirements.json()["priorities"] == [{"id": str(priority_id), "label_he": "רגילה"}]
+    assert requirements.json()["sub_priorities"] == [
+        {"id": str(sub_priority_id), "priority_id": str(priority_id), "label_he": "תת־עדיפות יעד"}
+    ]
     payload: dict[str, object] = {
         "target_environment_id": str(target_id),
         "target_request_type_id": str(request_type_id),
         "priority_id": str(priority_id),
+        "sub_priority_id": str(sub_priority_id),
         "new_field_values": [],
     }
     blocked = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json=payload)
@@ -182,7 +201,8 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> No
         case = db.get(Case, case_id)
         assert case
         assert case.environment_id == target_id and case.request_type_id == request_type_id
-        assert case.priority_id == priority_id and case.assignee_id is None
+        assert case.priority_id == priority_id and case.sub_priority_id == sub_priority_id
+        assert case.assignee_id is None
         assert case.sla_policy_id is not None
         assert db.scalar(select(CaseParticipant).where(CaseParticipant.case_id == case_id)) is None
         assert (
@@ -222,10 +242,13 @@ def test_knowledge_upload_query_versioning_and_environment_isolation() -> None:
         headers=auth,
     )
     assert disabled.status_code == 200 and disabled.json()["is_active"] is False
-    assert client.patch(
-        f"/api/environments/{environment['id']}/knowledge/documents/{document_id}/active?enabled=true",
-        headers=auth,
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"/api/environments/{environment['id']}/knowledge/documents/{document_id}/active?enabled=true",
+            headers=auth,
+        ).status_code
+        == 200
+    )
     answer = client.post(
         f"/api/environments/{environment['id']}/knowledge/query",
         headers=auth,

@@ -32,7 +32,7 @@ export function CaseReportPage() {
   const clear = () => { setFilters({ ...emptyFilters }); setApplied(null); setPage(1); };
   return <Container maxWidth="xl"><Stack spacing={2.5}>
     <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}><div><Typography variant="h4">דוח קריאות שירות</Typography><Typography color="text.secondary">בחרו מסננים והריצו את הדוח לקבלת תמונת מצב עדכנית</Typography></div><Stack direction="row" gap={1} alignItems="center"><ColumnSelector value={columns} onChange={changeColumns}/>{applied && <ExportExcelButton filters={applied}/>}</Stack></Stack>
-    <CaseReportFilters value={filters} onChange={setFilters} environments={environments} types={types} users={users}/>
+    <CaseReportFilters value={filters} onChange={setFilters} environments={environments} types={types} users={users} statuses={sources.statuses}/>
     <Stack direction="row" gap={1}><Button variant="contained" size="large" startIcon={<PlayArrow/>} onClick={run}>הרצת דוח</Button><Button onClick={clear}>ניקוי מסננים</Button></Stack>
     {!applied ? <Paper variant="outlined" sx={{ p: 7, textAlign: 'center' }}><Typography variant="h6">הדוח מוכן להרצה</Typography><Typography color="text.secondary">התוצאות ייטענו רק לאחר לחיצה על “הרצת דוח”</Typography></Paper>
       : report.isLoading ? <Stack alignItems="center" py={7}><CircularProgress/><Typography mt={2}>טוען תוצאות…</Typography></Stack>

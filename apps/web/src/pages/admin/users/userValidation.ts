@@ -1,0 +1,4 @@
+export type UserForm={first_name:string;last_name:string;display_name:string;email:string;user_principal_name:string;department:string;job_title:string;phone:string;mobile_phone:string;employee_id:string;computer_identifier:string;password:string;is_active:boolean;is_system_admin:boolean};
+export type FieldErrors=Partial<Record<keyof UserForm,string>>;
+const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function validateUser(values:UserForm):FieldErrors {const errors:FieldErrors={};if(!values.display_name.trim())errors.display_name='שם תצוגה הוא שדה חובה';if(!values.email.trim())errors.email='דוא״ל הוא שדה חובה';else if(!emailPattern.test(values.email.trim()))errors.email='יש להזין כתובת דוא״ל תקינה';if(values.password.length<8)errors.password='נדרשת סיסמה באורך של לפחות 8 תווים';return errors;}

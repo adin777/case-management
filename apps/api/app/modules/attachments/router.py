@@ -15,6 +15,7 @@ from app.modules.operations.models import Attachment
 
 router = APIRouter(prefix="/api", tags=["attachments"])
 ATTACHMENT_ROOT = settings.attachment_directory.resolve()
+BLOCKED_EXTENSIONS={".exe",".dll",".bat",".cmd",".ps1",".msi",".js",".vbs",".com",".scr"}
 
 
 def serialize(item: Attachment) -> dict[str, Any]:
@@ -51,6 +52,9 @@ async def upload_attachment(
     safe_name = Path(file.filename or "file").name
     if safe_name in {"", ".", ".."} or safe_name != (file.filename or "file"):
         raise HTTPException(422, "שם הקובץ אינו תקין")
+    extension=Path(safe_name).suffix.lower()
+    if extension in BLOCKED_EXTENSIONS:
+        raise HTTPException(415,"קובץ הרצה אינו מותר להעלאה")
     allowed = {value.strip() for value in settings.attachment_allowed_types.split(",")}
     if (file.content_type or "") not in allowed:
         raise HTTPException(415, "סוג הקובץ אינו נתמך")

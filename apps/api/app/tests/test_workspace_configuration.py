@@ -62,3 +62,29 @@ def test_workspace_query_and_environment_membership_copy() -> None:
     assert workspace.json()["can_view_assigned_cases"] is True
     assert all("updated_at" in row for row in workspace.json()["items"])
     assert environment["id"] in {row["environment_id"] for row in source["memberships"]}
+
+
+def test_environment_archive_restore_and_guarded_delete() -> None:
+    headers = auth()
+    created = client.post("/api/environments", headers=headers, json={
+        "name_he": "סביבה זמנית למחיקה", "name_en": "Temporary deletion", "description": "בדיקה"
+    })
+    assert created.status_code == 201
+    environment = created.json()
+    archived = client.post(f"/api/environments/{environment['id']}/archive", headers=headers)
+    assert archived.status_code == 200 and archived.json()["is_active"] is False
+    creation_options = client.get("/api/case-creation/environments", headers=headers).json()
+    assert environment["id"] not in {row["id"] for row in creation_options}
+    restored = client.post(f"/api/environments/{environment['id']}/restore", headers=headers)
+    assert restored.status_code == 200 and restored.json()["is_active"] is True
+    forbidden = client.delete(
+        f"/api/environments/{environment['id']}?confirmation=סביבה%20זמנית%20למחיקה",
+        headers=auth("requester@example.com", "Requester123!"),
+    )
+    assert forbidden.status_code == 403
+    impact = client.get(f"/api/environments/{environment['id']}/delete-impact", headers=headers)
+    assert impact.status_code == 200 and impact.json()["can_delete"] is True
+    deleted = client.delete(
+        f"/api/environments/{environment['id']}?confirmation=סביבה%20זמנית%20למחיקה", headers=headers
+    )
+    assert deleted.status_code == 204

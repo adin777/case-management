@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.modules.api import DB, Current, audit
 from app.modules.directory.active_directory import ActiveDirectoryProvider
 from app.modules.directory.entra import EntraDirectoryProvider
-from app.modules.directory.excel import HEADERS, parse, workbook
+from app.modules.directory.excel import FIELDS, HEADERS, parse, workbook
 from app.modules.directory.fake import FakeDirectoryProvider
 from app.modules.directory.provider import DirectoryBatch, DirectoryProvider, NormalizedDirectoryUser
 from app.modules.directory.sync_service import UserSyncService
@@ -43,7 +43,7 @@ def status(db: DB, user: Current) -> dict[str, Any]:
 
 
 @router.post("/directory/{name}/test")
-def test_provider(name: str, user: Current) -> dict[str, str | bool]: admin(user); return provider(name).test_connection()
+def test_provider(name: str, user: Current) -> dict[str, Any]: admin(user); return provider(name).test_connection()
 
 
 @router.post("/directory/{name}/preview")
@@ -99,10 +99,7 @@ def export_users(db: DB, user: Current, status_filter: str | None = Query(None),
         term = f"%{search.lower()}%"
         query = query.where(or_(func.lower(User.display_name).like(term), func.lower(User.email).like(term),
                                 func.lower(User.user_principal_name).like(term)))
-    export_headers = ["first_name", "last_name", "display_name", "email", "user_principal_name",
-        "department", "job_title", "phone", "mobile_phone", "employee_id", "computer_identifier",
-        "source", "status", "directory_enabled", "created_at", "updated_at", "last_login_at",
-        "last_directory_sync_at", "Groups", "Environments"]
+    export_headers = FIELDS[:-1] + ["source", "status", "directory_enabled", "created_at", "updated_at", "last_login_at", "last_directory_sync_at", "Groups", "Environments"]
     rows = [export_headers]
     for row in db.scalars(query):
         groups = db.scalars(select(Group.name).join(GroupMember, GroupMember.group_id == Group.id).where(

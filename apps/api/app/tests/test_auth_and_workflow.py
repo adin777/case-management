@@ -410,3 +410,51 @@ def test_impersonation_uses_target_permissions_and_can_be_stopped() -> None:
     assert stopped.status_code == 200
     restored = {"Authorization": f"Bearer {stopped.json()['access_token']}"}
     assert client.get("/api/auth/me", headers=restored).json()["is_system_admin"] is True
+    restored_status = client.get("/api/impersonation/status", headers=restored).json()
+    assert restored_status["active"] is False and restored_status["can_start"] is True
+
+
+def test_case_create_permission_consumes_read_only_creation_configuration() -> None:
+    admin = login_headers("admin@example.com", "Admin123!")
+    worker = login_headers("requester@example.com", "Requester123!")
+    environment = client.get("/api/case-creation/environments", headers=worker).json()[0]
+    response = client.get(
+        f"/api/case-creation/environments/{environment['id']}/configuration", headers=worker
+    )
+    assert response.status_code == 200
+    configuration = response.json()
+    assert configuration["request_types"] and configuration["priorities"]
+    request_type = configuration["request_types"][0]
+    priority = configuration["priorities"][0]
+    compatible_sub = next((row for row in configuration["sub_priorities"]
+                           if row["priority_id"] == priority["id"]), None)
+    values = []
+    for field in (request_type.get("form") or {}).get("fields", []):
+        if not field["is_required"]:
+            continue
+        value = "בדיקת הרשאת יצירה"
+        if field["field_type"] == "single_select":
+            value = field["configuration_json"]["options"][0]
+        values.append({"field_definition_id": field["id"], "value": value})
+    created = client.post("/api/cases", headers=worker, json={
+        "environment_id": environment["id"], "request_type_id": request_type["id"],
+        "title": "קריאת עובד עם הרשאת יצירה", "description": "נוצרה ממקור קריאה ייעודי",
+        "workflow_status_id": request_type["initial_status_id"], "priority_id": priority["id"],
+        "sub_priority_id": compatible_sub["id"] if compatible_sub else None, "values": values,
+    })
+    assert created.status_code == 201, created.text
+    assert client.post("/api/request-types", headers=worker, json={
+        "environment_id": environment["id"], "name_he": "אסור", "name_en": "Denied", "code": "denied"
+    }).status_code == 403
+    denied_email = f"no-create-{uuid.uuid4()}@example.com"
+    target = client.post("/api/users", headers=admin, json={
+        "display_name": "ללא הרשאת יצירה", "email": denied_email,
+        "password": "NoCreate123!", "is_active": True, "is_system_admin": False,
+    }).json()
+    assert client.post(f"/api/environments/{environment['id']}/memberships", headers=admin,
+                       json={"user_id": target["id"]}).status_code == 201
+    denied = client.get(
+        f"/api/case-creation/environments/{environment['id']}/configuration",
+        headers=login_headers(denied_email, "NoCreate123!"),
+    )
+    assert denied.status_code == 403

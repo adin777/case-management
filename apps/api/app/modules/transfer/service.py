@@ -130,6 +130,39 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
 def target_requirements(db: Session, item: Case, request_type: RequestType) -> dict[str, Any]:
     _, initial = resolve_workflow(db, request_type)
     fields, old_fields = _fields(db, request_type.form_version_id), _fields(db, item.form_definition_id)
+    priorities = list(
+        db.scalars(
+            select(PriorityDefinition)
+            .where(
+                PriorityDefinition.environment_id == request_type.environment_id,
+                PriorityDefinition.is_active.is_(True),
+            )
+            .order_by(PriorityDefinition.sort_order)
+        )
+    )
+    sub_priorities = list(
+        db.scalars(
+            select(SubPriorityDefinition)
+            .where(
+                SubPriorityDefinition.environment_id == request_type.environment_id,
+                SubPriorityDefinition.is_active.is_(True),
+            )
+            .order_by(SubPriorityDefinition.sort_order)
+        )
+    )
+    assignees = list(
+        db.scalars(
+            select(User)
+            .join(EnvironmentMembership, EnvironmentMembership.user_id == User.id)
+            .where(
+                EnvironmentMembership.environment_id == request_type.environment_id,
+                EnvironmentMembership.is_active.is_(True),
+                User.is_active.is_(True),
+                User.status == "active",
+            )
+            .order_by(User.display_name)
+        ).unique()
+    )
     old_by_key = {row.key: row for row in old_fields}
     mapped, required = [], []
     for field in fields:
@@ -155,6 +188,18 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
         ],
         "field_mappings": mapped,
         "required_fields": required,
+        "priorities": [{"id": str(row.id), "label_he": row.label_he} for row in priorities],
+        "sub_priorities": [
+            {
+                "id": str(row.id),
+                "priority_id": str(row.priority_id) if row.priority_id else None,
+                "label_he": row.label_he,
+            }
+            for row in sub_priorities
+        ],
+        "assignees": [
+            {"id": str(row.id), "display_name": row.display_name, "email": row.email} for row in assignees
+        ],
         "removed_fields": [
             {"id": str(row.id), "label": row.label_he} for row in old_fields if str(row.id) not in mapped_old
         ],
@@ -286,10 +331,16 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.version += 1
     initial = initialize_operations(db, item, target_type)
     started = start_matching_approvals(db, item)
-    AutomationEngine.run(db, item, "case_transferred", {
-        "from_environment_id": str(old_env), "environment_id": str(item.environment_id),
-        "request_type_id": str(item.request_type_id),
-    })
+    AutomationEngine.run(
+        db,
+        item,
+        "case_transferred",
+        {
+            "from_environment_id": str(old_env),
+            "environment_id": str(item.environment_id),
+            "request_type_id": str(item.request_type_id),
+        },
+    )
     history = CaseTransferHistory(
         case_id=item.id,
         from_environment_id=old_env,

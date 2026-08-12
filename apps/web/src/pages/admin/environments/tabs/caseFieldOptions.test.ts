@@ -7,10 +7,9 @@ describe('case field option editor', () => {
       .toEqual(['SAP', 'Salesforce', 'Microsoft 365']);
   });
 
-  it('stores structured values with a stable order', () => {
-    expect(parseCaseFieldOptions('SAP, Microsoft 365')).toEqual([
-      { value: 'sap', label_he: 'SAP', label_en: '', is_active: true, sort_order: 1 },
-      { value: 'microsoft_365', label_he: 'Microsoft 365', label_en: '', is_active: true, sort_order: 2 },
-    ]);
+  it('generates stable technical codes without asking the administrator for them', () => {
+    const first=parseCaseFieldOptions('SAP, מערכת פנים');const second=parseCaseFieldOptions('SAP, מערכת פנים');
+    expect(first).toEqual(second);expect(first.map(item=>item.sort_order)).toEqual([1,2]);
+    expect(first.every(item=>/^option_\d+_[a-z0-9]+$/.test(item.value))).toBe(true);
   });
 });

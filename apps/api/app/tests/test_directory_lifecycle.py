@@ -2,6 +2,7 @@ import io
 import json
 import uuid
 import zipfile
+from html import escape
 from typing import Self
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from app.main import app
 from app.modules.api import password_hash, permissions
 from app.modules.approvals.service import create_step_tasks
 from app.modules.directory.entra import EntraDirectoryProvider
-from app.modules.directory.excel import HEADERS, workbook
+from app.modules.directory.excel import HEADERS
 from app.modules.directory.fake import FakeDirectoryProvider
 from app.modules.directory.sync_service import UserSyncService
 from app.modules.environment_assignments.service import apply_rule
@@ -35,6 +36,17 @@ from app.modules.models import (
 
 client = TestClient(app)
 
+def add_template_row(content: bytes, values: list[str]) -> bytes:
+    source=zipfile.ZipFile(io.BytesIO(content)); target_stream=io.BytesIO()
+    with source, zipfile.ZipFile(target_stream,"w",zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            payload=source.read(item.filename)
+            if item.filename=="xl/worksheets/sheet1.xml":
+                row='<row r="2">'+''.join(f'<c t="inlineStr"><is><t>{escape(value)}</t></is></c>' for value in values)+'</row>'
+                payload=payload.decode().replace("</sheetData>",row+"</sheetData>").encode()
+            target.writestr(item,payload)
+    return target_stream.getvalue()
+
 
 def auth(email: str = "admin@example.com", password: str = "Admin123!") -> dict[str, str]:
     response = client.post("/api/auth/login", json={"email": email, "password": password})
@@ -49,6 +61,7 @@ def test_manual_user_lifecycle_and_role_no_longer_affects_permissions() -> None:
         "job_title": "קניינית", "is_active": True,
     })
     assert created.status_code == 201 and created.json()["source"] == "manual"
+    assert created.json()["user_principal_name"] == "noa.lifecycle@example.com"
     user_id = created.json()["id"]
     assert client.patch(f"/api/users/{user_id}", headers=headers, json={"status": "inactive"}).json()["status"] == "inactive"
     assert client.post("/api/auth/login", json={"email": "noa.lifecycle@example.com", "password": "Lifecycle123!"}).status_code == 401
@@ -78,8 +91,13 @@ def test_fake_directory_sync_and_manual_inactive_survives() -> None:
 
 
 def test_excel_preview_import_and_export() -> None:
-    headers = auth(); content = workbook([HEADERS, ["מאיה", "כהן", "מאיה כהן", "maya.excel@example.com",
-        "maya.excel@example.com", "IT", "Help Desk", "03-1", "050-1", "E-1", "PC-1", "True"]])
+    template = client.get("/api/users/import/template", headers=auth())
+    assert template.status_code == 200 and template.content.startswith(b"PK")
+    with zipfile.ZipFile(io.BytesIO(template.content)) as source:
+        template_sheet = source.read("xl/worksheets/sheet1.xml").decode()
+    assert all(header in template_sheet for header in HEADERS)
+    headers = auth(); content = add_template_row(template.content, ["מאיה", "כהן", "מאיה כהן", "maya.excel@example.com",
+        "maya.excel@example.com", "IT", "Help Desk", "03-1", "050-1", "E-1", "PC-1", "True"])
     preview = client.post("/api/users/import/preview", headers=headers,
         files={"file": ("users.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
     assert preview.status_code == 200 and preview.json()["created"] == 1
@@ -146,12 +164,22 @@ def test_job_title_approval_first_decision_cancels_snapshot_and_excludes_inactiv
 def test_directory_endpoints_contract() -> None:
     headers = auth()
     assert client.get("/api/directory/status", headers=headers).status_code == 200
-    assert client.post("/api/directory/fake/test", headers=headers).status_code == 200
+    diagnostics = client.post("/api/directory/fake/test", headers=headers)
+    assert diagnostics.status_code == 200 and diagnostics.json()["ok"] is True
+    assert {step["code"] for step in diagnostics.json()["steps"]} == {"provider", "users"}
     preview = client.post("/api/directory/fake/preview", headers=headers)
     assert preview.status_code == 200 and "users" in preview.json()
     applied = client.post("/api/directory/apply", headers=headers, json={"provider": "fake", "users": preview.json()["users"]})
     assert applied.status_code == 200
     assert client.get("/api/directory/runs", headers=headers).status_code == 200
+
+
+def test_reports_are_real_and_permission_protected() -> None:
+    admin_headers=auth(); available=client.get("/api/reports/available",headers=admin_headers)
+    assert available.status_code==200 and {row["code"] for row in available.json()}=={"cases","approvals","users","audit"}
+    for report in ("approvals","users","audit"):
+        response=client.get(f"/api/reports/{report}",headers=admin_headers);assert response.status_code==200 and "items" in response.json()
+    assert client.get("/api/reports/users",headers=auth("agent@example.com","Agent123!")).status_code==403
 
 
 def test_environment_assignment_endpoints_contract() -> None:

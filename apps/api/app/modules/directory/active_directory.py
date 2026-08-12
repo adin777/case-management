@@ -19,10 +19,18 @@ class ActiveDirectoryProvider:
         return Connection(server, user=settings.active_directory_bind_user,
                           password=settings.active_directory_bind_password, auto_bind=True)
 
-    def test_connection(self) -> dict[str, str | bool]:
-        connection = self._connection()
-        connection.unbind()
-        return {"ok": True, "message": "החיבור ל־Active Directory תקין"}
+    def test_connection(self) -> dict:
+        checks = [("server", "שרת מוגדר", bool(settings.active_directory_server)), ("base_dn", "Base DN מוגדר", bool(settings.active_directory_base_dn)), ("bind", "פרטי Bind מוגדרים", bool(settings.active_directory_bind_user and settings.active_directory_bind_password))]
+        steps = [{"code": code, "label": label, "ok": ok, "message": "מוגדר" if ok else "חסר"} for code, label, ok in checks]
+        if not all(ok for _, _, ok in checks): return {"ok": False, "message": "תצורת Active Directory חסרה", "steps": steps}
+        try:
+            connection = self._connection(); steps.extend([{"code":"reachable","label":"השרת נגיש","ok":True,"message":"LDAP/LDAPS מחובר"},{"code":"bind_success","label":"Bind הצליח","ok":True,"message":"תקין"}])
+            found = connection.search(settings.active_directory_base_dn, "(objectClass=*)", attributes=[], size_limit=1)
+            steps.extend([{"code":"base_dn_access","label":"Base DN נגיש","ok":bool(found),"message":"תקין" if found else "לא נגיש"},{"code":"user_query","label":"שאילתת משתמשים","ok":bool(found),"message":"הצליחה" if found else "נכשלה"}])
+            connection.unbind(); return {"ok": bool(found), "message": "החיבור ל־Active Directory תקין" if found else "Base DN אינו נגיש", "steps": steps}
+        except (ValueError, ImportError, OSError) as exc:
+            steps.append({"code":"connection","label":"חיבור LDAP/LDAPS ו־Bind","ok":False,"message":str(exc)})
+            return {"ok": False, "message": "בדיקת Active Directory נכשלה", "steps": steps}
 
     def fetch_users(self, delta_link: str | None = None) -> DirectoryBatch:
         connection = self._connection()

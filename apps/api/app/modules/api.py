@@ -65,9 +65,9 @@ ALL_PERMISSIONS = [
     "system.users.read", "system.users.create", "system.users.update", "system.users.disable",
     "system.users.reset_password", "system.groups.read", "system.groups.manage", "system.roles.read",
     "system.roles.manage", "system.fields.read", "system.fields.manage", "system.environments.create",
-    "system.environments.manage",
+    "system.environments.manage", "system.fields.delete",
     "environment.read",
-    "environment.manage",
+    "environment.manage", "environment.delete", "environment.fields.delete",
     "environment.users.manage", "environment.groups.manage", "environment.fields.manage",
     "environment.request_types.manage", "environment.forms.manage", "environment.rules.manage",
     "environment.audit.read",
@@ -87,7 +87,7 @@ ALL_PERMISSIONS = [
     "attachment.read", "attachment.upload", "attachment.delete",
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
-    "report.cases", "report.audit", "report.sla",
+    "report.cases", "report.approvals", "report.users", "report.audit", "report.sla",
 ]
 
 
@@ -247,6 +247,7 @@ class CaseOut(BaseModel):
     id: uuid.UUID
     case_number: str
     environment_id: uuid.UUID
+    environment_name: str | None = None
     request_type_id: uuid.UUID
     form_definition_id: uuid.UUID | None
     title: str
@@ -636,6 +637,59 @@ def case_creation_environments(db: DB, user: Current) -> list[Environment]:
     return rows
 
 
+@router.get("/case-creation/environments/{environment_id}/configuration")
+def case_creation_environment_configuration(
+    environment_id: uuid.UUID, db: DB, user: Current
+) -> dict[str, Any]:
+    require(db, user, environment_id, "case.create")
+    environment = db.get(Environment, environment_id)
+    if not environment or not environment.is_active:
+        raise HTTPException(404, "הסביבה אינה זמינה לפתיחת קריאה")
+    request_types = list(db.scalars(select(RequestType).where(
+        RequestType.environment_id == environment_id, RequestType.is_active.is_(True)
+    ).order_by(RequestType.sort_order, RequestType.name_he)))
+    priorities = list(db.scalars(select(PriorityDefinition).where(
+        PriorityDefinition.environment_id == environment_id, PriorityDefinition.is_active.is_(True)
+    ).order_by(PriorityDefinition.sort_order)))
+    sub_priorities = list(db.scalars(select(SubPriorityDefinition).where(
+        SubPriorityDefinition.environment_id == environment_id, SubPriorityDefinition.is_active.is_(True)
+    ).order_by(SubPriorityDefinition.sort_order)))
+    type_rows = []
+    for request_type in request_types:
+        workflow, initial = resolve_workflow(db, request_type)
+        statuses = list(db.scalars(select(WorkflowStatus).where(
+            WorkflowStatus.workflow_id == workflow.id, WorkflowStatus.is_active.is_(True)
+        ).order_by(WorkflowStatus.sort_order)))
+        form = db.get(FormDefinition, request_type.form_version_id) if request_type.form_version_id else None
+        type_rows.append({
+            "id": request_type.id, "environment_id": request_type.environment_id,
+            "name_he": request_type.name_he, "is_active": True,
+            "default_priority_id": request_type.default_priority_id,
+            "default_sub_priority_id": request_type.default_sub_priority_id,
+            "initial_status_id": initial.id,
+            "can_choose_status": "case.change_status" in permissions(db, user, environment_id),
+            "statuses": [{"id": row.id, "label_he": row.label_he,
+                          "is_initial": row.is_initial} for row in statuses],
+            "form": FormOut.model_validate(form).model_dump() if form else None,
+        })
+    participant_rows = []
+    if "case.manage_participants" in permissions(db, user, environment_id):
+        participant_rows = [{"id": row.id, "display_name": row.display_name, "email": row.email}
+                            for row in db.scalars(select(User).join(
+                                EnvironmentMembership, EnvironmentMembership.user_id == User.id
+                            ).where(EnvironmentMembership.environment_id == environment_id,
+                                    EnvironmentMembership.is_active.is_(True), User.is_active.is_(True),
+                                    User.status == "active").order_by(User.display_name)).unique()]
+    return {
+        "environment_id": environment.id, "request_types": type_rows,
+        "priorities": [{"id": row.id, "label_he": row.label_he, "is_active": True}
+                       for row in priorities],
+        "sub_priorities": [{"id": row.id, "priority_id": row.priority_id,
+                            "label_he": row.label_he, "is_active": True} for row in sub_priorities],
+        "participants": participant_rows,
+    }
+
+
 @router.post("/environments", response_model=EnvironmentOut, status_code=201)
 def create_environment(data: EnvironmentIn, db: DB, user: Current) -> Environment:
     if not user.is_system_admin:
@@ -700,6 +754,61 @@ def update_environment(
     audit(db, user, "environment", item.id, "updated", before, data.model_dump(exclude_unset=True))
     db.commit()
     return item
+
+
+@router.post("/environments/{environment_id}/archive", response_model=EnvironmentOut)
+def archive_environment(environment_id: uuid.UUID, db: DB, user: Current) -> Environment:
+    require(db, user, environment_id, "environment.manage")
+    item = db.get(Environment, environment_id)
+    if not item:
+        raise HTTPException(404, "הסביבה לא נמצאה")
+    before = {"is_active": item.is_active}
+    item.is_active = False
+    audit(db, user, "environment", item.id, "archived", before, {"is_active": False})
+    db.commit()
+    return item
+
+
+@router.post("/environments/{environment_id}/restore", response_model=EnvironmentOut)
+def restore_environment(environment_id: uuid.UUID, db: DB, user: Current) -> Environment:
+    require(db, user, environment_id, "environment.manage")
+    item = db.get(Environment, environment_id)
+    if not item:
+        raise HTTPException(404, "הסביבה לא נמצאה")
+    before = {"is_active": item.is_active}
+    item.is_active = True
+    audit(db, user, "environment", item.id, "restored", before, {"is_active": True})
+    db.commit()
+    return item
+
+
+@router.get("/environments/{environment_id}/delete-impact")
+def environment_delete_impact(environment_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
+    require(db, user, environment_id, "environment.delete")
+    item = db.get(Environment, environment_id)
+    if not item:
+        raise HTTPException(404, "הסביבה לא נמצאה")
+    case_count = db.scalar(select(func.count()).select_from(Case).where(Case.environment_id == item.id)) or 0
+    dependency_count = db.scalar(select(func.count()).select_from(RequestType).where(RequestType.environment_id == item.id)) or 0
+    return {"environment_id": item.id, "name": item.name_he, "cases": case_count,
+            "dependencies": dependency_count, "can_delete": case_count == 0 and dependency_count == 0}
+
+
+@router.delete("/environments/{environment_id}", status_code=204)
+def delete_environment(environment_id: uuid.UUID, confirmation: str, db: DB, user: Current) -> None:
+    require(db, user, environment_id, "environment.delete")
+    item = db.get(Environment, environment_id)
+    if not item:
+        raise HTTPException(404, "הסביבה לא נמצאה")
+    if confirmation != item.name_he:
+        raise HTTPException(422, "יש להקליד את שם הסביבה במדויק")
+    impact = environment_delete_impact(environment_id, db, user)
+    if not impact["can_delete"]:
+        raise HTTPException(409, detail={"message": "לסביבה קיימות תלויות ולכן ניתן להעביר אותה לארכיון בלבד", **impact})
+    audit(db, user, "environment", item.id, "deleted", before={"name_he": item.name_he})
+    db.flush()
+    db.delete(item)
+    db.commit()
 
 
 @router.get("/environments/{environment_id}/memberships")
@@ -949,7 +1058,9 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     sub_priority_id = data.sub_priority_id or rt.default_sub_priority_id
     if sub_priority_id:
         sub_priority = db.get(SubPriorityDefinition, sub_priority_id)
-        if not sub_priority or sub_priority.environment_id != data.environment_id or not sub_priority.is_active:
+        if (not sub_priority or sub_priority.environment_id != data.environment_id
+                or (sub_priority.priority_id is not None and sub_priority.priority_id != priority.id)
+                or not sub_priority.is_active):
             raise HTTPException(422, "Sub-priority does not belong to the selected priority")
     provided = {v.field_definition_id: v.value for v in data.values}
     active_fields = [field for field in form.fields if field.is_active] if form else []
@@ -1199,10 +1310,12 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
     granted = permissions(db, user, item.environment_id)
     can_override_lock = user.is_system_admin or "environment.manage" in granted
     reporter = db.get(User, item.reporter_id)
+    environment = db.get(Environment, item.environment_id)
     return CaseOut.model_validate(item).model_copy(
         update={
             "reporter_name": reporter.display_name if reporter else None,
             "reporter_email": reporter.email if reporter else None,
+            "environment_name": environment.name_he if environment else None,
             "comments": [CommentOut.model_validate(c) for c in visible_comments],
             "permissions": {
                 "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
