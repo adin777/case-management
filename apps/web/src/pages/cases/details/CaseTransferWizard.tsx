@@ -1,8 +1,137 @@
-import { useEffect,useState } from 'react';import { useQuery } from '@tanstack/react-query';import { Alert,Button,Dialog,DialogActions,DialogContent,DialogTitle,MenuItem,Stack,Step,StepLabel,Stepper,TextField,Typography } from '@mui/material';import { api } from '../../../api/client';import type { Environment } from '../../../types';
-type Preview={target_environment_name:string;request_types:{id:string;name_he:string;requires_approval:boolean}[];removed_participant_ids:string[];assignee_will_be_removed:boolean;warning:string};
-type Requirements={initial_status_label:string;required_fields:{id:string;label:string;field_type:string}[];removed_fields:{id:string;label:string}[];field_mappings:{label:string}[];priorities:{id:string;label_he:string}[];sub_priorities:{id:string;priority_id?:string;label_he:string}[];assignees:{id:string;display_name:string;email:string}[]};
-export function CaseTransferWizard({caseId,currentEnvironmentId,open,onClose,onTransferred}:{caseId:string;currentEnvironmentId:string;open:boolean;onClose:()=>void;onTransferred:()=>void}){const[step,setStep]=useState(0);const[target,setTarget]=useState('');const[requestType,setRequestType]=useState('');const[priority,setPriority]=useState('');const[sub,setSub]=useState('');const[assignee,setAssignee]=useState('');const[values,setValues]=useState<Record<string,string>>({});const[reason,setReason]=useState('');const[error,setError]=useState('');const[preview,setPreview]=useState<Preview>();const[requirements,setRequirements]=useState<Requirements>();const{data:environments=[]}=useQuery({queryKey:['environments'],queryFn:()=>api<Environment[]>('/environments'),enabled:open});
-const clearDependent=()=>{setRequestType('');setPriority('');setSub('');setAssignee('');setValues({});setPreview(undefined);setRequirements(undefined)};useEffect(()=>{if(!open){setStep(0);setTarget('');clearDependent();setError('')}},[open]);
-async function next(){try{setError('');if(step===0){setPreview(await api<Preview>(`/cases/${caseId}/transfer-preview?target_environment_id=${target}`));setStep(1)}else if(step===1){if(!requestType)throw new Error('יש לבחור סוג קריאה');setRequirements(await api<Requirements>(`/cases/${caseId}/transfer-requirements?request_type_id=${requestType}`));setStep(2)}else if(step===2){const missing=requirements?.required_fields.filter(f=>!(values[f.id]||'').trim())||[];if(!priority)throw new Error('יש לבחור עדיפות');if(missing.length)throw new Error(`חובה למלא: ${missing.map(f=>f.label).join(', ')}`);setStep(3)}}catch(e){setError((e as Error).message)}}
-async function execute(){try{await api(`/cases/${caseId}/transfer`,{method:'POST',body:JSON.stringify({target_environment_id:target,target_request_type_id:requestType,priority_id:priority,sub_priority_id:sub||null,assignee_id:assignee||null,new_field_values:Object.entries(values).map(([field_definition_id,value])=>({field_definition_id,value})),reason:reason||null})});onTransferred();onClose()}catch(e){setError((e as Error).message)}}
-return <Dialog open={open} onClose={onClose} fullWidth maxWidth="md"><DialogTitle>העברת קריאה לסביבה אחרת</DialogTitle><DialogContent><Stack spacing={2} sx={{pt:1}}><Stepper activeStep={step}>{['סביבת יעד','השוואה','השלמת מידע','אישור'].map(label=><Step key={label}><StepLabel>{label}</StepLabel></Step>)}</Stepper>{error&&<Alert severity="error">{error}</Alert>}{step===0&&<TextField select label="סביבת יעד" value={target} onChange={e=>{setTarget(e.target.value);clearDependent()}}>{environments.filter(e=>e.is_active&&e.id!==currentEnvironmentId).map(e=><MenuItem key={e.id} value={e.id}>{e.name_he}</MenuItem>)}</TextField>}{step===1&&preview&&<><Alert severity="warning">{preview.warning}</Alert><Typography>העברה אל: <strong>{preview.target_environment_name}</strong></Typography><Typography>משתתפים שיוסרו: {preview.removed_participant_ids.length}</Typography><TextField select label="סוג קריאה בסביבת היעד" value={requestType} onChange={e=>setRequestType(e.target.value)}>{preview.request_types.map(r=><MenuItem key={r.id} value={r.id}>{r.name_he}</MenuItem>)}</TextField></>}{step===2&&requirements&&<><Typography>סטטוס התחלתי: <strong>{requirements.initial_status_label}</strong></Typography><TextField select label="עדיפות" value={priority} onChange={e=>{setPriority(e.target.value);setSub('')}}>{requirements.priorities.map(p=><MenuItem key={p.id} value={p.id}>{p.label_he}</MenuItem>)}</TextField><TextField select label="תת־עדיפות" value={sub} onChange={e=>setSub(e.target.value)}><MenuItem value="">ללא</MenuItem>{requirements.sub_priorities.filter(s=>!s.priority_id||s.priority_id===priority).map(s=><MenuItem key={s.id} value={s.id}>{s.label_he}</MenuItem>)}</TextField><TextField select label="מטפל בסביבת היעד" value={assignee} onChange={e=>setAssignee(e.target.value)}><MenuItem value="">ללא שיוך</MenuItem>{requirements.assignees.map(u=><MenuItem key={u.id} value={u.id}>{u.display_name} · {u.email}</MenuItem>)}</TextField>{requirements.required_fields.map(f=><TextField key={f.id} required label={f.label} value={values[f.id]||''} onChange={e=>setValues({...values,[f.id]:e.target.value})}/>)}</>}{step===3&&preview&&requirements&&<><Alert severity="warning">העברת הקריאה תשנה את סביבת העבודה. המידע ההיסטורי יישמר.</Alert><Typography>סביבה: {preview.target_environment_name}</Typography><Typography>סטטוס חדש: {requirements.initial_status_label}</Typography><TextField label="סיבת ההעברה (רשות)" multiline value={reason} onChange={e=>setReason(e.target.value)}/></>}</Stack></DialogContent><DialogActions><Button onClick={onClose}>ביטול</Button>{step>0&&<Button onClick={()=>setStep(step-1)}>חזרה</Button>}{step<3?<Button variant="contained" disabled={step===0&&!target} onClick={next}>המשך</Button>:<Button variant="contained" color="warning" onClick={execute}>העברת הקריאה</Button>}</DialogActions></Dialog>}
+import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  Alert, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
+  MenuItem, Stack, Step, StepLabel, Stepper, TextField, Typography,
+} from '@mui/material';
+import { api } from '../../../api/client';
+import type { Environment } from '../../../types';
+
+type Preview = {
+  target_environment_name: string;
+  request_types: { id: string; name_he: string; requires_approval: boolean }[];
+  removed_participant_ids: string[];
+  assignee_will_be_removed: boolean;
+  warning: string;
+};
+export type TransferRequirements = {
+  initial_status_label: string;
+  required_fields: { id: string; label: string; field_type: string }[];
+  removed_fields: { id: string; label: string }[];
+  field_mappings: { label: string }[];
+  priorities: { id: string; label_he: string }[];
+  sub_priorities: { id: string; priority_id?: string; label_he: string }[];
+  assignees: { id: string; display_name: string; email: string }[];
+};
+
+const list = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
+export function normalizeTransferRequirements(value: unknown): TransferRequirements {
+  const raw = value && typeof value === 'object' ? value as Partial<TransferRequirements> : {};
+  return {
+    initial_status_label: typeof raw.initial_status_label === 'string' ? raw.initial_status_label : '',
+    required_fields: list(raw.required_fields),
+    removed_fields: list(raw.removed_fields),
+    field_mappings: list(raw.field_mappings),
+    priorities: list(raw.priorities),
+    sub_priorities: list(raw.sub_priorities),
+    assignees: list(raw.assignees),
+  };
+}
+
+type Props = { caseId: string; currentEnvironmentId: string; open: boolean; onClose: () => void; onTransferred: () => void };
+
+export function CaseTransferWizard({ caseId, currentEnvironmentId, open, onClose, onTransferred }: Props) {
+  const [step, setStep] = useState(0);
+  const [target, setTarget] = useState('');
+  const [requestType, setRequestType] = useState('');
+  const [assignee, setAssignee] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<Preview>();
+  const [requirements, setRequirements] = useState<TransferRequirements>();
+  const environmentsQuery = useQuery({ queryKey: ['environments'], queryFn: () => api<Environment[]>('/environments'), enabled: open });
+  const environments = Array.isArray(environmentsQuery.data) ? environmentsQuery.data : [];
+
+  const clearDependent = () => {
+    setRequestType(''); setAssignee(''); setValues({});
+    setPreview(undefined); setRequirements(undefined);
+  };
+  useEffect(() => {
+    if (!open) { setStep(0); setTarget(''); clearDependent(); setError(''); setReason(''); }
+  }, [open]);
+
+  async function next() {
+    setLoading(true); setError('');
+    try {
+      if (step === 0) {
+        const result = await api<Preview>(`/cases/${caseId}/transfer-preview?target_environment_id=${target}`);
+        setPreview({ ...result, request_types: list(result?.request_types), removed_participant_ids: list(result?.removed_participant_ids) });
+        setStep(1);
+      } else if (step === 1) {
+        if (!requestType) throw new Error('יש לבחור סוג קריאה');
+        const result = await api<unknown>(`/cases/${caseId}/transfer-requirements?request_type_id=${requestType}`);
+        setRequirements(normalizeTransferRequirements(result));
+        setStep(2);
+      } else if (step === 2) {
+        const missing = (requirements?.required_fields ?? []).filter(field => !(values[field.id] || '').trim());
+        if (missing.length) throw new Error(`חובה למלא: ${missing.map(field => field.label).join(', ')}`);
+        setStep(3);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'טעינת נתוני ההעברה נכשלה');
+    } finally { setLoading(false); }
+  }
+
+  async function execute() {
+    setLoading(true); setError('');
+    try {
+      await api(`/cases/${caseId}/transfer`, { method: 'POST', body: JSON.stringify({
+        target_environment_id: target, target_request_type_id: requestType, priority_id: null,
+        sub_priority_id: null, assignee_id: assignee || null,
+        new_field_values: Object.entries(values).map(([field_definition_id, value]) => ({ field_definition_id, value })),
+        reason: reason || null,
+      }) });
+      onTransferred(); onClose();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'העברת הקריאה נכשלה');
+    } finally { setLoading(false); }
+  }
+
+  const req = requirements ?? normalizeTransferRequirements(undefined);
+  return <Dialog open={open} onClose={loading ? undefined : onClose} fullWidth maxWidth="md">
+    <DialogTitle>העברת קריאה לסביבה אחרת</DialogTitle>
+    <DialogContent><Stack spacing={2} sx={{ pt: 1 }}>
+      <Stepper activeStep={step}>{['סביבת יעד', 'השוואה', 'השלמת מידע', 'אישור'].map(label => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}</Stepper>
+      {(error || environmentsQuery.error) && <Alert severity="error">{error || (environmentsQuery.error as Error).message}</Alert>}
+      {loading && <Stack direction="row" spacing={1} alignItems="center"><CircularProgress size={20}/><Typography>טוען נתונים…</Typography></Stack>}
+      {step === 0 && <TextField select label="סביבת יעד" value={target} disabled={loading} onChange={event => { setTarget(event.target.value); clearDependent(); }}>
+        {environments.filter(environment => environment.is_active && environment.id !== currentEnvironmentId).map(environment => <MenuItem key={environment.id} value={environment.id}>{environment.name_he}</MenuItem>)}
+      </TextField>}
+      {step === 1 && preview && <>
+        {preview.warning && <Alert severity="warning">{preview.warning}</Alert>}
+        <Typography>העברה אל: <strong>{preview.target_environment_name}</strong></Typography>
+        <Typography>משתתפים שיוסרו: {preview.removed_participant_ids.length}</Typography>
+        <TextField select label="סוג קריאה בסביבת היעד" value={requestType} disabled={loading} onChange={event => setRequestType(event.target.value)}>
+          {preview.request_types.map(type => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}
+        </TextField>
+      </>}
+      {step === 2 && requirements && <>
+        <Typography>סטטוס התחלתי: <strong>{req.initial_status_label || 'לא הוגדר'}</strong></Typography>
+        <Alert severity="info">הסטטוס, העדיפות ותת־העדיפות הגלובליים יישמרו ללא שינוי.</Alert>
+        <TextField select label="מטפל בסביבת היעד" value={assignee} disabled={loading} onChange={event => setAssignee(event.target.value)}>
+          <MenuItem value="">ללא שיוך</MenuItem>{req.assignees.map(user => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}
+        </TextField>
+        {req.required_fields.map(field => <TextField key={field.id} required label={field.label} value={values[field.id] || ''} onChange={event => setValues(current => ({ ...current, [field.id]: event.target.value }))}/>)}
+      </>}
+      {step === 3 && preview && requirements && <>
+        <Alert severity="warning">העברת הקריאה תשנה את סביבת העבודה. המידע ההיסטורי יישמר.</Alert>
+        <Typography>סביבה: {preview.target_environment_name}</Typography>
+        <Typography>סטטוס חדש: {req.initial_status_label || 'לא הוגדר'}</Typography>
+        <TextField label="סיבת ההעברה (רשות)" multiline value={reason} onChange={event => setReason(event.target.value)}/>
+      </>}
+    </Stack></DialogContent>
+    <DialogActions><Button disabled={loading} onClick={onClose}>ביטול</Button>{step > 0 && <Button disabled={loading} onClick={() => setStep(current => current - 1)}>חזרה</Button>}{step < 3 ? <Button variant="contained" disabled={loading || (step === 0 && !target)} onClick={next}>המשך</Button> : <Button variant="contained" color="warning" disabled={loading} onClick={execute}>העברת הקריאה</Button>}</DialogActions>
+  </Dialog>;
+}

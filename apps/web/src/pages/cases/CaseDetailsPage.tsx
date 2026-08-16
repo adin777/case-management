@@ -28,8 +28,8 @@ export function CaseDetailsPage() {
   const { data: item, isLoading } = useQuery({ queryKey: ['case', id], queryFn: () => api<CaseWithEnvironment>(`/cases/${id}`) });
   const enabled = !!item;
   const { data: types = [] } = useQuery({ queryKey: ['request-types', item?.environment_id], queryFn: () => api<RequestType[]>(`/request-types?environment_id=${item!.environment_id}`), enabled });
-  const { data: priorities = [] } = useQuery({ queryKey: ['priorities', item?.environment_id], queryFn: () => api<Priority[]>(`/environments/${item!.environment_id}/priorities`), enabled });
-  const { data: subs = [] } = useQuery({ queryKey: ['sub-priorities', item?.environment_id], queryFn: () => api<SubPriority[]>(`/environments/${item!.environment_id}/sub-priorities`), enabled });
+  const { data: priorities = [] } = useQuery({ queryKey: ['global-case-values', 'priorities'], queryFn: () => api<Priority[]>('/global-case-values/priorities'), enabled });
+  const { data: subs = [] } = useQuery({ queryKey: ['global-case-values', 'sub-priorities'], queryFn: () => api<SubPriority[]>('/global-case-values/sub-priorities'), enabled });
   const { data: statuses = [] } = useQuery({ queryKey: ['status-options', id, item?.workflow_status_id], queryFn: () => api<StatusOption[]>(`/cases/${id}/status-options`), enabled });
   const { data: participants = [] } = useQuery({ queryKey: ['participants', id], queryFn: () => api<Participant[]>(`/cases/${id}/participants`), enabled });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users'), retry: false });

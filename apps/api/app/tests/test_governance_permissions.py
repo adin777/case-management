@@ -290,13 +290,20 @@ def test_environment_field_catalog_boundaries() -> None:
     )
 
 
-def test_sub_priority_parent_and_required_core_fields() -> None:
+def test_global_sub_priority_and_required_core_fields() -> None:
     headers = auth("admin@example.com", "Admin123!")
     environment = it_environment(headers)
     priorities = client.get(f"/api/environments/{environment['id']}/priorities", headers=headers).json()
-    high = next(row for row in priorities if row["code"] == "high")
-    normal = next(row for row in priorities if row["code"] == "normal")
-    assert all(row["priority_id"] == high["id"] for row in high["sub_priorities"])
+    normal = next(row for row in priorities if row["label_he"] == "רגילה")
+    sub_priorities = client.get("/api/global-case-values/sub-priorities", headers=headers).json()
+    if not sub_priorities:
+        created_sub = client.post(
+            "/api/global-case-values/sub-priorities",
+            headers=headers,
+            json={"label_he": "תת־עדיפות גלובלית", "is_active": True},
+        )
+        assert created_sub.status_code == 201
+        sub_priorities = [created_sub.json()]
     request_type = client.get(
         f"/api/request-types?environment_id={environment['id']}", headers=headers
     ).json()[0]
@@ -317,14 +324,15 @@ def test_sub_priority_parent_and_required_core_fields() -> None:
         json={
             "environment_id": environment["id"],
             "request_type_id": request_type["id"],
-            "title": "Mismatched priority",
+            "title": "Global priority values",
             "description": "Core description",
             "priority_id": normal["id"],
-            "sub_priority_id": high["sub_priorities"][0]["id"],
+            "sub_priority_id": sub_priorities[0]["id"],
             "values": [],
         },
     )
     assert mismatched.status_code == 422
+    assert "missing_required_fields" in mismatched.json()["detail"]
 
 
 def option(label: str, order: int) -> dict:

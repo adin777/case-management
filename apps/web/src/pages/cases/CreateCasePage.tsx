@@ -23,7 +23,7 @@ export function CreateCasePage() {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const { data: environments = [] } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
+  const { data: environments = [], error: environmentsError } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
   const { data: creationConfig, error: configError } = useQuery({ queryKey: ['case-creation-configuration', environmentId], queryFn: () => api<CreationConfig>(caseCreationConfigurationUrl(environmentId)), enabled: !!environmentId, retry:false });
   const requestTypeRows=creationConfig?.request_types||[];const priorities=creationConfig?.priorities||[];const subPriorities=creationConfig?.sub_priorities||[];const users=creationConfig?.participants||[];
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
@@ -53,12 +53,13 @@ export function CreateCasePage() {
   return <Container maxWidth="md"><Stack spacing={3}>
     <div><Typography variant="h4" fontWeight={800}>פתיחת קריאה חדשה</Typography><Typography color="text.secondary">מלאו את פרטי הליבה והוסיפו משתתפים לפי הצורך</Typography></div>
     {error && <Alert severity="error">{error}</Alert>}
+    {environmentsError && <Alert severity="error">לא ניתן לטעון את הסביבות המורשות. {(environmentsError as Error).message}</Alert>}
     <Card variant="outlined"><CardContent><Stack component="form" onSubmit={submit} spacing={2.5}>
       <FormControl required><InputLabel>סביבה</InputLabel><Select label="סביבה" value={environmentId} onChange={(event) => { setEnvironmentId(event.target.value); setRequestTypeId(''); setPriorityId(''); setSubPriorityId(''); setWorkflowStatusId(''); setValues({}); }}>{environments.map((environment) => <MenuItem key={environment.id} value={environment.id}>{environment.name_he}</MenuItem>)}</Select></FormControl>
       <TextField label="נושא" required value={title} onChange={(event) => setTitle(event.target.value)} />
       <TextField label="תיאור" required multiline minRows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
       <FormControl required disabled={!environmentId}><InputLabel>סוג קריאה</InputLabel><Select label="סוג קריאה" value={requestTypeId} onChange={(event) => setRequestTypeId(event.target.value)}>{requestTypes.map((type) => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}</Select></FormControl>
-      {configError && <Alert severity="error" action={me?.is_system_admin ? <Button color="inherit" href="/admin/environments">מעבר להגדרות סטטוס</Button> : undefined}>{me?.is_system_admin ? `לא ניתן לפתוח קריאה מסוג "${selectedType?.name_he || ''}". לא הוגדר סטטוס התחלתי בתהליך העבודה המשויך לסוג קריאה זה.` : 'לא ניתן לפתוח כרגע קריאה מסוג זה. יש לפנות למנהל הסביבה.'}</Alert>}
+      {configError && <Alert severity="error" action={me?.is_system_admin ? <Button color="inherit" href="/admin/case-values">מעבר להגדרות סטטוס</Button> : undefined}>{me?.is_system_admin ? 'לא ניתן לפתוח קריאה: לא הוגדר סטטוס התחלתי גלובלי פעיל.' : 'לא ניתן לפתוח כרגע קריאה. יש לפנות למנהל המערכת.'}</Alert>}
       {caseConfig?.can_choose_status ? <FormControl required><InputLabel>סטטוס</InputLabel><Select label="סטטוס" value={workflowStatusId} onChange={(event) => setWorkflowStatusId(event.target.value)}>{caseConfig.statuses.map((status) => <MenuItem key={status.id} value={status.id}>{status.label_he}</MenuItem>)}</Select></FormControl> : caseConfig && <TextField label="סטטוס" value={caseConfig.statuses.find((status) => status.id === workflowStatusId)?.label_he || ''} slotProps={{ input: { readOnly: true } }} />}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
         <FormControl required fullWidth disabled={!environmentId}><InputLabel>עדיפות</InputLabel><Select label="עדיפות" value={priorityId} onChange={(event) => { setPriorityId(event.target.value); setSubPriorityId(''); }}>{priorities.map((priority) => <MenuItem key={priority.id} value={priority.id}>{priority.label_he}</MenuItem>)}</Select></FormControl>

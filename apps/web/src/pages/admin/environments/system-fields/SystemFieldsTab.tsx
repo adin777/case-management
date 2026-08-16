@@ -7,7 +7,7 @@ import { SystemFieldCard } from './SystemFieldCard';
 import { SystemFieldValuesDialog } from './SystemFieldValuesDialog';
 import type { SystemField } from './types';
 
-const visible = new Set(['request_type', 'status', 'priority', 'sub_priority']);
+const visible = new Set(['request_type']);
 export function SystemFieldsTab({ environment }: { environment: Environment }) {
   const [selected, setSelected] = useState<SystemField>();
   const { data, isLoading, error } = useQuery({ queryKey: ['system-fields', environment.id], queryFn: () => api<SystemField[]>(`/environments/${environment.id}/system-fields`) });

@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 from app.modules.access.models import AccessLevelAssignment, PermissionDomain
 from app.modules.access.service import EffectivePermissionService, replace_levels
 from app.modules.api import DB, Current, audit
-from app.modules.models import User
+from app.modules.models import Group, User
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 
@@ -107,6 +107,35 @@ def effective_access(user_id: uuid.UUID, db: DB, user: Current,
     if not target:
         raise HTTPException(404, "המשתמש לא נמצא")
     return EffectivePermissionService(db).explain_all(target, environment_id)
+
+
+@router.get("/subjects/{subject_type}/{subject_id}/matrix")
+def subject_matrix(subject_type: Literal["user", "group"], subject_id: uuid.UUID,
+                   db: DB, user: Current, environment_id: uuid.UUID | None = None) -> list[dict]:
+    system_admin(user)
+    domains = list(db.scalars(select(PermissionDomain).where(
+        PermissionDomain.is_active.is_(True)).order_by(PermissionDomain.sort_order)))
+    field = AccessLevelAssignment.user_id if subject_type == "user" else AccessLevelAssignment.group_id
+    subject = db.get(User, subject_id) if subject_type == "user" else db.get(Group, subject_id)
+    if not subject:
+        raise HTTPException(404, "המשתמש או הקבוצה לא נמצאו")
+    direct = {row.domain_code: row.access_level for row in db.scalars(select(AccessLevelAssignment).where(
+        field == subject_id, AccessLevelAssignment.environment_id == environment_id))}
+    if subject_type == "user":
+        target = db.get(User, subject_id)
+        if not target:
+            raise HTTPException(404, "המשתמש לא נמצא")
+        resolved = {row["domain"]: row for row in EffectivePermissionService(db).explain_all(target, environment_id)}
+        return [{"domain_code": domain.code, "domain_name": domain.name_he,
+                 "direct_level": direct.get(domain.code, "inherit"),
+                 "effective_level": resolved[domain.code]["effective_level"],
+                 "source": resolved[domain.code]["source_name"], "scope": domain.scope,
+                 "can_override": not target.is_system_admin} for domain in domains]
+    return [{"domain_code": domain.code, "domain_name": domain.name_he,
+             "direct_level": direct.get(domain.code, "none"),
+             "effective_level": direct.get(domain.code, "none"),
+             "source": "הרשאת קבוצה" if domain.code in direct else "אין הרשאה",
+             "scope": domain.scope, "can_override": True} for domain in domains]
 
 
 def source_levels(db: DB, data: CopyAccessIn) -> dict[str, str]:

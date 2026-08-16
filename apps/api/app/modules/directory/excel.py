@@ -34,7 +34,14 @@ def parse(content: bytes) -> list[NormalizedDirectoryUser]:
     ns = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}; values: list[list[str]] = []
     for sheet_row in xml_root.findall(".//x:row", ns):
         values.append(["".join(cell.itertext()) for cell in sheet_row.findall("x:c", ns)])
-    if not values or values[0][:len(HEADERS)] != HEADERS: raise ValueError("כותרות הקובץ אינן תואמות לתבנית")
+    received = values[0] if values else []
+    if received != HEADERS:
+        missing = [header for header in HEADERS if header not in received]
+        extra = [header for header in received if header not in HEADERS]
+        raise ValueError(
+            "כותרות הקובץ אינן תואמות לתבנית. "
+            f"התקבלו: {received}; צפויות: {HEADERS}; חסרות: {missing}; עודפות: {extra}"
+        )
     result = []
     for number, values_row in enumerate(values[1:], 2):
         padded = values_row + [""] * (len(FIELDS) - len(values_row)); data = dict(zip(FIELDS, padded, strict=True))
@@ -51,5 +58,5 @@ def parse(content: bytes) -> list[NormalizedDirectoryUser]:
             directory_enabled=enabled,
         ))
         except ValidationError as exc:
-            field=str(exc.errors()[0].get("loc",["value"])[0]);received=data.get(field,"");raise ValueError(f"שורה {number}, {field}: התקבל '{received}'; צפוי פורמט תקין; {exc.errors()[0]['msg']}") from exc
+            field=str(exc.errors()[0].get("loc",["value"])[0]);received_value=data.get(field,"");raise ValueError(f"שורה {number}, {field}: התקבל '{received_value}'; צפוי פורמט תקין; {exc.errors()[0]['msg']}") from exc
     return result

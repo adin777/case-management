@@ -26,14 +26,15 @@ from app.modules.models import (
     CaseFieldDefinition,
     CaseParticipant,
     Environment,
+    GlobalPriorityDefinition,
+    GlobalStatusDefinition,
     Permission,
-    PriorityDefinition,
     RequestType,
     User,
     UserPermissionAssignment,
 )
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.models import Notification, WorkflowDefinition, WorkflowStatus
+from app.modules.operations.models import Notification
 
 router = APIRouter(prefix="/api", tags=["configurable-platform"])
 FIELD_TYPES = {"short_text", "long_text", "number", "date", "datetime", "boolean",
@@ -478,10 +479,10 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
         query = query.where(or_(*access_conditions))
     if environment_id: query = query.where(Case.environment_id == environment_id)
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
-    status_label = select(WorkflowStatus.label_he).where(
-        WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery()
-    priority_label = select(PriorityDefinition.label_he).where(
-        PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery()
+    status_label = select(GlobalStatusDefinition.label_he).where(
+        GlobalStatusDefinition.id == Case.workflow_status_id).correlate(Case).scalar_subquery()
+    priority_label = select(GlobalPriorityDefinition.label_he).where(
+        GlobalPriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery()
     assignee_label = select(User.display_name).where(
         User.id == Case.assignee_id).correlate(Case).scalar_subquery()
     if status: query = query.where(status_label == status)
@@ -541,8 +542,8 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                          case_number, title, description, priority, workflow_status_id, priority_id,
                          include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
-    query = query.add_columns(select(WorkflowStatus.label_he).where(WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
-    query = query.add_columns(select(PriorityDefinition.label_he).where(PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
+    query = query.add_columns(select(GlobalStatusDefinition.label_he).where(GlobalStatusDefinition.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
+    query = query.add_columns(select(GlobalPriorityDefinition.label_he).where(GlobalPriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
     rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     return {"items": [report_row(row) for row in rows], "total": total, "page": page, "page_size": page_size}
@@ -554,17 +555,10 @@ def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None
         if not environment_id:
             raise HTTPException(422, "יש לבחור סביבה לצפייה בדוח")
         require(db, user, environment_id, "report.cases")
-    status_query = select(WorkflowStatus, Environment.name_he).join(
-        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id
-    ).join(Environment, WorkflowDefinition.environment_id == Environment.id).where(
-        WorkflowStatus.is_active.is_(True), WorkflowDefinition.is_active.is_(True)
-    )
-    priority_query = select(PriorityDefinition).where(PriorityDefinition.is_active.is_(True))
-    if environment_id:
-        status_query = status_query.where(WorkflowDefinition.environment_id == environment_id)
-        priority_query = priority_query.where(PriorityDefinition.environment_id == environment_id)
-    statuses = [{"id": row.id, "code": row.code, "label_he": row.label_he, "environment": env_name} for row, env_name in db.execute(status_query).all()]
-    priorities = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(priority_query.order_by(PriorityDefinition.sort_order))]
+    status_query = select(GlobalStatusDefinition).where(GlobalStatusDefinition.is_active.is_(True))
+    priority_query = select(GlobalPriorityDefinition).where(GlobalPriorityDefinition.is_active.is_(True))
+    statuses = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(status_query.order_by(GlobalStatusDefinition.sort_order))]
+    priorities = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(priority_query.order_by(GlobalPriorityDefinition.sort_order))]
     return {"statuses": statuses, "priorities": priorities}
 
 
@@ -606,8 +600,8 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                          case_number, title, description, priority, workflow_status_id, priority_id,
                          include_participating=include_participating)
     query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
-    query = query.add_columns(select(WorkflowStatus.label_he).where(WorkflowStatus.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
-    query = query.add_columns(select(PriorityDefinition.label_he).where(PriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
+    query = query.add_columns(select(GlobalStatusDefinition.label_he).where(GlobalStatusDefinition.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
+    query = query.add_columns(select(GlobalPriorityDefinition.label_he).where(GlobalPriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
     rows = [report_row(row) for row in db.execute(query.limit(5000)).all()]
     content = xlsx_bytes(rows, {"environment_id": str(environment_id or ""), "request_type_id": str(request_type_id or ""), "status": status or "", "search": search or "", "sort": sort, "direction": direction})
     return StreamingResponse(io.BytesIO(content), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="case-report.xlsx"'})

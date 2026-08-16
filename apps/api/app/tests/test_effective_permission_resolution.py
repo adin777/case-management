@@ -95,3 +95,17 @@ def test_system_admin_automatically_receives_new_domain_and_bulk_loads_existing(
     assert saved.status_code == 200
     loaded = client.get(f"/api/access/assignments?subject_type=users&subject_ids={user['id']}", headers=headers)
     assert loaded.status_code == 200 and loaded.json()["levels"][domain.code] == "view"
+
+
+def test_subject_matrix_returns_direct_effective_source_and_system_admin_edit() -> None:
+    headers = admin_headers()
+    users = client.get("/api/users", headers=headers).json()
+    admin = next(row for row in users if row["is_system_admin"])
+    matrix = client.get(f"/api/access/subjects/user/{admin['id']}/matrix", headers=headers)
+    assert matrix.status_code == 200 and matrix.json()
+    assert all(row["effective_level"] == "edit" and row["source"] == "מנהל מערכת"
+               and row["can_override"] is False for row in matrix.json())
+    group = client.get("/api/groups", headers=headers).json()[0]
+    group_matrix = client.get(f"/api/access/subjects/group/{group['id']}/matrix", headers=headers)
+    assert group_matrix.status_code == 200
+    assert {"domain_code", "domain_name", "direct_level", "effective_level", "source", "scope", "can_override"} <= group_matrix.json()[0].keys()

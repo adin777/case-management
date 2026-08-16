@@ -6,7 +6,8 @@ from sqlalchemy import case as sql_case
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.models import Case, RequestType, User
+from app.modules.global_case_values.service import initial_status
+from app.modules.models import Case, GlobalStatusDefinition, RequestType, User
 from app.modules.operations.models import SlaPolicy, WorkflowDefinition, WorkflowStatus
 
 
@@ -43,6 +44,20 @@ def ensure_environment_statuses(
             is_initial=True, is_final=False, is_closed=False, is_active=True,
         )
         db.add(initial)
+        db.flush()
+    global_initial = db.scalar(select(GlobalStatusDefinition).where(
+        GlobalStatusDefinition.is_initial.is_(True), GlobalStatusDefinition.is_active.is_(True)))
+    if not global_initial:
+        existing = db.get(GlobalStatusDefinition, initial.id)
+        if existing:
+            existing.is_initial = True
+        else:
+            db.add(GlobalStatusDefinition(
+                id=initial.id, code=f"legacy_{initial.code}_{str(initial.id).replace('-', '')[:8]}",
+                label_he=initial.label_he, label_en=initial.label_en,
+                semantic_category=initial.semantic_category, is_active=True, is_initial=True,
+                is_final=initial.is_final, sort_order=initial.sort_order, color=initial.color,
+            ))
         db.flush()
     return workflow, initial
 
@@ -89,8 +104,9 @@ def resolve_sla(db: Session, item: Case) -> SlaPolicy | None:
     )
 
 
-def initialize_operations(db: Session, item: Case, request_type: RequestType) -> WorkflowStatus:
-    _, initial = resolve_workflow(db, request_type)
+def initialize_operations(db: Session, item: Case, request_type: RequestType) -> GlobalStatusDefinition:
+    """Initialize status and SLA without requiring an active workflow."""
+    initial = initial_status(db)
     item.workflow_status_id = initial.id
     policy = resolve_sla(db, item)
     if policy:

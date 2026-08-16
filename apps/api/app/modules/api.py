@@ -23,6 +23,7 @@ from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_clone.service import clone_configuration
+from app.modules.global_case_values.service import active_values, initial_status
 from app.modules.models import (
     AuditEvent,
     Case,
@@ -35,25 +36,22 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    GlobalPriorityDefinition,
+    GlobalStatusDefinition,
+    GlobalSubPriorityDefinition,
     Group,
-    PriorityDefinition,
     RefreshToken,
     RequestType,
-    SubPriorityDefinition,
     User,
     Visibility,
 )
 from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import (
     CaseStatusHistory,
-    WorkflowDefinition,
-    WorkflowStatus,
-    WorkflowTransition,
 )
 from app.modules.operations.service import (
     ensure_environment_statuses,
     initialize_operations,
-    resolve_workflow,
 )
 
 router = APIRouter(prefix="/api")
@@ -648,18 +646,12 @@ def case_creation_environment_configuration(
     request_types = list(db.scalars(select(RequestType).where(
         RequestType.environment_id == environment_id, RequestType.is_active.is_(True)
     ).order_by(RequestType.sort_order, RequestType.name_he)))
-    priorities = list(db.scalars(select(PriorityDefinition).where(
-        PriorityDefinition.environment_id == environment_id, PriorityDefinition.is_active.is_(True)
-    ).order_by(PriorityDefinition.sort_order)))
-    sub_priorities = list(db.scalars(select(SubPriorityDefinition).where(
-        SubPriorityDefinition.environment_id == environment_id, SubPriorityDefinition.is_active.is_(True)
-    ).order_by(SubPriorityDefinition.sort_order)))
+    priorities = active_values(db, "priorities")
+    sub_priorities = active_values(db, "sub-priorities")
+    statuses = active_values(db, "statuses")
+    initial = initial_status(db)
     type_rows = []
     for request_type in request_types:
-        workflow, initial = resolve_workflow(db, request_type)
-        statuses = list(db.scalars(select(WorkflowStatus).where(
-            WorkflowStatus.workflow_id == workflow.id, WorkflowStatus.is_active.is_(True)
-        ).order_by(WorkflowStatus.sort_order)))
         form = db.get(FormDefinition, request_type.form_version_id) if request_type.form_version_id else None
         type_rows.append({
             "id": request_type.id, "environment_id": request_type.environment_id,
@@ -684,7 +676,7 @@ def case_creation_environment_configuration(
         "environment_id": environment.id, "request_types": type_rows,
         "priorities": [{"id": row.id, "label_he": row.label_he, "is_active": True}
                        for row in priorities],
-        "sub_priorities": [{"id": row.id, "priority_id": row.priority_id,
+        "sub_priorities": [{"id": row.id, "priority_id": None,
                             "label_he": row.label_he, "is_active": True} for row in sub_priorities],
         "participants": participant_rows,
     }
@@ -1052,16 +1044,14 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     priority_id = data.priority_id or rt.default_priority_id
     if not priority_id:
         raise HTTPException(422, "לא הוגדרה עדיפות ברירת מחדל; יש לבחור עדיפות")
-    priority = db.get(PriorityDefinition, priority_id)
-    if not priority or priority.environment_id != data.environment_id or not priority.is_active:
-        raise HTTPException(422, "Priority does not belong to the selected environment")
+    priority = db.get(GlobalPriorityDefinition, priority_id)
+    if not priority or not priority.is_active:
+        raise HTTPException(422, "העדיפות הגלובלית שנבחרה אינה פעילה")
     sub_priority_id = data.sub_priority_id or rt.default_sub_priority_id
     if sub_priority_id:
-        sub_priority = db.get(SubPriorityDefinition, sub_priority_id)
-        if (not sub_priority or sub_priority.environment_id != data.environment_id
-                or (sub_priority.priority_id is not None and sub_priority.priority_id != priority.id)
-                or not sub_priority.is_active):
-            raise HTTPException(422, "Sub-priority does not belong to the selected priority")
+        sub_priority = db.get(GlobalSubPriorityDefinition, sub_priority_id)
+        if not sub_priority or not sub_priority.is_active:
+            raise HTTPException(422, "תת־העדיפות הגלובלית שנבחרה אינה פעילה")
     provided = {v.field_definition_id: v.value for v in data.values}
     active_fields = [field for field in form.fields if field.is_active] if form else []
     missing = [f.label_he for f in active_fields if f.is_required and provided.get(f.id) in (None, "")]
@@ -1084,10 +1074,9 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     db.flush()
     initial_status = initialize_operations(db, item, rt)
     if data.workflow_status_id and data.workflow_status_id != initial_status.id:
-        workflow, _ = resolve_workflow(db, rt)
-        selected_status = db.get(WorkflowStatus, data.workflow_status_id)
-        if not selected_status or selected_status.workflow_id != workflow.id or not selected_status.is_active:
-            raise HTTPException(422, "הסטטוס אינו שייך לתהליך העבודה של סוג הקריאה")
+        selected_status = db.get(GlobalStatusDefinition, data.workflow_status_id)
+        if not selected_status or not selected_status.is_active:
+            raise HTTPException(422, "הסטטוס הגלובלי שנבחר אינו פעיל")
         if "case.change_status" not in permissions(db, user, data.environment_id):
             raise HTTPException(403, "אין הרשאה לשנות סטטוס בעת פתיחת קריאה")
         item.workflow_status_id = selected_status.id
@@ -1119,13 +1108,9 @@ def case_creation_config(request_type_id: uuid.UUID, db: DB, user: Current) -> d
     if not request_type or not request_type.is_active:
         raise HTTPException(404, "סוג הקריאה לא נמצא")
     require(db, user, request_type.environment_id, "case.create")
-    workflow, initial = resolve_workflow(db, request_type)
-    statuses = list(db.scalars(select(WorkflowStatus).where(
-        WorkflowStatus.workflow_id == workflow.id,
-        WorkflowStatus.is_active.is_(True),
-    ).order_by(WorkflowStatus.sort_order)))
+    initial = initial_status(db)
+    statuses = active_values(db, "statuses")
     return {
-        "workflow_id": workflow.id,
         "initial_status_id": initial.id,
         "can_choose_status": "case.change_status" in permissions(db, user, request_type.environment_id),
         "statuses": [{"id": row.id, "label_he": row.label_he, "is_initial": row.is_initial} for row in statuses],
@@ -1219,8 +1204,8 @@ def workspace_cases(
     if updated_to:
         query = query.where(Case.updated_at <= updated_to)
     if activity_state != "all":
-        inactive_statuses = select(WorkflowStatus.id).where(
-            WorkflowStatus.semantic_category.in_(["resolved", "closed"])
+        inactive_statuses = select(GlobalStatusDefinition.id).where(
+            GlobalStatusDefinition.semantic_category.in_(["resolved", "closed"])
         )
         query = query.where(
             Case.workflow_status_id.not_in(inactive_statuses)
@@ -1268,10 +1253,10 @@ def workspace_cases(
         row.id: row.name_he for row in db.scalars(select(RequestType).where(RequestType.id.in_({x.request_type_id for x in rows})))
     } if rows else {}
     statuses_by_id = {
-        row.id: row.label_he for row in db.scalars(select(WorkflowStatus).where(WorkflowStatus.id.in_({x.workflow_status_id for x in rows if x.workflow_status_id})))
+        row.id: row.label_he for row in db.scalars(select(GlobalStatusDefinition).where(GlobalStatusDefinition.id.in_({x.workflow_status_id for x in rows if x.workflow_status_id})))
     } if rows else {}
     priorities_by_id = {
-        row.id: row.label_he for row in db.scalars(select(PriorityDefinition).where(PriorityDefinition.id.in_({x.priority_id for x in rows if x.priority_id})))
+        row.id: row.label_he for row in db.scalars(select(GlobalPriorityDefinition).where(GlobalPriorityDefinition.id.in_({x.priority_id for x in rows if x.priority_id})))
     } if rows else {}
     return {
         "items": [
@@ -1349,20 +1334,18 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
         target_type = db.get(RequestType, data.request_type_id)
         if not target_type or target_type.environment_id != item.environment_id or not target_type.is_active:
             raise HTTPException(422, "סוג הקריאה אינו פעיל באותה סביבת עבודה")
-        if not current_type or target_type.workflow_definition_id != current_type.workflow_definition_id:
-            raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם תהליך עבודה שונה")
         if target_type.form_version_id != item.form_definition_id:
             raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם טופס שונה בלי תהליך המרה מפורש")
-        if target_type.requires_approval != current_type.requires_approval:
+        if current_type and target_type.requires_approval != current_type.requires_approval:
             raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם מדיניות אישורים שונה")
     if data.priority_id:
-        priority = db.get(PriorityDefinition, data.priority_id)
-        if not priority or priority.environment_id != item.environment_id or not priority.is_active:
-            raise HTTPException(422, "העדיפות אינה שייכת לסביבה")
+        priority = db.get(GlobalPriorityDefinition, data.priority_id)
+        if not priority or not priority.is_active:
+            raise HTTPException(422, "העדיפות הגלובלית אינה פעילה")
     if data.sub_priority_id:
-        sub_priority = db.get(SubPriorityDefinition, data.sub_priority_id)
-        if not sub_priority or sub_priority.environment_id != item.environment_id or not sub_priority.is_active:
-            raise HTTPException(422, "תת-העדיפות אינה שייכת לעדיפות")
+        sub_priority = db.get(GlobalSubPriorityDefinition, data.sub_priority_id)
+        if not sub_priority or not sub_priority.is_active:
+            raise HTTPException(422, "תת־העדיפות הגלובלית אינה פעילה")
     for key, value in changes.items():
         setattr(item, key, value)
     if data.values is not None:
@@ -1462,22 +1445,7 @@ def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[
     case_access(db, user, item)
     if "case.change_status" not in permissions(db, user, item.environment_id):
         return []
-    rows = db.execute(select(WorkflowTransition, WorkflowStatus).join(
-        WorkflowStatus, WorkflowTransition.to_status_id == WorkflowStatus.id).where(
-        WorkflowTransition.from_status_id == item.workflow_status_id,
-        WorkflowTransition.is_active.is_(True),
-        WorkflowStatus.is_active.is_(True),
-    ).order_by(WorkflowTransition.sort_order)).all()
-    if rows:
-        return [{"id": status.id, "label_he": status.label_he, "transition_id": transition.id,
-                 "requires_comment": transition.requires_comment} for transition, status in rows]
-    statuses = db.scalars(select(WorkflowStatus).join(
-        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id,
-    ).where(
-        WorkflowDefinition.environment_id == item.environment_id,
-        WorkflowStatus.is_active.is_(True),
-        WorkflowStatus.id != item.workflow_status_id,
-    ).order_by(WorkflowStatus.sort_order))
+    statuses = [row for row in active_values(db, "statuses") if row.id != item.workflow_status_id]
     return [{"id": status.id, "label_he": status.label_he, "transition_id": None,
              "requires_comment": False} for status in statuses]
 
@@ -1488,27 +1456,16 @@ def status_options(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, 
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    statuses = list(db.scalars(select(WorkflowStatus).join(
-        WorkflowDefinition, WorkflowStatus.workflow_id == WorkflowDefinition.id,
-    ).where(
-        WorkflowDefinition.environment_id == item.environment_id,
-        WorkflowStatus.is_active.is_(True),
-    ).order_by(WorkflowStatus.sort_order)))
-    allowed_rows = db.execute(select(WorkflowTransition).where(
-        WorkflowTransition.from_status_id == item.workflow_status_id,
-        WorkflowTransition.is_active.is_(True),
-    )).scalars().all()
-    allowed_ids = {row.to_status_id for row in allowed_rows}
-    unrestricted = not allowed_ids
+    statuses = active_values(db, "statuses")
     can_change = "case.change_status" in permissions(db, user, item.environment_id)
     return [{
         "id": str(status.id),
         "label_he": status.label_he,
         "current": status.id == item.workflow_status_id,
-        "allowed": can_change and status.id != item.workflow_status_id and (unrestricted or status.id in allowed_ids),
-        "reason": None if can_change and status.id != item.workflow_status_id and (unrestricted or status.id in allowed_ids) else (
+        "allowed": can_change and status.id != item.workflow_status_id,
+        "reason": None if can_change and status.id != item.workflow_status_id else (
             "זהו הסטטוס הנוכחי" if status.id == item.workflow_status_id
-            else "לא ניתן לעבור ישירות מהסטטוס הנוכחי"
+            else "אין הרשאה לשנות סטטוס"
         ),
     } for status in statuses]
 
@@ -1626,32 +1583,16 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     require(db, user, item.environment_id, "case.change_status")
     if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
         raise HTTPException(403, "הקריאה נעולה לשינוי סטטוס")
-    transition_row = db.scalar(select(WorkflowTransition).where(
-        WorkflowTransition.from_status_id == item.workflow_status_id,
-        WorkflowTransition.to_status_id == data.workflow_status_id,
-        WorkflowTransition.is_active.is_(True),
-    ))
-    target = db.get(WorkflowStatus, data.workflow_status_id)
-    configured_transitions = db.scalar(select(func.count()).select_from(WorkflowTransition).where(
-        WorkflowTransition.from_status_id == item.workflow_status_id,
-        WorkflowTransition.is_active.is_(True),
-    ))
-    if (configured_transitions and not transition_row) or not target or not target.is_active:
-        raise HTTPException(409, "מעבר הסטטוס אינו חוקי בתהליך העבודה")
-    current_status = db.get(WorkflowStatus, item.workflow_status_id)
-    if not current_status or target.workflow_id != current_status.workflow_id:
-        raise HTTPException(409, "סטטוס היעד אינו שייך לסביבה")
-    if transition_row and transition_row.required_permission_code:
-        require(db, user, item.environment_id, transition_row.required_permission_code)
-    if transition_row and transition_row.requires_comment and not (data.comment or "").strip():
-        raise HTTPException(422, "המעבר מחייב הערה")
+    target = db.get(GlobalStatusDefinition, data.workflow_status_id)
+    if not target or not target.is_active:
+        raise HTTPException(409, "סטטוס היעד הגלובלי אינו פעיל")
     before = item.workflow_status_id
     item.workflow_status_id = target.id
     item.version += 1
-    if target.is_closed:
+    if target.semantic_category == "closed" or target.is_final:
         item.closed_at = datetime.now(UTC)
     db.add(CaseStatusHistory(case_id=item.id, from_status_id=before, to_status_id=target.id,
-                             transition_id=transition_row.id if transition_row else None, changed_by=user.id,
+                             transition_id=None, changed_by=user.id,
                              comment=(data.comment or "").strip() or None))
     AutomationEngine.run(db, item, "status_changed", {
         "status": str(target.id), "status_id": str(target.id),

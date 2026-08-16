@@ -15,6 +15,9 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    GlobalPriorityDefinition,
+    GlobalStatusDefinition,
+    GlobalSubPriorityDefinition,
     Group,
     GroupMember,
     Permission,
@@ -359,6 +362,24 @@ def run(*, include_demo_data: bool = False) -> None:
                         sort_order=order,
                     )
                 )
+        for priority_row in priorities.values():
+            if not db.get(GlobalPriorityDefinition, priority_row.id):
+                db.add(GlobalPriorityDefinition(id=priority_row.id, code=f"legacy_{priority_row.code}_{str(priority_row.id).replace('-', '')[:8]}",
+                    label_he=priority_row.label_he, label_en=priority_row.label_en, is_active=priority_row.is_active,
+                    sort_order=priority_row.sort_order, color=priority_row.color))
+        for sub_priority_row in db.scalars(select(SubPriorityDefinition).where(SubPriorityDefinition.environment_id == env.id)):
+            if not db.get(GlobalSubPriorityDefinition, sub_priority_row.id):
+                db.add(GlobalSubPriorityDefinition(id=sub_priority_row.id, code=f"legacy_{sub_priority_row.code}_{str(sub_priority_row.id).replace('-', '')[:8]}",
+                    label_he=sub_priority_row.label_he, label_en=sub_priority_row.label_en, is_active=sub_priority_row.is_active,
+                    sort_order=sub_priority_row.sort_order, color=sub_priority_row.color))
+        has_initial = bool(db.scalar(select(GlobalStatusDefinition).where(GlobalStatusDefinition.is_initial.is_(True))))
+        for index, status_row in enumerate(statuses.values()):
+            if not db.get(GlobalStatusDefinition, status_row.id):
+                db.add(GlobalStatusDefinition(id=status_row.id, code=f"legacy_{status_row.code}_{str(status_row.id).replace('-', '')[:8]}",
+                    label_he=status_row.label_he, label_en=status_row.label_en,
+                    semantic_category="closed" if status_row.is_closed else ("resolved" if status_row.is_final else "open"),
+                    is_active=status_row.is_active, is_initial=not has_initial and index == 0,
+                    is_final=status_row.is_final, sort_order=status_row.sort_order, color=status_row.color))
         request_type.workflow_definition_id = workflow.id
         if not db.scalar(select(SlaPolicy).where(SlaPolicy.environment_id == env.id)):
             db.add(

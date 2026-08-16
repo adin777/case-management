@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
+from app.modules.global_case_values.service import active_values
 from app.modules.models import (
     ApprovalInstance,
     ApprovalTask,
@@ -18,12 +19,13 @@ from app.modules.models import (
     Environment,
     EnvironmentMembership,
     FieldDefinition,
-    PriorityDefinition,
+    GlobalPriorityDefinition,
+    GlobalStatusDefinition,
+    GlobalSubPriorityDefinition,
     RequestType,
-    SubPriorityDefinition,
     User,
 )
-from app.modules.operations.service import initialize_operations, resolve_workflow
+from app.modules.operations.service import initialize_operations
 
 VALUE_COLUMNS = (
     "value_text",
@@ -128,28 +130,10 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
 
 
 def target_requirements(db: Session, item: Case, request_type: RequestType) -> dict[str, Any]:
-    _, initial = resolve_workflow(db, request_type)
     fields, old_fields = _fields(db, request_type.form_version_id), _fields(db, item.form_definition_id)
-    priorities = list(
-        db.scalars(
-            select(PriorityDefinition)
-            .where(
-                PriorityDefinition.environment_id == request_type.environment_id,
-                PriorityDefinition.is_active.is_(True),
-            )
-            .order_by(PriorityDefinition.sort_order)
-        )
-    )
-    sub_priorities = list(
-        db.scalars(
-            select(SubPriorityDefinition)
-            .where(
-                SubPriorityDefinition.environment_id == request_type.environment_id,
-                SubPriorityDefinition.is_active.is_(True),
-            )
-            .order_by(SubPriorityDefinition.sort_order)
-        )
-    )
+    priorities = active_values(db, "priorities")
+    sub_priorities = active_values(db, "sub-priorities")
+    current_status = db.get(GlobalStatusDefinition, item.workflow_status_id)
     assignees = list(
         db.scalars(
             select(User)
@@ -175,8 +159,8 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
             required.append({"id": str(field.id), "label": field.label_he, "field_type": field.field_type})
     mapped_old = {row["from_field_id"] for row in mapped}
     return {
-        "initial_status_id": str(initial.id),
-        "initial_status_label": initial.label_he,
+        "initial_status_id": str(current_status.id) if current_status else None,
+        "initial_status_label": current_status.label_he if current_status else "",
         "target_fields": [
             {
                 "id": str(row.id),
@@ -192,7 +176,7 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
         "sub_priorities": [
             {
                 "id": str(row.id),
-                "priority_id": str(row.priority_id) if row.priority_id else None,
+                "priority_id": None,
                 "label_he": row.label_he,
             }
             for row in sub_priorities
@@ -214,18 +198,14 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
         or target_type.environment_id != payload.target_environment_id
     ):
         raise HTTPException(422, "סוג הקריאה אינו פעיל בסביבת היעד")
-    priority = db.get(PriorityDefinition, payload.priority_id)
-    if not priority or not priority.is_active or priority.environment_id != payload.target_environment_id:
-        raise HTTPException(422, "יש לבחור עדיפות פעילה מסביבת היעד")
+    priority_id = payload.priority_id or item.priority_id
+    priority = db.get(GlobalPriorityDefinition, priority_id) if priority_id else None
+    if not priority or not priority.is_active:
+        raise HTTPException(422, "יש לבחור עדיפות גלובלית פעילה")
     if payload.sub_priority_id:
-        sub = db.get(SubPriorityDefinition, payload.sub_priority_id)
-        if (
-            not sub
-            or not sub.is_active
-            or sub.environment_id != payload.target_environment_id
-            or sub.priority_id != priority.id
-        ):
-            raise HTTPException(422, "תת-העדיפות אינה תואמת לסביבת היעד ולעדיפות")
+        sub = db.get(GlobalSubPriorityDefinition, payload.sub_priority_id)
+        if not sub or not sub.is_active:
+            raise HTTPException(422, "תת־העדיפות הגלובלית אינה פעילה")
     if payload.assignee_id and not _member(db, payload.target_environment_id, payload.assignee_id):
         raise HTTPException(422, "המטפל אינו פעיל או משויך לסביבת היעד")
     requirements = target_requirements(db, item, target_type)
@@ -318,7 +298,7 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.request_type_id = target_type.id
     item.form_definition_id = target_type.form_version_id
     item.priority_id = priority.id
-    item.sub_priority_id = payload.sub_priority_id
+    item.sub_priority_id = payload.sub_priority_id if payload.sub_priority_id is not None else item.sub_priority_id
     item.assignee_id = payload.assignee_id
     item.assigned_group_id = None
     item.sla_policy_id = None
@@ -329,7 +309,8 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.approval_status = "not_started"
     item.is_approved = False
     item.version += 1
-    initial = initialize_operations(db, item, target_type)
+    initialize_operations(db, item, target_type)
+    item.workflow_status_id = old_status
     started = start_matching_approvals(db, item)
     AutomationEngine.run(
         db,
@@ -348,7 +329,7 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
         from_request_type_id=old_type,
         to_request_type_id=item.request_type_id,
         from_status_id=old_status,
-        to_status_id=initial.id,
+        to_status_id=old_status,
         transferred_by=actor.id,
         removed_participants=removed_participants,
         removed_assignee=removed_assignee,

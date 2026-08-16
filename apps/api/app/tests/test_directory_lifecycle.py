@@ -114,6 +114,23 @@ def test_excel_preview_import_and_export() -> None:
     assert second_preview.json()["created"] == 0
 
 
+def test_excel_header_diagnostics_name_received_expected_missing_and_extra() -> None:
+    template = client.get("/api/users/import/template", headers=auth())
+    malformed = add_template_row(template.content, ["Test", "User", "Test User", "test@example.com"])
+    with zipfile.ZipFile(io.BytesIO(malformed)) as source, io.BytesIO() as stream:
+        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                payload = source.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    payload = payload.replace(b">First Name<", b">Unexpected Header<")
+                target.writestr(item, payload)
+        content = stream.getvalue()
+    response = client.post("/api/users/import/preview", headers=auth(), files={"file": ("bad.xlsx", content)})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert all(label in detail for label in ("התקבלו", "צפויות", "חסרות", "עודפות", "Unexpected Header"))
+
+
 def test_environment_assignment_rule_preserves_manual_membership() -> None:
     with SessionLocal() as db:
         environment = db.scalar(select(Environment)); assert environment
@@ -185,6 +202,9 @@ def test_reports_are_real_and_permission_protected() -> None:
 def test_environment_assignment_endpoints_contract() -> None:
     headers = auth()
     environment_id = client.get("/api/environments", headers=headers).json()[0]["id"]
+    options = client.get("/api/environment-assignment-options", headers=headers)
+    assert options.status_code == 200
+    assert {"users", "groups", "departments", "job_titles"} <= options.json().keys()
     payload = {"name": f"IT-{uuid.uuid4().hex[:6]}", "conditions": [{"field": "department", "value": "IT"}], "is_active": True}
     preview = client.post(f"/api/environments/{environment_id}/assignment-rules/preview", headers=headers, json=payload)
     assert preview.status_code == 200 and "matched" in preview.json()
@@ -208,3 +228,12 @@ def test_entra_provider_mocked_graph_delta_flow() -> None:
         batch = EntraDirectoryProvider().fetch_users()
     assert batch.delta_link == "https://graph/delta-token"
     assert batch.users[0].directory_object_id == "graph-1"
+
+
+def test_entra_provider_mocked_connection_diagnostics() -> None:
+    responses = [_GraphResponse({"access_token": "token"}), _GraphResponse({"value": [{"id": "graph-1"}]})]
+    with patch("app.modules.directory.entra.settings.entra_tenant_id", "tenant"), patch("app.modules.directory.entra.settings.entra_client_id", "client"), patch("app.modules.directory.entra.settings.entra_client_secret", "secret"), patch("app.modules.directory.entra.urllib.request.urlopen", side_effect=responses):
+        result = EntraDirectoryProvider().test_connection()
+    assert result["ok"] is True
+    assert [step["code"] for step in result["steps"]] == ["tenant", "client", "secret", "token", "graph", "users"]
+    assert all(step["ok"] for step in result["steps"])

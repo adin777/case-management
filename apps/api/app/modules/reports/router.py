@@ -64,6 +64,8 @@ def approvals(
     requested_to: datetime | None = None,
     decided_from: datetime | None = None,
     decided_to: datetime | None = None,
+    sort: str = "requested_at",
+    direction: str = "desc",
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
 ) -> dict[str, Any]:
@@ -99,9 +101,12 @@ def approvals(
     if decided_to:
         query = query.where(ApprovalTask.decided_at <= decided_to)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = db.execute(
-        query.order_by(ApprovalInstance.started_at.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    sort_columns = {"case_number": Case.case_number, "subject": Case.title, "environment": Environment.name_he,
+                    "request_type": RequestType.name_he, "approver": ApprovalTask.approver_name_snapshot,
+                    "step": ApprovalStepDefinition.name, "status": ApprovalTask.status,
+                    "requested_at": ApprovalInstance.started_at, "decided_at": ApprovalTask.decided_at}
+    column = sort_columns.get(sort, ApprovalInstance.started_at)
+    rows = db.execute(query.order_by(column.asc() if direction == "asc" else column.desc()).offset((page - 1) * page_size).limit(page_size))
     items = [
         {
             "task_id": str(task.id),
@@ -127,19 +132,30 @@ def users(
     db: DB,
     user: Current,
     search: str | None = None,
+    name: str | None = None,
+    email: str | None = None,
+    username: str | None = None,
     status: str | None = None,
     source: str | None = None,
     department: str | None = None,
     job_title: str | None = None,
     group_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
     environment_id: uuid.UUID | None = None,
+    sort: str = "user",
+    direction: str = "asc",
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
 ) -> dict[str, Any]:
     guard(db, user, "report.users")
     query = select(User)
     if search:
-        query = query.where(or_(User.display_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%")))
+        query = query.where(or_(User.display_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%"), User.user_principal_name.ilike(f"%{search}%")))
+    if name:
+        query = query.where(User.display_name.ilike(f"%{name}%"))
+    if email:
+        query = query.where(User.email.ilike(f"%{email}%"))
+    if username:
+        query = query.where(User.user_principal_name.ilike(f"%{username}%"))
     if status:
         query = query.where(User.status == status)
     if source:
@@ -161,7 +177,11 @@ def users(
         )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     items = []
-    for row in db.scalars(query.order_by(User.display_name).offset((page - 1) * page_size).limit(page_size)):
+    sort_columns = {"user": User.display_name, "email": User.email, "username": User.user_principal_name,
+                    "status": User.status, "source": User.source, "department": User.department,
+                    "job_title": User.job_title}
+    column = sort_columns.get(sort, User.display_name)
+    for row in db.scalars(query.order_by(column.asc() if direction == "asc" else column.desc()).offset((page - 1) * page_size).limit(page_size)):
         groups = db.scalars(select(Group.name).join(GroupMember).where(GroupMember.user_id == row.id)).all()
         envs = db.scalars(
             select(Environment.name_he)
@@ -177,6 +197,7 @@ def users(
             {
                 "user": row.display_name,
                 "email": row.email,
+                "username": row.user_principal_name,
                 "status": row.status,
                 "source": row.source,
                 "department": row.department,
@@ -202,6 +223,8 @@ def audit_report(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     search: str | None = None,
+    sort: str = "created_at",
+    direction: str = "desc",
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
 ) -> dict[str, Any]:
@@ -235,9 +258,11 @@ def audit_report(
             )
         )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = db.scalars(
-        query.order_by(AuditEvent.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    sort_columns = {"user": AuditEvent.actor_name_snapshot, "action": AuditEvent.action,
+                    "entity": AuditEvent.entity_type, "entity_id": AuditEvent.entity_id,
+                    "created_at": AuditEvent.created_at}
+    column = sort_columns.get(sort, AuditEvent.created_at)
+    rows = db.scalars(query.order_by(column.asc() if direction == "asc" else column.desc()).offset((page - 1) * page_size).limit(page_size))
     items = [
         {
             "user": row.actor_name_snapshot or row.actor_email_snapshot,

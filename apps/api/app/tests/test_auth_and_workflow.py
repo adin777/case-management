@@ -458,3 +458,16 @@ def test_case_create_permission_consumes_read_only_creation_configuration() -> N
         headers=login_headers(denied_email, "NoCreate123!"),
     )
     assert denied.status_code == 403
+
+
+def test_global_case_values_are_identical_across_environments() -> None:
+    headers = login_headers("admin@example.com", "Admin123!")
+    environments = client.get("/api/environments", headers=headers).json()
+    assert len(environments) >= 1
+    global_values = client.get("/api/global-case-values", headers=headers)
+    assert global_values.status_code == 200
+    assert global_values.json()["statuses"] and global_values.json()["priorities"]
+    first = client.get(f"/api/case-creation/environments/{environments[0]['id']}/configuration", headers=headers)
+    assert first.status_code == 200
+    assert [row["id"] for row in first.json()["priorities"]] == [row["id"] for row in global_values.json()["priorities"]]
+    assert sum(1 for row in global_values.json()["statuses"] if row["is_initial"]) == 1

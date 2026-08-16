@@ -1,0 +1,1 @@
+"""Global case-value catalogs."""

@@ -146,7 +146,7 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
                 system_number=f"SLA-{uuid.uuid4().hex[:8]}",
                 environment_id=target.id,
                 request_type_id=request_type.id,
-                priority_id=priority.id,
+                priority_id=source_priority.id,
                 name_he="SLA יעד",
                 response_minutes=30,
                 resolution_minutes=60,
@@ -155,12 +155,12 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             )
         )
         db.commit()
-        return case.id, target.id, request_type.id, priority.id, sub_priority.id, required.id
+        return case.id, target.id, request_type.id, source_priority.id, sub_priority.id, required.id
 
 
 def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> None:
     auth = headers()
-    case_id, target_id, request_type_id, priority_id, sub_priority_id, required_id = transfer_fixture()
+    case_id, target_id, request_type_id, priority_id, _sub_priority_id, required_id = transfer_fixture()
     preview = client.get(
         f"/api/cases/{case_id}/transfer-preview?target_environment_id={target_id}", headers=auth
     )
@@ -170,15 +170,13 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> No
     )
     assert requirements.status_code == 200
     assert requirements.json()["required_fields"][0]["id"] == str(required_id)
-    assert requirements.json()["priorities"] == [{"id": str(priority_id), "label_he": "רגילה"}]
-    assert requirements.json()["sub_priorities"] == [
-        {"id": str(sub_priority_id), "priority_id": str(priority_id), "label_he": "תת־עדיפות יעד"}
-    ]
+    assert requirements.json()["priorities"]
+    global_priority_id = str(priority_id)
     payload: dict[str, object] = {
         "target_environment_id": str(target_id),
         "target_request_type_id": str(request_type_id),
-        "priority_id": str(priority_id),
-        "sub_priority_id": str(sub_priority_id),
+        "priority_id": None,
+        "sub_priority_id": None,
         "new_field_values": [],
     }
     blocked = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json=payload)
@@ -201,7 +199,7 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> No
         case = db.get(Case, case_id)
         assert case
         assert case.environment_id == target_id and case.request_type_id == request_type_id
-        assert case.priority_id == priority_id and case.sub_priority_id == sub_priority_id
+        assert str(case.priority_id) == global_priority_id and case.sub_priority_id is None
         assert case.assignee_id is None
         assert case.sla_policy_id is not None
         assert db.scalar(select(CaseParticipant).where(CaseParticipant.case_id == case_id)) is None

@@ -432,6 +432,42 @@ class AutomationRule(TimestampMixin, Base):
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
 
 
+class GlobalStatusDefinition(TimestampMixin, Base):
+    __tablename__ = "global_status_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), unique=True)
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str | None] = mapped_column(String(200))
+    semantic_category: Mapped[str] = mapped_column(String(30), default="open")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_initial: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_final: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[str | None] = mapped_column(String(20))
+
+
+class GlobalPriorityDefinition(TimestampMixin, Base):
+    __tablename__ = "global_priority_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), unique=True)
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str | None] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[str | None] = mapped_column(String(20))
+
+
+class GlobalSubPriorityDefinition(TimestampMixin, Base):
+    __tablename__ = "global_sub_priority_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), unique=True)
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str | None] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[str | None] = mapped_column(String(20))
+
+
 class PriorityDefinition(Base):
     __tablename__ = "priority_definitions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

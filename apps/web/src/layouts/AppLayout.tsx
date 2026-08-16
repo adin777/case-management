@@ -14,6 +14,7 @@ const baseLinks: LinkItem[] = [
   { url: '/admin/environments', label: 'סביבות וסוגי קריאות', icon: <Settings/> },
   { url: '/admin/users', label: 'משתמשים והרשאות', icon: <Groups/>, admin: true },
   { url: '/admin/permissions', label: 'ניהול הרשאות גורף', icon: <LockPerson/>, admin: true },
+  { url: '/admin/case-values', label: 'הגדרות שדות קריאה', icon: <Settings/>, admin: true },
 ];
 
 export function AppLayout() {

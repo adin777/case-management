@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.modules.api import DB, Current, audit, require
 from app.modules.environment_assignments.service import ALLOWED_FIELDS, apply_rule, preview_rule
-from app.modules.models import EnvironmentAssignmentRule, User
+from app.modules.models import Employee, EnvironmentAssignmentRule, User
 
 router = APIRouter(prefix="/api", tags=["environment-assignments"])
 
@@ -50,12 +50,13 @@ def assignment_options(db: DB, user: Current) -> dict[str, Any]:
     if not user.is_system_admin:
         raise HTTPException(403, "נדרש מנהל מערכת")
     active_users = list(db.scalars(select(User).where(User.status == "active").order_by(User.display_name)))
+    active_employees = list(db.scalars(select(Employee).where(Employee.status == "active")))
     from app.modules.models import Group
 
     return {
-        "departments": sorted({row.department for row in active_users if row.department}),
-        "job_titles": sorted({row.job_title for row in active_users if row.job_title}),
-        "users": [{"id": row.id, "label": row.display_name} for row in active_users],
+        "departments": sorted({row.department.strip() for row in active_employees if row.department and row.department.strip()}),
+        "job_titles": sorted({row.job_title.strip() for row in active_employees if row.job_title and row.job_title.strip()}),
+        "users": [{"id": row.id, "label": row.display_name, "email": row.email} for row in active_users],
         "groups": [
             {"id": row.id, "label": row.name}
             for row in db.scalars(select(Group).where(Group.is_active.is_(True)).order_by(Group.name))
@@ -73,6 +74,7 @@ def preview(environment_id: uuid.UUID, data: RuleIn, db: DB, user: Current) -> d
             {
                 "id": row.id,
                 "display_name": row.display_name,
+                "email": row.email,
                 "department": row.department,
                 "job_title": row.job_title,
             }

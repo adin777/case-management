@@ -20,7 +20,7 @@ class TransferIn(BaseModel):
     target_environment_id: uuid.UUID
     target_request_type_id: uuid.UUID
     target_status_id: uuid.UUID | None = None
-    priority_id: uuid.UUID
+    priority_id: uuid.UUID | None = None
     sub_priority_id: uuid.UUID | None = None
     assignee_id: uuid.UUID | None = None
     new_field_values: list[TransferValue] = Field(default_factory=list)

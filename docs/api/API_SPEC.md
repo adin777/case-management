@@ -264,3 +264,51 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 `GET /api/environments/{id}/delete-impact` ו־`DELETE /api/environments/{id}?confirmation=<name>`
 דורשים `environment.delete`. מחיקה פיזית מותרת רק כאשר אין קריאות או תלויות ודורשת
 הקלדת שם מדויקת; אחרת מוחזר `409` עם ספירת התלויות ואין Cascade שקט.
+
+### Environment assignment options
+
+`GET /api/environment-assignment-options` מחזיר למנהל מערכת `users`, `groups`,
+`departments` ו־`job_titles`. משתמשים וקבוצות מוחזרים כפריטי `id`/`label`; מחלקות
+ותפקידים ארגוניים הם ערכים ייחודיים ולא ריקים מרשומות `Employee` פעילות בלבד.
+כללי שיוך מקבלים ערך יחיד או מערך ערכים עבור `user_id`, `group_id`, `department`
+או `job_title`. תצוגה מקדימה מחזירה לכל משתמש שם, דוא״ל, מחלקה ותפקיד, והחלה
+מתבצעת רק לאחר בקשת יצירה מפורשת.
+
+### UI failure handling
+
+כשל בטעינת `transfer-preview` או `transfer-requirements`, לרבות payload חסר או
+מערכים שאינם תקינים, מוצג כהודעת שגיאה ואינו מפיל את מסך React. הלקוח מנרמל את
+מערכי הדרישות לערכים ריקים בטוחים ומציג מצב טעינה בכל מעבר. חריגת render בלתי
+צפויה נתפסת ב־Error Boundary ברמת האפליקציה ומציעה ניסיון חוזר.
+
+### Global case values and workflow independence
+
+`GET /api/global-case-values` מחזיר את שלושת הקטלוגים הגלובליים: `statuses`,
+`priorities` ו־`sub-priorities`. נתיבי `GET/POST /api/global-case-values/{kind}`
+ו־`PATCH /api/global-case-values/{kind}/{id}` מנהלים ערכים; כתיבה מותרת למנהל מערכת
+בלבד. `PUT /api/global-case-values/{kind}/order` מקבל מערך IDs בסדר החדש.
+`POST /api/global-case-values/statuses/{id}/set-initial` מגדיר סטטוס התחלתי גלובלי
+יחיד; סטטוס התחלתי חייב להיות פעיל ואי אפשר להשביתו לפני בחירת חלופה.
+
+פתיחת קריאה אינה תלויה ב־Workflow או ב־`RequestType.workflow_definition_id`.
+היא משתמשת בסטטוס ההתחלתי הגלובלי וב־IDs גלובליים של עדיפות ותת־עדיפות. אם לא קיים
+סטטוס התחלתי מוחזר `409` עם `code=GLOBAL_INITIAL_STATUS_MISSING` ו־
+`settings_path=/admin/case-values`. `case-config` אינו מחזיר דרישת Workflow.
+העברה בין סביבות שומרת Status/Priority/SubPriority גלובליים פעילים ואינה ממפה אותם.
+
+### Subject access matrix
+
+`GET /api/access/subjects/{user|group}/{id}/matrix?environment_id=` מחזיר View Model
+אחיד לכל Permission Domain: `domain_code`, `domain_name`, `direct_level`,
+`effective_level`, `source`, `scope`, `can_override`. עבור System Admin כל תחום מוחזר
+כ־`edit`, המקור הוא „מנהל מערכת” ו־`can_override=false`; אין צורך ליצור Assignment rows.
+
+### Operational reports
+
+`GET /api/reports/approvals`, `/users` ו־`/audit` מבצעים סינון, מיון ו־pagination
+בשרת. הפרמטרים המשותפים הם `page`, `page_size`, `sort`, `direction`. דוח אישורים
+תומך במספר קריאה, נושא, סביבה, סוג קריאה, מאשר, סטטוס, שלב וטווחי תאריכי בקשה/החלטה;
+החלטה מתבצעת דרך `POST /api/approval-tasks/{id}/decision` ודחייה מחייבת הערה. דוח
+משתמשים תומך במסננים נפרדים `name`, `email`, `username`, וב־`search` התואם לאחור,
+וכן במצב, מקור, מחלקה, תפקיד, `group_ids` וסביבה. דוח Audit
+תומך במשתמש, משתמש אפקטיבי בהתחזות, פעולה, ישות, Entity ID, סביבה, תאריכים וחיפוש.

@@ -17,6 +17,8 @@ from app.modules.models import (
     Environment,
     EnvironmentMembership,
     EnvironmentUserField,
+    GlobalPriorityDefinition,
+    GlobalSubPriorityDefinition,
     Group,
     GroupEnvironmentRole,
     GroupMember,
@@ -1074,22 +1076,12 @@ def remove_membership(environment_id: uuid.UUID, membership_id: uuid.UUID, db: D
 def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.read")
     result = []
-    for row in db.scalars(
-        select(PriorityDefinition)
-        .where(PriorityDefinition.environment_id == environment_id)
-        .order_by(PriorityDefinition.sort_order)
-    ):
-        children = list(
-            db.scalars(
-                select(SubPriorityDefinition)
-                .where(SubPriorityDefinition.priority_id == row.id)
-                .order_by(SubPriorityDefinition.sort_order)
-            )
-        )
+    children = list(db.scalars(select(GlobalSubPriorityDefinition).order_by(GlobalSubPriorityDefinition.sort_order)))
+    for row in db.scalars(select(GlobalPriorityDefinition).order_by(GlobalPriorityDefinition.sort_order)):
         result.append(
             {
                 "id": row.id,
-                "system_number": row.system_number,
+                "system_number": None,
                 "code": row.code,
                 "label_he": row.label_he,
                 "color": row.color,
@@ -1098,8 +1090,8 @@ def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[di
                 "sub_priorities": [
                     {
                         "id": child.id,
-                        "system_number": child.system_number,
-                        "priority_id": child.priority_id,
+                        "system_number": None,
+                        "priority_id": None,
                         "code": child.code,
                         "label_he": child.label_he,
                         "color": child.color,
@@ -1122,6 +1114,10 @@ def create_priority(environment_id: uuid.UUID, data: PriorityIn, db: DB, user: C
         **data.model_dump(),
     )
     db.add(item)
+    db.flush()
+    db.add(GlobalPriorityDefinition(id=item.id, code=f"{data.code}_{str(item.id).replace('-', '')[:8]}",
+        label_he=data.label_he, label_en=data.label_en, is_active=data.is_active,
+        sort_order=data.sort_order, color=data.color))
     db.commit()
     return item
 
@@ -1197,6 +1193,10 @@ def create_sub_priority(
         **data.model_dump(),
     )
     db.add(item)
+    db.flush()
+    db.add(GlobalSubPriorityDefinition(id=item.id, code=f"{data.code}_{str(item.id).replace('-', '')[:8]}",
+        label_he=data.label_he, label_en=data.label_en, is_active=data.is_active,
+        sort_order=data.sort_order, color=data.color))
     db.commit()
     return item
 
@@ -1249,8 +1249,7 @@ def delete_sub_priority(sub_priority_id: uuid.UUID, db: DB, user: Current) -> No
 @router.get("/environments/{environment_id}/sub-priorities")
 def list_environment_sub_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.read")
-    rows = db.scalars(select(SubPriorityDefinition).where(
-        SubPriorityDefinition.environment_id == environment_id).order_by(SubPriorityDefinition.sort_order))
+    rows = db.scalars(select(GlobalSubPriorityDefinition).order_by(GlobalSubPriorityDefinition.sort_order))
     return [{column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows]
 
 
@@ -1261,6 +1260,9 @@ def create_environment_sub_priority(environment_id: uuid.UUID, data: SubPriority
     item = SubPriorityDefinition(system_number=NumberingService.next(db, "sub_priority", environment_id),
                                  environment_id=environment_id, priority_id=None, **data.model_dump())
     db.add(item); db.flush()
+    db.add(GlobalSubPriorityDefinition(id=item.id, code=f"{data.code}_{str(item.id).replace('-', '')[:8]}",
+        label_he=data.label_he, label_en=data.label_en, is_active=data.is_active,
+        sort_order=data.sort_order, color=data.color))
     audit(db, user, "sub_priority", item.id, "created")
     db.commit()
     return {column.name: getattr(item, column.name) for column in item.__table__.columns}

@@ -12,6 +12,7 @@ from app.modules.api import router
 from app.modules.attachments.router import router as attachments_router
 from app.modules.directory.router import router as directory_router
 from app.modules.environment_assignments.router import router as assignment_router
+from app.modules.global_case_values.router import router as global_case_values_router
 from app.modules.governance.router import router as governance_router
 from app.modules.knowledge.router import router as knowledge_router
 from app.modules.operations.router import router as operations_router
@@ -42,6 +43,7 @@ app.include_router(reports_router)
 app.include_router(assignment_router)
 app.include_router(transfer_router)
 app.include_router(knowledge_router)
+app.include_router(global_case_values_router)
 app.include_router(router)
 
 
