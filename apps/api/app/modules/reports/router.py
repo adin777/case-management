@@ -28,10 +28,22 @@ REPORTS = [
     ("users", "דוח משתמשים והרשאות", "report.users"),
     ("audit", "דוח Audit", "report.audit"),
 ]
+APPROVAL_STATUSES = [
+    {"id": "pending", "label": "ממתין לאישור"},
+    {"id": "approved", "label": "אושר"},
+    {"id": "rejected", "label": "נדחה"},
+    {"id": "cancelled", "label": "בוטל"},
+    {"id": "superseded", "label": "הוחלף"},
+]
 
 
 def allowed(db: DB, user: Current, permission: str, environment_id: uuid.UUID | None = None) -> bool:
-    return user.is_system_admin or permission in domain_permissions(db, user.id, environment_id)
+    if user.is_system_admin or permission in domain_permissions(db, user.id, environment_id):
+        return True
+    return environment_id is None and any(
+        permission in domain_permissions(db, user.id, candidate_id)
+        for candidate_id in db.scalars(select(Environment.id))
+    )
 
 
 def guard(db: DB, user: Current, permission: str, environment_id: uuid.UUID | None = None) -> None:
@@ -39,14 +51,66 @@ def guard(db: DB, user: Current, permission: str, environment_id: uuid.UUID | No
         raise HTTPException(403, "אין הרשאה לצפות בדוח")
 
 
+def permitted_environment_ids(db: DB, user: Current, permission: str) -> list[uuid.UUID]:
+    if user.is_system_admin:
+        return list(db.scalars(select(Environment.id)))
+    return [environment_id for environment_id in db.scalars(select(Environment.id))
+            if permission in domain_permissions(db, user.id, environment_id)]
+
+
 @router.get("/available")
 def available(db: DB, user: Current) -> list[dict[str, str]]:
-    permissions = domain_permissions(db, user.id, None)
     return [
         {"code": code, "name": name, "permission": permission}
         for code, name, permission in REPORTS
-        if user.is_system_admin or permission in permissions
+        if allowed(db, user, permission)
     ]
+
+
+@router.get("/filter-options")
+def filter_options(db: DB, user: Current) -> dict[str, Any]:
+    report_permissions = {permission for _, _, permission in REPORTS}
+    has_report = any(report_permissions & domain_permissions(db, user.id, environment_id)
+                     for environment_id in db.scalars(select(Environment.id)))
+    if not user.is_system_admin and not has_report:
+        raise HTTPException(403, "אין הרשאה לטעון ערכי סינון לדוחות")
+    permitted_ids = (
+        list(db.scalars(select(Environment.id)))
+        if user.is_system_admin
+        else [
+            environment_id
+            for environment_id in db.scalars(select(Environment.id))
+            if report_permissions & domain_permissions(db, user.id, environment_id)
+        ]
+    )
+    environments = list(db.scalars(select(Environment).where(
+        Environment.is_active.is_(True), Environment.id.in_(permitted_ids)
+    ).order_by(Environment.name_he)))
+    request_types = list(db.scalars(select(RequestType).where(
+        RequestType.is_active.is_(True), RequestType.environment_id.in_(permitted_ids)
+    ).order_by(RequestType.name_he)))
+    users = list(db.scalars(select(User).where(User.is_active.is_(True)).order_by(User.display_name)))
+    groups = list(db.scalars(select(Group).where(Group.is_active.is_(True)).order_by(Group.name)))
+    departments = list(db.scalars(select(User.department).where(
+        User.is_active.is_(True), User.department.is_not(None), User.department != ""
+    ).distinct().order_by(User.department)))
+    job_titles = list(db.scalars(select(User.job_title).where(
+        User.is_active.is_(True), User.job_title.is_not(None), User.job_title != ""
+    ).distinct().order_by(User.job_title)))
+    steps = list(db.scalars(select(ApprovalStepDefinition.name).distinct().order_by(ApprovalStepDefinition.name)))
+    environment_names = {row.id: row.name_he for row in environments}
+    return {
+        "environments": [{"id": str(row.id), "label": row.name_he} for row in environments],
+        "request_types": [{"id": str(row.id), "environment_id": str(row.environment_id),
+                           "label": f"{row.name_he} · {environment_names.get(row.environment_id, '')}"}
+                          for row in request_types],
+        "users": [{"id": str(row.id), "label": f"{row.display_name} · {row.email}"} for row in users],
+        "groups": [{"id": str(row.id), "label": row.name} for row in groups],
+        "departments": departments,
+        "job_titles": job_titles,
+        "approval_statuses": APPROVAL_STATUSES,
+        "approval_steps": steps,
+    }
 
 
 @router.get("/approvals")
@@ -78,6 +142,8 @@ def approvals(
         .join(Environment, Case.environment_id == Environment.id)
         .join(RequestType, Case.request_type_id == RequestType.id)
     )
+    if not user.is_system_admin:
+        query = query.where(Case.environment_id.in_(permitted_environment_ids(db, user, "report.approvals")))
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
     if case_number:

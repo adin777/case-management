@@ -1141,15 +1141,10 @@ def workspace_cases(
     )
     if view == "assigned" and not can_view_assigned:
         raise HTTPException(403, "אין הרשאה לצפות בקריאות בטיפולי")
-    query = select(Case)
-    if view == "my":
-        own_filter = or_(Case.reporter_id == user.id, Case.requester_id == user.id)
-        if include_participating:
-            own_filter = or_(own_filter, Case.id.in_(select(CaseParticipant.case_id).where(
-                CaseParticipant.user_id == user.id
-            )))
-        query = query.where(own_filter)
-    else:
+    query = CaseVisibilityService(db, user).apply(
+        select(Case), include_participants=include_participating
+    )
+    if view == "assigned":
         query = query.where(Case.assignee_id == user.id)
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
@@ -1168,7 +1163,7 @@ def workspace_cases(
             GlobalStatusDefinition.semantic_category.in_(["resolved", "closed"])
         )
         query = query.where(
-            Case.workflow_status_id.not_in(inactive_statuses)
+            or_(Case.workflow_status_id.is_(None), Case.workflow_status_id.not_in(inactive_statuses))
             if activity_state == "active"
             else Case.workflow_status_id.in_(inactive_statuses)
         )
@@ -1265,7 +1260,7 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
             "permissions": {
                 "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
                 "can_lock": can_override_lock,
-                "can_assign": "case.assign" in granted,
+                "can_assign": "case.assign" in granted and (not item.is_locked or can_override_lock),
                 "can_change_status": ("case.change_status" in granted or "case.update" in granted) and (not item.is_locked or can_override_lock),
                 "can_manage_participants": "case.manage_participants" in granted and (not item.is_locked or can_override_lock),
                 "can_transfer": "case.transfer_environment" in granted and (not item.is_locked or can_override_lock),

@@ -189,7 +189,7 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 
 דוח הקריאות משתמש ב־`workflow_status_id` וב־`WorkflowStatus.label_he` כמקור האמת היחיד לתצוגה, סינון, מיון וייצוא. `sort` תומך ב־`case_number`, `title`, `environment`, `request_type`, `status`, `priority`, `requester`, `assignee`, `created_at`, `updated_at`; `direction` הוא `asc` או `desc`, והמיון מתבצע בשרת לפני pagination.
 
-`GET /api/environments/{environment_id}/eligible-assignees` מחזיר רק משתמשים פעילים בעלי שיוך פעיל לסביבה ודורש `case.assign`. `POST /api/cases/{case_id}/assign` מקבל `assignee_id` או `null` ו־`version`. בקריאה נעולה רק מנהל מערכת או בעל `environment.manage` רשאי לשנות מטפל.
+`GET /api/environments/{environment_id}/eligible-assignees` מחזיר רק משתמשים פעילים בעלי שיוך פעיל לסביבה ודורש `case.assign`. `POST /api/cases/{case_id}/assign` מקבל `assignee_id` או `null` ו־`version`. בקריאה נעולה רק System Admin או Environment Manager מפורש של אותה סביבה רשאי לשנות מטפל. בהתאם לכך, `GET /api/cases/{case_id}` מחזיר `permissions.can_assign=false` למשתמש רגיל גם אם הוקצתה לו הרשאת `case.assign`.
 
 `GET /api/cases/{case_id}/approvals` מחזיר לכל משימה מספר ושם שלב, סוג מאשר, snapshot של שם המאשר, מצב, מועד בקשה, החלטה, מועד החלטה והערה. שם המאשר נשמר בעת יצירת המשימה ואינו משתנה בעקבות שינוי עתידי בפרופיל.
 
@@ -260,6 +260,15 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 מסנן הסביבה בדוח הקריאות אופציונלי. ללא סביבה הדוח והייצוא מחזירים את איחוד השורות
 הנראות למשתמש לפי `CaseVisibilityService`; אותו שירות נאכף גם ב־`GET /api/cases` ובגישה ישירה.
 נראות מתקבלת ליוצר, למבקש, למטפל, למשתתף או לבעל `case.read`/`case.read_environment` בסביבה.
+`GET /api/cases/workspace/query` משתמש אף הוא ב־`CaseVisibilityService`. System Admin מקבל את
+כל הקריאות; Reporter, Requester ו־Assignee מוצגים תמיד, בעוד `include_participating` קובע רק
+אם להוסיף קריאות שבהן המשתמש הוא Participant בלבד. קריאה פעילה ללא `workflow_status_id`
+אינה נעלמת בגלל ערך `NULL`.
+
+`GET /api/reports/filter-options` מחזיר מקורות אמת משותפים למסנני הדוחות: סביבות, סוגי
+קריאה עם סביבת האב, משתמשים פעילים, קבוצות פעילות, מחלקות, תפקידים ארגוניים, סטטוסי אישור
+ושלבי אישור. דוח האישורים מציג `can_decide` ומשתמש ב־`POST /api/approval-tasks/{id}/decision`;
+דחייה מחייבת `comment`, ואישור מאפשר הערה אופציונלית.
 
 קבצים מצורפים מאומתים לפי שם, סיומת חסומה, MIME וגודל configurable. הרשימה המותרת
 כוללת מסמכים, קובצי נתונים, תמונות, ארכיונים ודואר נתמכים; קובצי הרצה נדחים תמיד.

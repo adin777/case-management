@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.database.session import SessionLocal
 from app.main import app
 from app.modules.api import password_hash
-from app.modules.models import Employee, EnvironmentMembership, RequestType, User
+from app.modules.models import Case, Employee, EnvironmentMembership, RequestType, User
 
 client = TestClient(app)
 
@@ -406,6 +406,14 @@ def test_impersonation_uses_target_permissions_and_can_be_stopped() -> None:
     assert client.get("/api/impersonation/status", headers=impersonated).json()["active"] is True
     assert client.post("/api/impersonation/start", headers=impersonated,
                        json={"user_id": requester["id"]}).status_code == 409
+    with SessionLocal() as db:
+        protected_case = db.scalar(select(Case).order_by(Case.created_at.desc()))
+        assert protected_case
+        protected_case_id, protected_version = protected_case.id, protected_case.version
+    assert client.post(f"/api/cases/{protected_case_id}/lock", headers=impersonated,
+        json={"locked": True, "reason": "אסור למשתמש מתחזה", "version": protected_version}).status_code == 403
+    assert client.post(f"/api/cases/{protected_case_id}/manager-comments", headers=impersonated,
+                       json={"body": "אסור"}).status_code == 403
     stopped = client.post("/api/impersonation/stop", headers=impersonated)
     assert stopped.status_code == 200
     restored = {"Authorization": f"Bearer {stopped.json()['access_token']}"}

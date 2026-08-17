@@ -4,18 +4,12 @@ from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.access.service import domain_permissions
-from app.modules.models import Case, CaseParticipant, Environment, EnvironmentMembership, User
+from app.modules.environment_manager.service import EnvironmentManagerService
+from app.modules.models import Case, CaseParticipant, Environment, User
 
 
 def can_manage_locked_case(db: Session, user: User, environment_id: uuid.UUID) -> bool:
-    if user.is_system_admin:
-        return True
-    return db.scalar(select(EnvironmentMembership.id).where(
-        EnvironmentMembership.environment_id == environment_id,
-        EnvironmentMembership.user_id == user.id,
-        EnvironmentMembership.is_active.is_(True),
-        EnvironmentMembership.is_environment_manager.is_(True),
-    )) is not None
+    return EnvironmentManagerService(db).can_manage_locked_case(user, environment_id)
 
 
 class CaseVisibilityService:
@@ -33,16 +27,20 @@ class CaseVisibilityService:
                 result.append(environment_id)
         return result
 
-    def apply(self, query: Select) -> Select:
+    def apply(self, query: Select, *, include_participants: bool = True) -> Select:
         if self.user.is_system_admin:
             return query
-        return query.where(or_(
+        conditions = [
             Case.reporter_id == self.user.id,
             Case.requester_id == self.user.id,
             Case.assignee_id == self.user.id,
             Case.environment_id.in_(self.readable_environment_ids()),
-            Case.id.in_(select(CaseParticipant.case_id).where(CaseParticipant.user_id == self.user.id)),
-        ))
+        ]
+        if include_participants:
+            conditions.append(Case.id.in_(select(CaseParticipant.case_id).where(
+                CaseParticipant.user_id == self.user.id
+            )))
+        return query.where(or_(*conditions))
 
     def can_view(self, item: Case) -> bool:
         query = self.apply(select(Case.id).where(Case.id == item.id))

@@ -1,0 +1,1 @@
+"""Explicit environment-manager authorization."""

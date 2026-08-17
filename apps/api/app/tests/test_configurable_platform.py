@@ -134,19 +134,37 @@ def test_two_step_approval_flow() -> None:
     users = client.get("/api/users", headers=headers).json()
     agent = next(row for row in users if row["email"] == "agent@example.com")
     envadmin = next(row for row in users if row["email"] == "envadmin@example.com")
+    assert client.patch(f"/api/users/{agent['id']}", headers=headers,
+                        json={"department": "שירות", "job_title": "מטפל"}).status_code == 200
     flow = client.post(f"/api/environments/{environment['id']}/approval-flows", headers=headers, json={
         "name": "אישור דו שלבי", "request_type_id": request_type["id"], "trigger_type": "case_created",
         "steps": [{"name": "אישור מטפל", "approver_user_id": agent["id"]}, {"name": "אישור מנהל", "approver_user_id": envadmin["id"]}],
     })
     assert flow.status_code == 201
     item = create_case(headers)
-    pending = client.get("/api/approvals/pending-for-me", headers=auth("agent@example.com", "Agent123!"))
+    assert client.post("/api/access/bulk", headers=headers, json={"subject_type": "users",
+        "subject_ids": [agent["id"]], "environment_id": environment["id"],
+        "levels": {"report_approvals": "view"}}).status_code == 200
+    agent_headers = auth("agent@example.com", "Agent123!")
+    pending = client.get("/api/approvals/pending-for-me", headers=agent_headers)
     assert pending.status_code == 200
     assert any(row["case_id"] == item["id"] and row["step_name"] == "אישור מטפל" for row in pending.json())
+    options = client.get("/api/reports/filter-options", headers=agent_headers)
+    assert options.status_code == 200
+    required_option_keys = ("environments", "request_types", "users", "groups", "departments",
+                            "job_titles", "approval_statuses", "approval_steps")
+    assert not [key for key in required_option_keys if not options.json()[key]], options.json()
+    report = client.get(f"/api/reports/approvals?case_number={item['case_number']}", headers=agent_headers)
+    report_task = next(row for row in report.json()["items"] if row["case_number"] == item["case_number"])
+    assert report_task["can_decide"] is True and report_task["status"] == "pending"
     approval = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()["current_approval"]
     first = approval["tasks"][0]
     assert first["approver_name"] and first["requested_at"] and first["step_order"] == 1
-    assert client.post(f"/api/approval-tasks/{first['id']}/decision", headers=auth("agent@example.com", "Agent123!"), json={"decision": "approved"}).status_code == 200
+    assert client.post(f"/api/approval-tasks/{first['id']}/decision", headers=agent_headers,
+                       json={"decision": "approved"}).status_code == 200
+    refreshed_report = client.get(f"/api/reports/approvals?case_number={item['case_number']}", headers=agent_headers)
+    decided_row = next(row for row in refreshed_report.json()["items"] if row["task_id"] == first["id"])
+    assert decided_row["status"] == "approved" and decided_row["can_decide"] is False
     approval = client.get(f"/api/cases/{item['id']}/approvals", headers=headers).json()["current_approval"]
     second = next(row for row in approval["tasks"] if row["status"] == "pending")
     decided = client.post(f"/api/approval-tasks/{second['id']}/decision", headers=auth("envadmin@example.com", "EnvAdmin123!"), json={"decision": "approved"})
@@ -235,12 +253,18 @@ def test_case_lock_blocks_edit_but_allows_public_comment() -> None:
     })
     assert locked.status_code == 200 and locked.json()["is_locked"] is True
     agent_headers = auth("agent@example.com", "Agent123!")
+    locked_detail = client.get(f"/api/cases/{item['id']}", headers=agent_headers)
+    assert locked_detail.status_code == 200
+    assert locked_detail.json()["permissions"]["can_assign"] is False
     blocked = client.patch(f"/api/cases/{item['id']}", headers=agent_headers, json={
         "title": "עריכה אסורה", "version": locked.json()["version"],
     })
     assert blocked.status_code == 403
     assert client.post(f"/api/cases/{item['id']}/lock", headers=agent_headers, json={
         "locked": False, "version": locked.json()["version"],
+    }).status_code == 403
+    assert client.post(f"/api/cases/{item['id']}/assign", headers=agent_headers, json={
+        "assignee_id": None, "version": locked.json()["version"],
     }).status_code == 403
     comment = client.post(f"/api/cases/{item['id']}/public-comments", headers=agent_headers, json={"body": "תגובה מותרת"})
     assert comment.status_code == 201

@@ -206,6 +206,26 @@ def test_participant_access_public_comments_and_manager_isolation() -> None:
     assert client.get(f"/api/cases/{case['id']}", headers=requester_headers).status_code == 200
     assert client.get(f"/api/cases/{case['id']}", headers=participant_headers).status_code == 200
     assert client.get(f"/api/cases/{case['id']}", headers=outsider_headers).status_code == 403
+    participant_workspace = client.get(
+        "/api/cases/workspace/query?view=my&activity_state=all&include_participating=true",
+        headers=participant_headers,
+    ).json()
+    assert case["case_number"] in {row["case_number"] for row in participant_workspace["items"]}
+    assert case["case_number"] not in {
+        row["case_number"] for row in client.get(
+            "/api/cases/workspace/query?view=my&activity_state=all", headers=outsider_headers
+        ).json()["items"]
+    }
+    agent = next(row for row in client.get("/api/users", headers=admin_headers).json()
+                 if row["email"] == "agent@example.com")
+    assigned = client.post(f"/api/cases/{case['id']}/assign", headers=admin_headers,
+        json={"assignee_id": agent["id"], "version": case["version"]})
+    assert assigned.status_code == 200
+    agent_workspace = client.get(
+        "/api/cases/workspace/query?view=my&activity_state=all&include_participating=false",
+        headers=auth("agent@example.com", "Agent123!"),
+    ).json()
+    assert case["case_number"] in {row["case_number"] for row in agent_workspace["items"]}
     assert (
         client.post(
             f"/api/cases/{case['id']}/public-comments",

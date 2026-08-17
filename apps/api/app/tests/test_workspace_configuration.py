@@ -60,6 +60,9 @@ def test_workspace_query_and_environment_membership_copy() -> None:
     assert workspace.status_code == 200
     assert workspace.json()["can_view_assigned_cases"] is True
     assert all("updated_at" in row for row in workspace.json()["items"])
+    all_cases = {row["case_number"] for row in client.get("/api/cases?limit=200", headers=headers).json()}
+    workspace_cases = {row["case_number"] for row in workspace.json()["items"]}
+    assert all_cases <= workspace_cases
     assert environment["id"] in {row["environment_id"] for row in source["memberships"]}
 
 
