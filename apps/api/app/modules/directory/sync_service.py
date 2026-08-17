@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.modules.directory.provider import DirectoryBatch, NormalizedDirectoryUser
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_assignments.service import apply_all_rules
-from app.modules.models import DirectorySyncRun, User
+from app.modules.models import DirectorySyncRun, Environment, EnvironmentMembership, Group, GroupMember, User
 
 password_hash = PasswordHash.recommended()
 PROFILE_FIELDS = ("first_name", "last_name", "display_name", "user_principal_name", "department",
@@ -37,17 +37,27 @@ class UserSyncService:
         rows = []; counts = {"created": 0, "updated": 0, "disabled": 0, "unchanged": 0, "errors": 0}
         seen: set[str] = set()
         for incoming in batch.users:
+            user: User | None = None
+            warnings: list[str] = []
             key = incoming.directory_object_id or (incoming.user_principal_name or incoming.email).lower()
             if key in seen: action, errors = "error", ["רשומה כפולה בקלט"]
             else:
                 seen.add(key); user = self._match(incoming); errors = []
-                if not user: action = "created"
+                warnings = []
+                known_groups = set(self.db.scalars(select(Group.name)))
+                known_environments = set(self.db.scalars(select(Environment.name_he)))
+                errors.extend(f"קבוצה לא קיימת: {name}" for name in incoming.group_names if name not in known_groups)
+                errors.extend(f"סביבה לא קיימת: {name}" for name in incoming.environment_names if name not in known_environments)
+                if errors: action = "error"
+                elif not user: action = "created"
                 elif not incoming.directory_enabled and user.status == "active": action = "disabled"
                 elif any(getattr(user, field) != getattr(incoming, field) for field in PROFILE_FIELDS): action = "updated"
                 else: action = "unchanged"
             counts[{"error": "errors"}.get(action, action)] += 1
+            changed_fields = [] if not user else [field for field in PROFILE_FIELDS if getattr(user, field) != getattr(incoming, field)]
             rows.append({"email": str(incoming.email), "display_name": incoming.display_name,
-                         "action": action, "errors": errors, "data": incoming.model_dump(mode="json")})
+                         "action": action, "changed_fields": changed_fields, "warnings": warnings,
+                         "errors": errors, "data": incoming.model_dump(mode="json")})
         return {**counts, "rows": rows, "users": [row.model_dump(mode="json") for row in batch.users],
                 "delta_link": batch.delta_link}
 
@@ -64,10 +74,20 @@ class UserSyncService:
                     status="active" if incoming.directory_enabled else "inactive", is_active=incoming.directory_enabled)
                 self.db.add(user)
             for field in PROFILE_FIELDS: setattr(user, field, getattr(incoming, field))
-            user.source = self.source; user.last_directory_sync_at = now
+            if not user.source: user.source = self.source
+            user.last_directory_sync_at = now
             if not incoming.directory_enabled and user.status == "active": user.status = "inactive"
             user.is_active = user.status == "active" and incoming.directory_enabled
             self.db.flush()
+            for group_name in incoming.group_names:
+                group = self.db.scalar(select(Group).where(Group.name == group_name))
+                if group and not self.db.get(GroupMember, (group.id, user.id)):
+                    self.db.add(GroupMember(group_id=group.id, user_id=user.id, added_by=actor_id))
+            for environment_name in incoming.environment_names:
+                environment = self.db.scalar(select(Environment).where(Environment.name_he == environment_name))
+                if environment and not self.db.scalar(select(EnvironmentMembership).where(
+                    EnvironmentMembership.environment_id == environment.id, EnvironmentMembership.user_id == user.id)):
+                    self.db.add(EnvironmentMembership(environment_id=environment.id, user_id=user.id, source="excel", is_active=True))
             sync_employee_for_user(self.db, user)
         run.created_count, run.updated_count = preview["created"], preview["updated"]
         run.disabled_count, run.unchanged_count = preview["disabled"], preview["unchanged"]

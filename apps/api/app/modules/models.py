@@ -108,6 +108,7 @@ class Group(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), unique=True)
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_system_admin_group: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     __table_args__ = (Index("ux_groups_name_ci", func.lower(name), unique=True),)
 
 
@@ -183,6 +184,7 @@ class EnvironmentMembership(Base):
     source: Mapped[str] = mapped_column(String(30), default="manual")
     source_rule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_environment_manager: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     __table_args__ = (UniqueConstraint("environment_id", "user_id", "role_id"),)
 
 
@@ -530,6 +532,36 @@ class CaseFieldDefinition(TimestampMixin, Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     __table_args__ = (UniqueConstraint("environment_id", "request_type_id", "key"),)
+
+
+class GlobalCaseFieldDefinition(TimestampMixin, Base):
+    __tablename__ = "global_case_field_definitions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(80), unique=True)
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str] = mapped_column(String(200), default="")
+    field_type: Mapped[str] = mapped_column(String(40))
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class EnvironmentGlobalCaseField(Base):
+    __tablename__ = "environment_global_case_fields"
+    environment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("environments.id", ondelete="CASCADE"), primary_key=True)
+    global_field_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("global_case_field_definitions.id", ondelete="CASCADE"), primary_key=True)
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class GlobalCaseFieldValue(Base):
+    __tablename__ = "global_case_field_values"
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True)
+    global_field_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("global_case_field_definitions.id"), primary_key=True)
+    value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
 
 
 class UserPermissionAssignment(TimestampMixin, Base):

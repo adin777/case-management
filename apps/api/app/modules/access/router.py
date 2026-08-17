@@ -62,6 +62,9 @@ def assignments(
 @router.post("/bulk")
 def bulk(data: BulkAccessIn, db: DB, user: Current) -> dict[str, int]:
     system_admin(user)
+    if data.subject_type == "groups" and db.scalar(select(Group.id).where(
+        Group.id.in_(data.subject_ids), Group.is_system_admin_group.is_(True))):
+        raise HTTPException(409, "קבוצת Admin מקבלת עריכה אוטומטית ואינה תומכת ב־Override")
     aliases = {"users": "users_manage", "groups": "groups_manage", "access": "access_manage"}
     expanded: dict[str, Literal["inherit", "none", "view", "edit"]] = {}
     for code, level in data.levels.items():
@@ -127,11 +130,18 @@ def subject_matrix(subject_type: Literal["user", "group"], subject_id: uuid.UUID
             raise HTTPException(404, "המשתמש לא נמצא")
         resolved = {row["domain"]: row for row in EffectivePermissionService(db).explain_all(target, environment_id)}
         return [{"domain_code": domain.code, "domain_name": domain.name_he,
+                 "description": domain.description_he,
                  "direct_level": direct.get(domain.code, "inherit"),
                  "effective_level": resolved[domain.code]["effective_level"],
                  "source": resolved[domain.code]["source_name"], "scope": domain.scope,
                  "can_override": not target.is_system_admin} for domain in domains]
+    if isinstance(subject, Group) and subject.is_system_admin_group:
+        return [{"domain_code": domain.code, "domain_name": domain.name_he,
+                 "description": domain.description_he,
+                 "direct_level": "none", "effective_level": "edit", "source": "קבוצת Admin",
+                 "scope": domain.scope, "can_override": False} for domain in domains]
     return [{"domain_code": domain.code, "domain_name": domain.name_he,
+             "description": domain.description_he,
              "direct_level": direct.get(domain.code, "none"),
              "effective_level": direct.get(domain.code, "none"),
              "source": "הרשאת קבוצה" if domain.code in direct else "אין הרשאה",

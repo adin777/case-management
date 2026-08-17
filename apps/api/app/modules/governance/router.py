@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from sqlalchemy import delete, func, or_, select
 
 from app.modules.api import DB, Current, audit, case_access, password_hash, require
+from app.modules.case_visibility.service import can_manage_locked_case
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.models import (
     AutomationRule,
@@ -180,10 +181,12 @@ class EnvironmentFieldIn(BaseModel):
 class MembershipCreate(BaseModel):
     user_id: uuid.UUID | None = None
     group_id: uuid.UUID | None = None
+    is_environment_manager: bool = False
 
 
 class MembershipPatch(BaseModel):
     is_active: bool | None = None
+    is_environment_manager: bool | None = None
 
 
 class UserEnvironmentMembershipIn(BaseModel):
@@ -581,6 +584,7 @@ def list_groups(db: DB, user: Current) -> list[dict[str, Any]]:
             "name": row.name,
             "description": row.description,
             "is_active": row.is_active,
+            "is_system_admin_group": row.is_system_admin_group,
             "member_count": db.scalar(
                 select(func.count()).select_from(GroupMember).where(GroupMember.group_id == row.id)
             ),
@@ -605,6 +609,7 @@ def create_group(data: GroupIn, db: DB, user: Current) -> dict[str, Any]:
             "name": item.name,
             "description": item.description,
             "is_active": item.is_active,
+            "is_system_admin_group": item.is_system_admin_group,
             "member_count": 0,
         }
     except HTTPException:
@@ -631,6 +636,7 @@ def get_group(group_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
         "name": item.name,
         "description": item.description,
         "is_active": item.is_active,
+        "is_system_admin_group": item.is_system_admin_group,
         "members": [{"id": r[0], "display_name": r[1], "email": r[2]} for r in members],
     }
 
@@ -1027,6 +1033,7 @@ def list_memberships(environment_id: uuid.UUID, db: DB, user: Current) -> list[d
             "source": m.source,
             "source_rule_id": m.source_rule_id,
             "is_active": m.is_active,
+            "is_environment_manager": m.is_environment_manager,
         }
         for m, u, g in rows
     ]
@@ -1056,6 +1063,10 @@ def update_membership(
     if not item or item.environment_id != environment_id:
         raise HTTPException(404, "Membership not found")
     if data.is_active is not None: item.is_active = data.is_active
+    if data.is_environment_manager is not None:
+        if item.user_id is None and data.is_environment_manager:
+            raise HTTPException(422, "מנהל סביבה חייב להיות משתמש מפורש")
+        item.is_environment_manager = data.is_environment_manager
     audit(db, user, "environment", environment_id, "membership_updated")
     db.commit()
     return {"ok": True}
@@ -1378,7 +1389,8 @@ def manager_comments(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
-    require(db, user, item.environment_id, "comment.manager.read")
+    if not can_manage_locked_case(db, user, item.environment_id):
+        raise HTTPException(403, "הערות מנהל זמינות רק למנהל הסביבה או למנהל מערכת")
     return [
         comment_dict(db, row)
         for row in db.scalars(
@@ -1394,7 +1406,8 @@ def create_manager_comment(case_id: uuid.UUID, data: CommentIn, db: DB, user: Cu
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
-    require(db, user, item.environment_id, "comment.manager.create")
+    if not can_manage_locked_case(db, user, item.environment_id):
+        raise HTTPException(403, "הערות מנהל זמינות רק למנהל הסביבה או למנהל מערכת")
     row = Comment(case_id=case_id, author_id=user.id, body=data.body, visibility=Visibility.internal)
     db.add(row)
     db.flush()

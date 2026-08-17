@@ -1,6 +1,7 @@
 export type Environment = { id: string; system_number: string; code: string; name_he: string; name_en: string; description?: string; is_active: boolean };
 export type RequestType = { id: string; system_number?: string; environment_id: string; code: string; name_he: string; name_en: string; description?: string; is_active: boolean; form_version_id?: string; workflow_definition_id?: string; default_priority_id?: string; default_sub_priority_id?: string; default_assignee_user_id?: string; default_assignee_group_id?: string };
-export type Field = { id?: string; key: string; label_he: string; label_en: string; field_type: string; is_required: boolean; is_read_only: boolean; is_active?: boolean; sort_order: number; configuration_json: { options?: string[] } };
+export type FieldOption = string | { id: string; label_he: string; label_en?: string; is_active?: boolean; sort_order?: number };
+export type Field = { id?: string; key: string; label_he: string; label_en: string; field_type: string; is_required: boolean; is_read_only: boolean; is_active?: boolean; sort_order: number; configuration_json: { options?: FieldOption[] } };
 export type Form = { id: string; request_type_id: string; version: number; status: 'draft' | 'published'; fields: Field[] };
 export type Comment = { id: string; author_id: string; author_name?: string; body: string; visibility: 'public' | 'internal'; created_at: string };
 export type CaseValue = { field_definition_id: string; value_text?: string; value_number?: number; value_boolean?: boolean; value_date?: string; value_datetime?: string; value_user_id?: string; value_json?: unknown };
@@ -10,7 +11,7 @@ export type MembershipSummary = { environment_id: string; environment_name: stri
 export type UserStatus = 'active'|'inactive'|'archived';
 export type UserSource = 'manual'|'excel'|'entra'|'active_directory';
 export type User = { id: string; email: string; display_name: string; first_name?: string; last_name?: string; user_principal_name?: string; department?: string; job_title?: string; phone?: string; mobile_phone?: string; employee_id?: string; computer_identifier?: string; directory_object_id?: string; source: UserSource; directory_enabled?: boolean; status: UserStatus; archived_at?: string; last_directory_sync_at?: string; is_system_admin: boolean; is_active?: boolean; created_at?: string; last_login_at?: string; groups?: { id: string; name: string }[]; memberships?: MembershipSummary[] };
-export type Group = { id: string; name: string; description?: string; is_active: boolean; member_count: number };
+export type Group = { id: string; name: string; description?: string; is_active: boolean; is_system_admin_group?: boolean; member_count: number };
 export type Role = { id: string; system_number?: string; code: string; name: string; name_he?: string; description?: string; description_he?: string; scope: 'system' | 'environment'; sort_order?: number; permissions: string[]; is_active: boolean };
 export type Permission = { code: string; description?: string; name_he?: string; description_he?: string; category?: string; scope?: string; is_active?: boolean; user_count?: number; group_count?: number };
 export type UserFieldType = 'short_text' | 'long_text' | 'number' | 'date' | 'boolean' | 'single_select' | 'multi_select' | 'user' | 'email' | 'phone';

@@ -97,6 +97,24 @@ def test_system_admin_automatically_receives_new_domain_and_bulk_loads_existing(
     assert loaded.status_code == 200 and loaded.json()["levels"][domain.code] == "view"
 
 
+def test_admin_group_member_automatically_receives_future_domain_without_assignment() -> None:
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.is_system_admin.is_(True)))
+        group = db.scalar(select(Group).where(Group.is_system_admin_group.is_(True)))
+        assert admin and group
+        member = User(email=f"admin-group-{uuid.uuid4()}@example.com", display_name="חבר קבוצת Admin",
+            password_hash=admin.password_hash, is_active=True)
+        domain = PermissionDomain(code=f"future_group_{uuid.uuid4().hex[:8]}", name_he="יכולת עתידית לקבוצה",
+            description_he="נוספה לאחר הקבוצה", category="מערכת", scope="global",
+            view_permissions="future.group.read", edit_permissions="future.group.write", is_active=True)
+        db.add_all([member, domain]); db.flush()
+        db.add(GroupMember(group_id=group.id, user_id=member.id, added_by=admin.id)); db.commit()
+        assert db.scalar(select(AccessLevelAssignment).where(AccessLevelAssignment.group_id == group.id,
+            AccessLevelAssignment.domain_code == domain.code)) is None
+        resolved = EffectivePermissionService(db).resolve(member, domain, None)
+        assert resolved["effective_level"] == "edit" and resolved["source_name"] == "קבוצת Admin"
+
+
 def test_subject_matrix_returns_direct_effective_source_and_system_admin_edit() -> None:
     headers = admin_headers()
     users = client.get("/api/users", headers=headers).json()
@@ -109,3 +127,16 @@ def test_subject_matrix_returns_direct_effective_source_and_system_admin_edit() 
     group_matrix = client.get(f"/api/access/subjects/group/{group['id']}/matrix", headers=headers)
     assert group_matrix.status_code == 200
     assert {"domain_code", "domain_name", "direct_level", "effective_level", "source", "scope", "can_override"} <= group_matrix.json()[0].keys()
+
+
+def test_normal_group_permission_save_survives_fresh_matrix_get() -> None:
+    headers = admin_headers()
+    group = client.post("/api/groups", headers=headers, json={"name":f"שמירה {uuid.uuid4()}",
+        "description":"בדיקת התמדה","is_active":True}).json()
+    domain = client.get("/api/access/domains", headers=headers).json()[0]
+    saved = client.post("/api/access/bulk", headers=headers, json={"subject_type":"groups",
+        "subject_ids":[group["id"]],"environment_id":None,"levels":{domain["code"]:"edit"}})
+    assert saved.status_code == 200, saved.text
+    fresh = client.get(f"/api/access/subjects/group/{group['id']}/matrix", headers=headers)
+    row = next(item for item in fresh.json() if item["domain_code"] == domain["code"])
+    assert row["direct_level"] == row["effective_level"] == "edit"

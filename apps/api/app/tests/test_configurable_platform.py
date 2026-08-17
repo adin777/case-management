@@ -66,7 +66,7 @@ def test_select_field_option_reorder_persists() -> None:
         headers=headers,json={"ids":["three","one","two"]})
     assert reordered.status_code == 200
     fetched = client.get(f"/api/environments/{environment['id']}/case-fields", headers=headers).json()
-    field = next(row for row in fetched if row["id"] == created.json()["id"])
+    field = next(row for row in fetched["environment_fields"] if row["id"] == created.json()["id"])
     assert [option["value"] for option in field["options_json"]] == ["three","one","two"]
     duplicate = client.put(f"/api/environments/{environment['id']}/case-fields/{created.json()['id']}/options/reorder",
         headers=headers,json={"ids":["one","one","two"]})
@@ -273,3 +273,40 @@ def test_report_filters_creator_assignee_and_updated_date() -> None:
     )
     assert report.status_code == 200
     assert any(row["case_number"] == item["case_number"] for row in report.json()["items"])
+
+
+def test_dynamic_global_field_crud_visibility_and_case_value_roundtrip() -> None:
+    headers = auth(); environment, request_type, _ = context(headers)
+    form = client.get(f"/api/forms/{request_type['form_version_id']}", headers=headers).json()
+    created = client.post("/api/global-case-fields", headers=headers, json={"label_he":"מערכת יעד",
+        "label_en":"Target system","field_type":"single_select","is_required":False,"is_active":True})
+    assert created.status_code == 201, created.text
+    field = created.json()
+    one = client.post(f"/api/global-case-fields/{field['id']}/options", headers=headers,
+        json={"label_he":"מערכת א","label_en":"System A","is_active":True}).json()
+    two = client.post(f"/api/global-case-fields/{field['id']}/options", headers=headers,
+        json={"label_he":"מערכת ב","label_en":"System B","is_active":True}).json()
+    reordered = client.put(f"/api/global-case-fields/{field['id']}/options/order", headers=headers,
+        json=[two["id"],one["id"]])
+    assert [row["id"] for row in reordered.json()] == [two["id"],one["id"]]
+    combined = client.get(f"/api/environments/{environment['id']}/case-fields", headers=headers).json()
+    assert field["id"] in {row["id"] for row in combined["global_fields"]}
+    case_values=[{"field_definition_id":row["id"],"value":
+        (row["configuration_json"].get("options") or ["בדיקה"])[0] if row["field_type"]=="single_select" else "בדיקה"}
+        for row in form["fields"] if row["is_required"]]
+    case_values.append({"field_definition_id":field["id"],"value":two["id"]})
+    created_case = client.post("/api/cases", headers=headers, json={"environment_id":environment["id"],
+        "request_type_id":request_type["id"],"title":"שדות גלובליים","description":"בדיקת roundtrip",
+        "values":case_values})
+    assert created_case.status_code == 201, created_case.text
+    values = client.get(f"/api/cases/{created_case.json()['id']}/global-field-values", headers=headers)
+    assert values.json()[field["id"]] == two["id"]
+    hidden = client.put(f"/api/environments/{environment['id']}/global-case-fields/{field['id']}/visibility?is_visible=false", headers=headers)
+    assert hidden.status_code == 200
+    combined = client.get(f"/api/environments/{environment['id']}/case-fields", headers=headers).json()
+    assert field["id"] not in {row["id"] for row in combined["global_fields"]}
+    assert client.delete(f"/api/global-case-fields/{field['id']}", headers=headers).status_code == 409
+    disabled = client.patch(f"/api/global-case-fields/{field['id']}", headers=headers, json={
+        "label_he":"מערכת יעד","label_en":"Target system","field_type":"single_select",
+        "is_required":False,"is_active":False})
+    assert disabled.status_code == 200 and disabled.json()["is_active"] is False

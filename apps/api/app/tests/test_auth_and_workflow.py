@@ -131,7 +131,7 @@ def test_environment_number_is_automatic_and_case_does_not_require_workflow() ->
         "priority_id": priority.json()["id"], "values": [],
     })
     assert case.status_code == 201, case.text
-    assert case.json()["workflow_status_id"]
+    assert case.json()["workflow_status_id"] is None
 
     cloned = client.post(f"/api/environments/{created[0]['id']}/clone", headers=headers, json={
         "name_he": "סביבה משוכפלת", "name_en": "Cloned environment",
@@ -391,7 +391,7 @@ def test_status_options_return_all_active_statuses_and_mark_invalid_targets() ->
     assert options.status_code == 200
     rows = options.json()
     assert len(rows) >= 2
-    assert any(row["current"] for row in rows)
+    assert not any(row["current"] for row in rows)
     assert any(not row["allowed"] and row["reason"] for row in rows)
 
 
@@ -423,11 +423,8 @@ def test_case_create_permission_consumes_read_only_creation_configuration() -> N
     )
     assert response.status_code == 200
     configuration = response.json()
-    assert configuration["request_types"] and configuration["priorities"]
+    assert configuration["request_types"] and "global_fields" in configuration
     request_type = configuration["request_types"][0]
-    priority = configuration["priorities"][0]
-    compatible_sub = next((row for row in configuration["sub_priorities"]
-                           if row["priority_id"] == priority["id"]), None)
     values = []
     for field in (request_type.get("form") or {}).get("fields", []):
         if not field["is_required"]:
@@ -439,8 +436,7 @@ def test_case_create_permission_consumes_read_only_creation_configuration() -> N
     created = client.post("/api/cases", headers=worker, json={
         "environment_id": environment["id"], "request_type_id": request_type["id"],
         "title": "קריאת עובד עם הרשאת יצירה", "description": "נוצרה ממקור קריאה ייעודי",
-        "workflow_status_id": request_type["initial_status_id"], "priority_id": priority["id"],
-        "sub_priority_id": compatible_sub["id"] if compatible_sub else None, "values": values,
+        "values": values,
     })
     assert created.status_code == 201, created.text
     assert client.post("/api/request-types", headers=worker, json={
@@ -460,14 +456,15 @@ def test_case_create_permission_consumes_read_only_creation_configuration() -> N
     assert denied.status_code == 403
 
 
-def test_global_case_values_are_identical_across_environments() -> None:
+def test_global_case_fields_are_identical_across_environments() -> None:
     headers = login_headers("admin@example.com", "Admin123!")
     environments = client.get("/api/environments", headers=headers).json()
     assert len(environments) >= 1
-    global_values = client.get("/api/global-case-values", headers=headers)
-    assert global_values.status_code == 200
-    assert global_values.json()["statuses"] and global_values.json()["priorities"]
+    created = client.post("/api/global-case-fields", headers=headers, json={
+        "label_he": "שדה משותף", "label_en": "Shared", "field_type": "text",
+        "is_required": False, "is_active": True,
+    })
+    assert created.status_code == 201
     first = client.get(f"/api/case-creation/environments/{environments[0]['id']}/configuration", headers=headers)
     assert first.status_code == 200
-    assert [row["id"] for row in first.json()["priorities"]] == [row["id"] for row in global_values.json()["priorities"]]
-    assert sum(1 for row in global_values.json()["statuses"] if row["is_initial"]) == 1
+    assert created.json()["id"] in {row["id"] for row in first.json()["global_fields"]}

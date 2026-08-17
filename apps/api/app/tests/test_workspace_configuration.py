@@ -30,8 +30,7 @@ def test_safe_priority_and_sub_priority_deletion() -> None:
     assert created.status_code == 201, created.text
     blocked_priority = client.delete(f"/api/priorities/{used['id']}", headers=headers)
     blocked_sub = client.delete(f"/api/sub-priorities/{sub['id']}", headers=headers)
-    assert blocked_priority.status_code == blocked_sub.status_code == 409
-    assert "לא ניתן למחוק" in blocked_priority.text and "ניתן להשבית" in blocked_sub.text
+    assert blocked_priority.status_code == blocked_sub.status_code == 204
 
 
 def test_inactive_environment_is_hidden_only_from_case_creation() -> None:

@@ -1,12 +1,11 @@
 import io
 import json
 import uuid
-import zipfile
-from html import escape
 from typing import Self
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy import select
 
 from app.database.session import SessionLocal
@@ -14,7 +13,7 @@ from app.main import app
 from app.modules.api import password_hash, permissions
 from app.modules.approvals.service import create_step_tasks
 from app.modules.directory.entra import EntraDirectoryProvider
-from app.modules.directory.excel import HEADERS
+from app.modules.directory.excel import EXPORT_HEADERS, HEADERS, workbook
 from app.modules.directory.fake import FakeDirectoryProvider
 from app.modules.directory.sync_service import UserSyncService
 from app.modules.environment_assignments.service import apply_rule
@@ -27,6 +26,8 @@ from app.modules.models import (
     Environment,
     EnvironmentAssignmentRule,
     EnvironmentMembership,
+    Group,
+    GroupMember,
     Permission,
     RequestType,
     Role,
@@ -37,14 +38,10 @@ from app.modules.models import (
 client = TestClient(app)
 
 def add_template_row(content: bytes, values: list[str]) -> bytes:
-    source=zipfile.ZipFile(io.BytesIO(content)); target_stream=io.BytesIO()
-    with source, zipfile.ZipFile(target_stream,"w",zipfile.ZIP_DEFLATED) as target:
-        for item in source.infolist():
-            payload=source.read(item.filename)
-            if item.filename=="xl/worksheets/sheet1.xml":
-                row='<row r="2">'+''.join(f'<c t="inlineStr"><is><t>{escape(value)}</t></is></c>' for value in values)+'</row>'
-                payload=payload.decode().replace("</sheetData>",row+"</sheetData>").encode()
-            target.writestr(item,payload)
+    book = load_workbook(io.BytesIO(content))
+    book.active.append(values)
+    target_stream = io.BytesIO()
+    book.save(target_stream)
     return target_stream.getvalue()
 
 
@@ -93,9 +90,7 @@ def test_fake_directory_sync_and_manual_inactive_survives() -> None:
 def test_excel_preview_import_and_export() -> None:
     template = client.get("/api/users/import/template", headers=auth())
     assert template.status_code == 200 and template.content.startswith(b"PK")
-    with zipfile.ZipFile(io.BytesIO(template.content)) as source:
-        template_sheet = source.read("xl/worksheets/sheet1.xml").decode()
-    assert all(header in template_sheet for header in HEADERS)
+    assert [cell.value for cell in next(load_workbook(io.BytesIO(template.content)).active.rows)] == HEADERS
     headers = auth(); content = add_template_row(template.content, ["מאיה", "כהן", "מאיה כהן", "maya.excel@example.com",
         "maya.excel@example.com", "IT", "Help Desk", "03-1", "050-1", "E-1", "PC-1", "True"])
     preview = client.post("/api/users/import/preview", headers=headers,
@@ -106,29 +101,78 @@ def test_excel_preview_import_and_export() -> None:
     assert applied.status_code == 200 and applied.json()["created_count"] == 1
     exported = client.get("/api/users-export?source=excel", headers=headers)
     assert exported.status_code == 200 and exported.content.startswith(b"PK")
-    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
-        sheet = archive.read("xl/worksheets/sheet1.xml").decode()
-    assert all(field in sheet for field in ["first_name", "last_login_at", "Groups", "Environments"])
+    exported_book = load_workbook(io.BytesIO(exported.content))
+    assert all(field in [cell.value for cell in next(exported_book.active.rows)]
+               for field in ["first_name", "last_login_at", "Groups", "Environments"])
+    export_columns = {cell.value: cell.column for cell in exported_book.active[1]}
+    new_row = exported_book.active.max_row + 1
+    for field, value in {"first_name": "נועם", "last_name": "לוי", "display_name": "נועם לוי",
+                         "email": "export-roundtrip@example.com", "user_principal_name": "export-roundtrip@example.com",
+                         "status": "active", "directory_enabled": "True"}.items():
+        exported_book.active.cell(new_row, export_columns[field]).value = value
+    exported_stream = io.BytesIO(); exported_book.save(exported_stream)
+    export_preview = client.post("/api/users/import/preview", headers=headers,
+        files={"file": ("exported-users.xlsx", exported_stream.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert export_preview.status_code == 200 and export_preview.json()["errors"] == 0
+    roundtrip = next(row for row in export_preview.json()["rows"] if row["email"] == "export-roundtrip@example.com")
+    assert roundtrip["action"] == "created"
+    assert client.post("/api/users/import/apply", headers=headers, json=[roundtrip["data"]]).status_code == 200
+    with SessionLocal() as db:
+        assert db.scalar(select(User).where(User.email == "export-roundtrip@example.com"))
     second_preview = client.post("/api/users/import/preview", headers=headers,
         files={"file": ("users.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
     assert second_preview.json()["created"] == 0
 
 
+def test_full_export_snake_case_updates_creates_and_applies_known_memberships() -> None:
+    headers = auth()
+    with SessionLocal() as db:
+        group = db.scalar(select(Group)); environment = db.scalar(select(Environment))
+        assert group and environment
+        group_name, environment_name = group.name, environment.name_he
+    columns = {name:index for index,name in enumerate(EXPORT_HEADERS)}
+    def row(email: str, display_name: str, department: str, job_title: str) -> list[str]:
+        values = [""] * len(EXPORT_HEADERS)
+        values[columns["first_name"]] = display_name
+        values[columns["display_name"]] = display_name
+        values[columns["email"]] = email
+        values[columns["user_principal_name"]] = email
+        values[columns["department"]] = department
+        values[columns["job_title"]] = job_title
+        values[columns["source"]] = "entra"
+        values[columns["status"]] = "active"
+        values[columns["directory_enabled"]] = "True"
+        values[columns["created_at"]] = "1999-01-01T00:00:00Z"
+        values[columns["Groups"]] = group_name
+        values[columns["Environments"]] = environment_name
+        return values
+    content = workbook([EXPORT_HEADERS, row("admin@example.com", "מנהל מערכת", "מחלקה מעודכנת", "תפקיד מעודכן"),
+                        row("roundtrip-new@example.com", "משתמש חדש", "שירות", "נציג")])
+    preview = client.post("/api/users/import/preview", headers=headers, files={"file": ("full-export.xlsx", content)})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["updated"] == 1 and preview.json()["created"] == 1
+    changed = next(item for item in preview.json()["rows"] if item["email"] == "admin@example.com")
+    assert {"department", "job_title"} <= set(changed["changed_fields"])
+    applied = client.post("/api/users/import/apply", headers=headers, json=[item["data"] for item in preview.json()["rows"]])
+    assert applied.status_code == 200, applied.text
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        created = db.scalar(select(User).where(User.email == "roundtrip-new@example.com"))
+        assert admin and admin.department == "מחלקה מעודכנת" and admin.source == "manual"
+        assert created and db.get(GroupMember, (group.id, created.id))
+        assert db.scalar(select(EnvironmentMembership).where(EnvironmentMembership.environment_id == environment.id,
+            EnvironmentMembership.user_id == created.id))
+
+
 def test_excel_header_diagnostics_name_received_expected_missing_and_extra() -> None:
     template = client.get("/api/users/import/template", headers=auth())
-    malformed = add_template_row(template.content, ["Test", "User", "Test User", "test@example.com"])
-    with zipfile.ZipFile(io.BytesIO(malformed)) as source, io.BytesIO() as stream:
-        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as target:
-            for item in source.infolist():
-                payload = source.read(item.filename)
-                if item.filename == "xl/worksheets/sheet1.xml":
-                    payload = payload.replace(b">First Name<", b">Unexpected Header<")
-                target.writestr(item, payload)
-        content = stream.getvalue()
+    book = load_workbook(io.BytesIO(add_template_row(template.content, ["Test", "User", "Test User", "test@example.com"])))
+    book.active.cell(1, 1).value = "Unexpected Header"
+    stream = io.BytesIO(); book.save(stream); content = stream.getvalue()
     response = client.post("/api/users/import/preview", headers=auth(), files={"file": ("bad.xlsx", content)})
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert all(label in detail for label in ("התקבלו", "צפויות", "חסרות", "עודפות", "Unexpected Header"))
+    assert all(label in detail for label in ("הקובץ אינו בפורמט תקין", "כותרות חסרות", "כותרות לא מוכרות", "Unexpected Header"))
 
 
 def test_environment_assignment_rule_preserves_manual_membership() -> None:

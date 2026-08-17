@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class NormalizedDirectoryUser(BaseModel):
@@ -17,6 +17,8 @@ class NormalizedDirectoryUser(BaseModel):
     employee_id: str | None = None
     computer_identifier: str | None = None
     directory_enabled: bool = True
+    group_names: list[str] = Field(default_factory=list)
+    environment_names: list[str] = Field(default_factory=list)
 
 
 class DirectoryBatch(BaseModel):

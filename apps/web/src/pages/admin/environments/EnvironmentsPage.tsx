@@ -15,7 +15,7 @@ import { SystemFieldsTab } from './system-fields/SystemFieldsTab';
 import { filterEnvironments } from './environmentFilter';
 import { KnowledgeTab } from './tabs/KnowledgeTab';
 
-const labels = ['כללי', 'הגדרות קריאה', 'שדות הסביבה', 'משתמשים', 'שיוך אוטומטי', 'אוטומציות', 'אישורים', 'SLA', 'ניהול ידע'];
+const labels = ['כללי', 'הגדרות קריאה', 'שדות הסביבה', 'משתמשים והרשאות סביבה', 'שיוך אוטומטי', 'אוטומציות', 'אישורים', 'SLA', 'ניהול ידע'];
 const empty = { name_he: '', name_en: '', description: '' };
 
 export function EnvironmentsPage() {

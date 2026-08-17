@@ -14,12 +14,12 @@ const baseLinks: LinkItem[] = [
   { url: '/admin/environments', label: 'סביבות וסוגי קריאות', icon: <Settings/> },
   { url: '/admin/users', label: 'משתמשים והרשאות', icon: <Groups/>, admin: true },
   { url: '/admin/permissions', label: 'ניהול הרשאות גורף', icon: <LockPerson/>, admin: true },
-  { url: '/admin/case-values', label: 'הגדרות שדות קריאה', icon: <Settings/>, admin: true },
+  { url: '/admin/case-values', label: 'שדות גלובליים', icon: <Settings/>, admin: true },
 ];
 
 export function AppLayout() {
   const navigate = useNavigate(); const client=useQueryClient(); const routeLocation = useLocation(); const [open, setOpen] = useState(false); const [impersonationOpen, setImpersonationOpen] = useState(false); const [targetId, setTargetId] = useState('');
-  async function adoptIdentity(accessToken:string){applyIdentityToken(accessToken,client);setImpersonationOpen(false);setTargetId('');navigate('/')}
+  async function adoptIdentity(accessToken:string){applyIdentityToken(accessToken,client);setImpersonationOpen(false);setTargetId('');await Promise.all([client.fetchQuery({queryKey:['me'],queryFn:()=>api<User>('/auth/me')}),client.fetchQuery({queryKey:['impersonation-status'],queryFn:()=>api<{active:boolean;can_start:boolean;impersonated_user_name?:string}>('/impersonation/status')})]);navigate('/')}
   const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
   const { data: impersonation } = useQuery({ queryKey: ['impersonation-status'], queryFn: () => api<{ active: boolean; can_start: boolean; impersonated_user_name?: string }>('/impersonation/status') });
   const { data: users = [] } = useQuery({ queryKey: ['users-for-impersonation'], queryFn: () => api<User[]>('/users'), enabled: !!impersonation?.can_start });

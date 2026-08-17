@@ -4,7 +4,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.modules.api import DB, Current, audit, case_access, permissions, require
+from app.modules.api import DB, Current, audit, case_access, require
+from app.modules.case_visibility.service import can_manage_locked_case
 from app.modules.models import Case, Environment, RequestType
 from app.modules.transfer.service import build_preview, target_requirements, transfer
 
@@ -31,9 +32,7 @@ def _authorize(db: DB, user: Current, item: Case, target_id: uuid.UUID) -> None:
     case_access(db, user, item)
     require(db, user, item.environment_id, "case.transfer_environment")
     require(db, user, target_id, "case.transfer_environment")
-    if item.is_locked and not (
-        user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)
-    ):
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה ואין הרשאה לעקוף את הנעילה")
 
 

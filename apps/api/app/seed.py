@@ -192,13 +192,16 @@ def run(*, include_demo_data: bool = False) -> None:
             ("requester@example.com", "requester"),
             ("agent@example.com", "agent"),
         ] if include_demo_data else []):
-            if not db.scalar(select(EnvironmentMembership).where(
+            membership = db.scalar(select(EnvironmentMembership).where(
                 EnvironmentMembership.environment_id == env.id,
                 EnvironmentMembership.user_id == users[email].id,
                 EnvironmentMembership.role_id == roles[role_code].id,
-            )):
-                db.add(EnvironmentMembership(environment_id=env.id, user_id=users[email].id,
-                                             role_id=roles[role_code].id))
+            ))
+            if not membership:
+                membership = EnvironmentMembership(environment_id=env.id, user_id=users[email].id,
+                                                   role_id=roles[role_code].id)
+                db.add(membership)
+            membership.is_environment_manager = role_code == "environment_admin"
 
         base_groups: dict[str, Group] = {}
         for name, description in [
@@ -214,6 +217,7 @@ def run(*, include_demo_data: bool = False) -> None:
             base_groups[name] = group
         if not db.get(GroupMember, (base_groups["אדמין"].id, users["admin@example.com"].id)):
             db.add(GroupMember(group_id=base_groups["אדמין"].id, user_id=users["admin@example.com"].id, added_by=users["admin@example.com"].id))
+        base_groups["אדמין"].is_system_admin_group = True
 
         for order, definition in enumerate(DOMAIN_DEFINITIONS):
             code, name, description, category, scope, view_codes, edit_codes = definition

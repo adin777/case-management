@@ -1,13 +1,12 @@
 import io
 import uuid
-import zipfile
 from datetime import UTC, datetime
-from html import escape
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, or_, select
 
@@ -16,6 +15,7 @@ from app.modules.access.models import PermissionDomain
 from app.modules.access.service import replace_levels
 from app.modules.api import DB, Current, audit, case_access, permissions, require
 from app.modules.approvals.service import create_step_tasks, resubmit_approval
+from app.modules.case_visibility.service import CaseVisibilityService
 from app.modules.models import (
     ApprovalFlowDefinition,
     ApprovalInstance,
@@ -24,8 +24,9 @@ from app.modules.models import (
     AutomationExecutionLog,
     Case,
     CaseFieldDefinition,
-    CaseParticipant,
     Environment,
+    EnvironmentGlobalCaseField,
+    GlobalCaseFieldDefinition,
     GlobalPriorityDefinition,
     GlobalStatusDefinition,
     Permission,
@@ -86,13 +87,23 @@ def case_field_dict(row: CaseFieldDefinition) -> dict[str, Any]:
 
 @router.get("/environments/{environment_id}/case-fields")
 def list_case_fields(environment_id: uuid.UUID, db: DB, user: Current,
-                     request_type_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
+                     request_type_id: uuid.UUID | None = None) -> dict[str, list[dict[str, Any]]]:
     require(db, user, environment_id, "environment.read")
     query = select(CaseFieldDefinition).where(CaseFieldDefinition.environment_id == environment_id)
     if request_type_id:
         query = query.where(or_(CaseFieldDefinition.request_type_id.is_(None),
                                 CaseFieldDefinition.request_type_id == request_type_id))
-    return [case_field_dict(row) for row in db.scalars(query.order_by(CaseFieldDefinition.sort_order))]
+    environment_fields = [case_field_dict(row) for row in db.scalars(query.order_by(CaseFieldDefinition.sort_order))]
+    visibility = {row.global_field_id: row.is_visible for row in db.scalars(select(EnvironmentGlobalCaseField).where(
+        EnvironmentGlobalCaseField.environment_id == environment_id))}
+    global_fields = []
+    for row in db.scalars(select(GlobalCaseFieldDefinition).order_by(GlobalCaseFieldDefinition.sort_order)):
+        if row.is_active and visibility.get(row.id, True):
+            global_fields.append({"id": row.id, "key": row.key, "label_he": row.label_he,
+                "label_en": row.label_en, "field_type": row.field_type, "is_required": row.is_required,
+                "is_active": row.is_active, "sort_order": row.sort_order,
+                "configuration_json": row.configuration_json or {}, "source": "global"})
+    return {"global_fields": global_fields, "environment_fields": environment_fields}
 
 
 @router.post("/environments/{environment_id}/case-fields", status_code=201)
@@ -463,20 +474,7 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
                  include_participating: bool = False) -> Any:
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
-    can_read_environment = bool(environment_id and (
-        "case.read_environment" in permissions(db, user, environment_id)
-        or "environment.manage" in permissions(db, user, environment_id)
-    ))
-    if not user.is_system_admin and not can_read_environment:
-        access_conditions = [
-            Case.requester_id == user.id,
-            Case.reporter_id == user.id,
-            Case.assignee_id == user.id,
-        ]
-        if include_participating:
-            access_conditions.append(Case.id.in_(select(CaseParticipant.case_id).where(
-                CaseParticipant.user_id == user.id)))
-        query = query.where(or_(*access_conditions))
+    query = CaseVisibilityService(db, user).apply(query)
     if environment_id: query = query.where(Case.environment_id == environment_id)
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
     status_label = select(GlobalStatusDefinition.label_he).where(
@@ -521,6 +519,16 @@ def report_row(row: Any) -> dict[str, Any]:
             "created_at": item.created_at.isoformat(), "updated_at": item.updated_at.isoformat()}
 
 
+def require_report_access(db: DB, user: Current, environment_id: uuid.UUID | None) -> None:
+    if user.is_system_admin:
+        return
+    if environment_id:
+        require(db, user, environment_id, "report.cases")
+        return
+    if not any("report.cases" in permissions(db, user, row.id) for row in db.scalars(select(Environment))):
+        raise HTTPException(403, "אין הרשאה לצפות בדוח קריאות")
+
+
 @router.get("/reports/cases")
 def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  request_type_id: uuid.UUID | None = None, status: str | None = None,
@@ -533,10 +541,7 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  workflow_status_id: uuid.UUID | None = None, priority_id: uuid.UUID | None = None,
                  include_participating: bool = False,
                  page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)) -> dict[str, Any]:
-    if not user.is_system_admin:
-        if not environment_id:
-            raise HTTPException(422, "יש לבחור סביבה לצפייה בדוח")
-        require(db, user, environment_id, "report.cases")
+    require_report_access(db, user, environment_id)
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
                          case_number, title, description, priority, workflow_status_id, priority_id,
@@ -551,10 +556,7 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
 
 @router.get("/reports/cases/value-sources")
 def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None = None) -> dict[str, Any]:
-    if not user.is_system_admin:
-        if not environment_id:
-            raise HTTPException(422, "יש לבחור סביבה לצפייה בדוח")
-        require(db, user, environment_id, "report.cases")
+    require_report_access(db, user, environment_id)
     status_query = select(GlobalStatusDefinition).where(GlobalStatusDefinition.is_active.is_(True))
     priority_query = select(GlobalPriorityDefinition).where(GlobalPriorityDefinition.is_active.is_(True))
     statuses = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(status_query.order_by(GlobalStatusDefinition.sort_order))]
@@ -565,18 +567,19 @@ def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None
 def xlsx_bytes(rows: list[dict[str, Any]], filters: dict[str, str]) -> bytes:
     headers = ["מספר קריאה", "סביבה", "סוג קריאה", "נושא", "תיאור", "סטטוס", "עדיפות", "פותח", "מטפל", "נוצר", "עודכן"]
     keys = ["case_number", "environment", "request_type", "title", "description", "status", "priority", "requester", "assignee", "created_at", "updated_at"]
-    def cell(value: Any) -> str: return f'<c t="inlineStr"><is><t>{escape(str(value or ""))}</t></is></c>'
-    report_rows = [headers] + [[row[key] for key in keys] for row in rows]
-    sheet1 = "".join(f'<row r="{index}">{"".join(cell(value) for value in values)}</row>' for index, values in enumerate(report_rows, 1))
-    filter_rows = [["שם הדוח", "דוח קריאות שירות"], ["תאריך יצוא", datetime.now(UTC).isoformat()]] + list(filters.items())
-    sheet2 = "".join(f'<row r="{index}">{"".join(cell(value) for value in values)}</row>' for index, values in enumerate(filter_rows, 1))
+    book = Workbook()
+    report_sheet = book.active
+    report_sheet.title = "קריאות"
+    report_sheet.append(headers)
+    for row in rows:
+        report_sheet.append([row[key] for key in keys])
+    filter_sheet = book.create_sheet("מסננים")
+    filter_sheet.append(["שם הדוח", "דוח קריאות שירות"])
+    filter_sheet.append(["תאריך יצוא", datetime.now(UTC).isoformat()])
+    for key, value in filters.items():
+        filter_sheet.append([key, value])
     stream = io.BytesIO()
-    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
-        archive.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
-        archive.writestr("xl/workbook.xml", '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="קריאות" sheetId="1" r:id="rId1"/><sheet name="מסננים" sheetId="2" r:id="rId2"/></sheets></workbook>')
-        archive.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>')
-        for index, data in [(1, sheet1), (2, sheet2)]: archive.writestr(f"xl/worksheets/sheet{index}.xml", f'<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>')
+    book.save(stream)
     return stream.getvalue()
 
 
@@ -591,10 +594,7 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                  description: str | None = None, priority: str | None = None,
                  workflow_status_id: uuid.UUID | None = None, priority_id: uuid.UUID | None = None,
                  include_participating: bool = False) -> Response:
-    if not user.is_system_admin:
-        if not environment_id:
-            raise HTTPException(422, "יש לבחור סביבה לייצוא הדוח")
-        require(db, user, environment_id, "report.cases")
+    require_report_access(db, user, environment_id)
     query = report_query(db, user, environment_id, request_type_id, status, search, sort, direction,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
                          case_number, title, description, priority, workflow_status_id, priority_id,

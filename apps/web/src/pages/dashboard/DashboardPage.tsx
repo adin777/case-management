@@ -15,7 +15,8 @@ export function DashboardPage() {
   const [search, setSearch] = useSearchParams(); const view = search.get('tab') === 'assigned' ? 'assigned' : 'my';
   const [filters, setFilters] = useState(initial); const [page, setPage] = useState(1);
   const { data: environments = [] } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
-  const { data: fields = [] } = useQuery({ queryKey: ['dashboard-fields', filters.environment_id], queryFn: () => api<CaseField[]>(`/environments/${filters.environment_id}/case-fields`), enabled: !!filters.environment_id });
+  const { data: fieldData = {global_fields:[],environment_fields:[]} } = useQuery({ queryKey: ['dashboard-fields', filters.environment_id], queryFn: () => api<{global_fields:CaseField[];environment_fields:CaseField[]}>(`/environments/${filters.environment_id}/case-fields`), enabled: !!filters.environment_id });
+  const fields=[...fieldData.global_fields,...fieldData.environment_fields];
   const filterable = fields.filter((field) => field.is_active && field.validation_json?.is_filterable === true);
   const params = useMemo(() => { const value = new URLSearchParams({ view, activity_state: filters.activity_state, page: String(page), page_size: '25', sort: 'updated_at:desc', include_participating: String(filters.include_participating) }); for (const key of ['created_from','created_to','title','updated_from','updated_to','environment_id'] as const) if (filters[key]) value.set(key, filters[key]); const dynamic = Object.fromEntries(Object.entries(filters.dynamic).filter(([, item]) => item)); if (Object.keys(dynamic).length) value.set('dynamic_filters', JSON.stringify(dynamic)); return value.toString(); }, [filters, page, view]);
   const query = useQuery({ queryKey: ['workspace-cases', params], queryFn: () => api<WorkspaceResponse>(`/cases/workspace/query?${params}`), retry: false });

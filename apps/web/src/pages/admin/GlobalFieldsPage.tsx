@@ -1,0 +1,37 @@
+import { useState } from 'react';
+import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Container, FormControlLabel, MenuItem, Paper, Stack, Switch, TextField, Typography } from '@mui/material';
+import { api } from '../../api/client';
+
+type Option = { id:string; label_he:string; label_en:string; is_active:boolean; sort_order:number };
+type Field = { id:string; key:string; label_he:string; label_en:string; field_type:string; is_required:boolean; is_active:boolean; sort_order:number; options:Option[] };
+const types = ['text','textarea','number','date','datetime','boolean','single_select','multi_select','user','email','url'];
+
+function SortablePaper({ id, label, children }:{ id:string; label:string; children:React.ReactNode }) {
+  const sortable=useSortable({id});
+  return <Paper ref={sortable.setNodeRef} variant="outlined" sx={{p:2,transform:CSS.Transform.toString(sortable.transform),transition:sortable.transition}}><Stack direction={{xs:'column',md:'row'}} gap={1} alignItems={{md:'center'}}><Button {...sortable.attributes} {...sortable.listeners} aria-label={`גרירת ${label}`}>☰</Button>{children}</Stack></Paper>;
+}
+
+export function GlobalFieldsPage(){
+  const qc=useQueryClient(); const [error,setError]=useState(''); const [label,setLabel]=useState(''); const [type,setType]=useState('text'); const [optionLabels,setOptionLabels]=useState<Record<string,string>>({});
+  const query=useQuery({queryKey:['global-case-fields'],queryFn:()=>api<Field[]>('/global-case-fields?include_inactive=true')});
+  async function refresh(){await qc.invalidateQueries({queryKey:['global-case-fields']});}
+  async function guarded(action:()=>Promise<void>){setError('');try{await action();await refresh();}catch(caught){setError((caught as Error).message);}}
+  async function create(){await guarded(async()=>{await api('/global-case-fields',{method:'POST',body:JSON.stringify({label_he:label,label_en:'',field_type:type,is_required:false,is_active:true})});setLabel('');});}
+  async function update(row:Field,patch:Partial<Field>){await guarded(async()=>{await api(`/global-case-fields/${row.id}`,{method:'PATCH',body:JSON.stringify({label_he:row.label_he,label_en:row.label_en,field_type:row.field_type,is_required:row.is_required,is_active:row.is_active,...patch})});});}
+  async function addOption(row:Field){const value=optionLabels[row.id]?.trim();if(!value)return;await guarded(async()=>{await api(`/global-case-fields/${row.id}/options`,{method:'POST',body:JSON.stringify({label_he:value,label_en:'',is_active:true})});setOptionLabels(current=>({...current,[row.id]:''}));});}
+  async function updateOption(row:Field,option:Option,patch:Partial<Option>){await guarded(async()=>{await api(`/global-case-fields/${row.id}/options/${option.id}`,{method:'PATCH',body:JSON.stringify({label_he:option.label_he,label_en:option.label_en,is_active:option.is_active,...patch})});});}
+  async function removeOption(row:Field,option:Option){await guarded(async()=>{await api(`/global-case-fields/${row.id}/options/${option.id}`,{method:'DELETE'});});}
+  async function reorderFields(event:DragEndEvent){if(!event.over||event.active.id===event.over.id)return;const rows=query.data??[];const next=arrayMove(rows,rows.findIndex(x=>x.id===event.active.id),rows.findIndex(x=>x.id===event.over?.id));await guarded(async()=>{await api('/global-case-fields/order',{method:'PUT',body:JSON.stringify(next.map(x=>x.id))});});}
+  async function reorderOptions(row:Field,event:DragEndEvent){if(!event.over||event.active.id===event.over.id)return;const next=arrayMove(row.options,row.options.findIndex(x=>x.id===event.active.id),row.options.findIndex(x=>x.id===event.over?.id));await guarded(async()=>{await api(`/global-case-fields/${row.id}/options/order`,{method:'PUT',body:JSON.stringify(next.map(x=>x.id))});});}
+  return <Container maxWidth="lg"><Stack spacing={2}><Typography variant="h4" fontWeight={900}>שדות גלובליים</Typography><Typography color="text.secondary">השדות נשמרים כקונפיגורציה ומוצגים בכל הסביבות כברירת מחדל.</Typography>{error&&<Alert severity="error">{error}</Alert>}
+    <DndContext collisionDetection={closestCenter} onDragEnd={reorderFields}><SortableContext items={(query.data??[]).map(x=>x.id)} strategy={verticalListSortingStrategy}><Stack spacing={1}>{(query.data??[]).map(row=><SortablePaper key={row.id} id={row.id} label={row.label_he}><Stack flex={1} spacing={1}><Stack direction={{xs:'column',md:'row'}} gap={1}>
+      <TextField size="small" label="שם בעברית" defaultValue={row.label_he} onBlur={e=>update(row,{label_he:e.target.value})}/><TextField size="small" label="שם באנגלית" defaultValue={row.label_en} onBlur={e=>update(row,{label_en:e.target.value})}/><TextField size="small" select label="סוג" value={row.field_type} onChange={e=>update(row,{field_type:e.target.value})}>{types.map(x=><MenuItem key={x} value={x}>{x}</MenuItem>)}</TextField><FormControlLabel control={<Switch checked={row.is_required} onChange={e=>update(row,{is_required:e.target.checked})}/>} label="חובה"/><FormControlLabel control={<Switch checked={row.is_active} onChange={e=>update(row,{is_active:e.target.checked})}/>} label="פעיל"/><Button color="error" onClick={()=>guarded(async()=>{await api(`/global-case-fields/${row.id}`,{method:'DELETE'});})}>מחיקה</Button></Stack>
+      {['single_select','multi_select'].includes(row.field_type)&&<DndContext collisionDetection={closestCenter} onDragEnd={event=>reorderOptions(row,event)}><SortableContext items={row.options.map(x=>x.id)} strategy={verticalListSortingStrategy}><Stack spacing={1}>{row.options.map(option=><SortablePaper key={option.id} id={option.id} label={option.label_he}><TextField size="small" label="תווית" defaultValue={option.label_he} onBlur={e=>updateOption(row,option,{label_he:e.target.value})}/><FormControlLabel control={<Switch checked={option.is_active} onChange={e=>updateOption(row,option,{is_active:e.target.checked})}/>} label="פעיל"/><Button color="error" onClick={()=>removeOption(row,option)}>מחיקה</Button></SortablePaper>)}<Stack direction="row" gap={1}><TextField size="small" label="ערך חדש" value={optionLabels[row.id]||''} onChange={e=>setOptionLabels(current=>({...current,[row.id]:e.target.value}))}/><Button onClick={()=>addOption(row)}>הוספת ערך</Button></Stack></Stack></SortableContext></DndContext>}
+    </Stack></SortablePaper>)}</Stack></SortableContext></DndContext>
+    <Paper variant="outlined" sx={{p:2}}><Stack direction={{xs:'column',md:'row'}} gap={1}><TextField label="שם שדה בעברית" value={label} onChange={e=>setLabel(e.target.value)}/><TextField select label="סוג שדה" value={type} onChange={e=>setType(e.target.value)}>{types.map(x=><MenuItem key={x} value={x}>{x}</MenuItem>)}</TextField><Button variant="contained" disabled={!label.trim()} onClick={create}>הוספת שדה</Button></Stack></Paper>
+  </Stack></Container>;
+}

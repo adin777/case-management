@@ -21,6 +21,7 @@ from app.database.session import get_db
 from app.modules.access.service import domain_permissions
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
+from app.modules.case_visibility.service import CaseVisibilityService, can_manage_locked_case
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_clone.service import clone_configuration
 from app.modules.global_case_values.service import active_values, initial_status
@@ -32,10 +33,13 @@ from app.modules.models import (
     CaseStatus,
     Comment,
     Environment,
+    EnvironmentGlobalCaseField,
     EnvironmentMembership,
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    GlobalCaseFieldDefinition,
+    GlobalCaseFieldValue,
     GlobalPriorityDefinition,
     GlobalStatusDefinition,
     GlobalSubPriorityDefinition,
@@ -48,10 +52,6 @@ from app.modules.models import (
 from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import (
     CaseStatusHistory,
-)
-from app.modules.operations.service import (
-    ensure_environment_statuses,
-    initialize_operations,
 )
 
 router = APIRouter(prefix="/api")
@@ -423,16 +423,7 @@ def require_impersonation_permission(db: Session, user: User) -> None:
 
 
 def case_access(db: Session, user: User, item: Case) -> None:
-    if (
-        "case.read" in permissions(db, user, item.environment_id)
-        or item.requester_id == user.id
-        or item.reporter_id == user.id
-    ):
-        return
-    participant = db.scalar(select(CaseParticipant).where(
-        CaseParticipant.case_id == item.id, CaseParticipant.user_id == user.id
-    ))
-    if participant:
+    if CaseVisibilityService(db, user).can_view(item):
         return
     raise HTTPException(403, "Case is not visible to this user")
 
@@ -596,7 +587,8 @@ def groups(db: DB, user: Current) -> list[dict]:
     if not user.is_system_admin:
         raise HTTPException(403, "System administrator required")
     return [{"id": row.id, "name": row.name, "description": row.description,
-             "is_active": row.is_active, "member_count": 0}
+             "is_active": row.is_active, "is_system_admin_group": row.is_system_admin_group,
+             "member_count": 0}
             for row in db.scalars(select(Group).order_by(Group.name))]
 
 
@@ -646,10 +638,11 @@ def case_creation_environment_configuration(
     request_types = list(db.scalars(select(RequestType).where(
         RequestType.environment_id == environment_id, RequestType.is_active.is_(True)
     ).order_by(RequestType.sort_order, RequestType.name_he)))
-    priorities = active_values(db, "priorities")
-    sub_priorities = active_values(db, "sub-priorities")
-    statuses = active_values(db, "statuses")
-    initial = initial_status(db)
+    hidden = set(db.scalars(select(EnvironmentGlobalCaseField.global_field_id).where(
+        EnvironmentGlobalCaseField.environment_id == environment_id,
+        EnvironmentGlobalCaseField.is_visible.is_(False))))
+    global_fields = [row for row in db.scalars(select(GlobalCaseFieldDefinition).where(
+        GlobalCaseFieldDefinition.is_active.is_(True)).order_by(GlobalCaseFieldDefinition.sort_order)) if row.id not in hidden]
     type_rows = []
     for request_type in request_types:
         form = db.get(FormDefinition, request_type.form_version_id) if request_type.form_version_id else None
@@ -658,10 +651,6 @@ def case_creation_environment_configuration(
             "name_he": request_type.name_he, "is_active": True,
             "default_priority_id": request_type.default_priority_id,
             "default_sub_priority_id": request_type.default_sub_priority_id,
-            "initial_status_id": initial.id,
-            "can_choose_status": "case.change_status" in permissions(db, user, environment_id),
-            "statuses": [{"id": row.id, "label_he": row.label_he,
-                          "is_initial": row.is_initial} for row in statuses],
             "form": FormOut.model_validate(form).model_dump() if form else None,
         })
     participant_rows = []
@@ -674,10 +663,10 @@ def case_creation_environment_configuration(
                                     User.status == "active").order_by(User.display_name)).unique()]
     return {
         "environment_id": environment.id, "request_types": type_rows,
-        "priorities": [{"id": row.id, "label_he": row.label_he, "is_active": True}
-                       for row in priorities],
-        "sub_priorities": [{"id": row.id, "priority_id": None,
-                            "label_he": row.label_he, "is_active": True} for row in sub_priorities],
+        "global_fields": [{"id": row.id, "key": row.key, "label_he": row.label_he,
+            "label_en": row.label_en, "field_type": row.field_type, "is_required": row.is_required,
+            "is_active": row.is_active, "sort_order": row.sort_order,
+            "configuration_json": row.configuration_json or {}} for row in global_fields],
         "participants": participant_rows,
     }
 
@@ -690,7 +679,6 @@ def create_environment(data: EnvironmentIn, db: DB, user: Current) -> Environmen
     item = Environment(code=system_number, system_number=system_number, **data.model_dump())
     db.add(item)
     db.flush()
-    ensure_environment_statuses(db, item.id, user.id)
     try:
         db.flush()
     except IntegrityError as exc:
@@ -714,7 +702,6 @@ def clone_environment(environment_id: uuid.UUID, data: EnvironmentCloneIn, db: D
         name_en=data.name_en, description=data.description, is_active=True)
     db.add(target); db.flush()
     counts = clone_configuration(db, source, target, user.id, data.copy_memberships, data.copy_knowledge)
-    ensure_environment_statuses(db, target.id, user.id)
     audit(db, user, "environment", target.id, "cloned", after={
         "source_environment_id": str(source.id), **counts,
         "copy_memberships": data.copy_memberships, "copy_knowledge": data.copy_knowledge,
@@ -1041,20 +1028,15 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     form = db.get(FormDefinition, rt.form_version_id) if rt.form_version_id else None
     if rt.form_version_id and not form:
         raise HTTPException(409, "הטופס המקושר לסוג הקריאה אינו קיים")
-    priority_id = data.priority_id or rt.default_priority_id
-    if not priority_id:
-        raise HTTPException(422, "לא הוגדרה עדיפות ברירת מחדל; יש לבחור עדיפות")
-    priority = db.get(GlobalPriorityDefinition, priority_id)
-    if not priority or not priority.is_active:
-        raise HTTPException(422, "העדיפות הגלובלית שנבחרה אינה פעילה")
-    sub_priority_id = data.sub_priority_id or rt.default_sub_priority_id
-    if sub_priority_id:
-        sub_priority = db.get(GlobalSubPriorityDefinition, sub_priority_id)
-        if not sub_priority or not sub_priority.is_active:
-            raise HTTPException(422, "תת־העדיפות הגלובלית שנבחרה אינה פעילה")
     provided = {v.field_definition_id: v.value for v in data.values}
     active_fields = [field for field in form.fields if field.is_active] if form else []
+    hidden = set(db.scalars(select(EnvironmentGlobalCaseField.global_field_id).where(
+        EnvironmentGlobalCaseField.environment_id == data.environment_id,
+        EnvironmentGlobalCaseField.is_visible.is_(False))))
+    global_fields = [row for row in db.scalars(select(GlobalCaseFieldDefinition).where(
+        GlobalCaseFieldDefinition.is_active.is_(True))) if row.id not in hidden]
     missing = [f.label_he for f in active_fields if f.is_required and provided.get(f.id) in (None, "")]
+    missing.extend(f.label_he for f in global_fields if f.is_required and provided.get(f.id) in (None, ""))
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
     item = Case(
@@ -1066,21 +1048,16 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         request_type_id=data.request_type_id,
         title=data.title,
         description=data.description,
-        priority=priority.code,
-        priority_id=priority.id,
-        sub_priority_id=sub_priority_id,
+        priority="",
+        priority_id=None,
+        sub_priority_id=None,
     )
     db.add(item)
     db.flush()
-    initial_status = initialize_operations(db, item, rt)
-    if data.workflow_status_id and data.workflow_status_id != initial_status.id:
-        selected_status = db.get(GlobalStatusDefinition, data.workflow_status_id)
-        if not selected_status or not selected_status.is_active:
-            raise HTTPException(422, "הסטטוס הגלובלי שנבחר אינו פעיל")
-        if "case.change_status" not in permissions(db, user, data.environment_id):
-            raise HTTPException(403, "אין הרשאה לשנות סטטוס בעת פתיחת קריאה")
-        item.workflow_status_id = selected_status.id
     item.values = [typed_value(item.id, f, provided.get(f.id)) for f in active_fields if f.id in provided]
+    for field in global_fields:
+        if field.id in provided:
+            db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=field.id, value_json=provided[field.id]))
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
         if participant_id != user.id and participant_user:
@@ -1092,7 +1069,7 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         "case",
         item.id,
         "created",
-        after={"status": item.status.value, "workflow_status_id": str(initial_status.id)},
+        after={"status": item.status.value},
     )
     AutomationEngine.run(db, item, "request_type_selected",
                          {"request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id)})
@@ -1127,26 +1104,9 @@ def cases(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ) -> list[Case]:
-    query = select(Case).order_by(Case.created_at.desc())
+    query = CaseVisibilityService(db, user).apply(select(Case)).order_by(Case.created_at.desc())
     if assigned:
         query = query.where(Case.assignee_id == user.id)
-    elif not user.is_system_admin:
-        broad_environment_ids = []
-        for env_id in db.scalars(select(EnvironmentMembership.environment_id).where(
-            EnvironmentMembership.user_id == user.id,
-            EnvironmentMembership.is_active.is_(True),
-        )):
-            if "case.read_environment" in permissions(db, user, env_id):
-                broad_environment_ids.append(env_id)
-        query = query.where(
-            or_(
-                Case.requester_id == user.id,
-                Case.reporter_id == user.id,
-                Case.assignee_id == user.id,
-                Case.environment_id.in_(broad_environment_ids),
-                Case.id.in_(select(CaseParticipant.case_id).where(CaseParticipant.user_id == user.id)),
-            )
-        )
     return list(db.scalars(query.offset(offset).limit(limit)).unique())
 
 
@@ -1290,10 +1250,10 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
         c
         for c in item.comments
         if c.visibility == Visibility.public
-        or "comment.manager.read" in permissions(db, user, item.environment_id)
+        or can_manage_locked_case(db, user, item.environment_id)
     ]
     granted = permissions(db, user, item.environment_id)
-    can_override_lock = user.is_system_admin or "environment.manage" in granted
+    can_override_lock = can_manage_locked_case(db, user, item.environment_id)
     reporter = db.get(User, item.reporter_id)
     environment = db.get(Environment, item.environment_id)
     return CaseOut.model_validate(item).model_copy(
@@ -1309,11 +1269,50 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
                 "can_change_status": ("case.change_status" in granted or "case.update" in granted) and (not item.is_locked or can_override_lock),
                 "can_manage_participants": "case.manage_participants" in granted and (not item.is_locked or can_override_lock),
                 "can_transfer": "case.transfer_environment" in granted and (not item.is_locked or can_override_lock),
-                "can_read_manager_comments": "comment.manager.read" in granted,
-                "can_create_manager_comments": "comment.manager.create" in granted,
+                "can_read_manager_comments": can_override_lock,
+                "can_create_manager_comments": can_override_lock,
             },
         }
     )
+
+
+@router.get("/cases/{case_id}/global-field-values")
+def global_field_values(case_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(404, "Case not found")
+    case_access(db, user, item)
+    rows = db.scalars(select(GlobalCaseFieldValue).where(GlobalCaseFieldValue.case_id == case_id))
+    return {str(row.global_field_id): row.value_json for row in rows}
+
+
+@router.put("/cases/{case_id}/global-field-values")
+def update_global_field_values(
+    case_id: uuid.UUID, values: dict[uuid.UUID, Any], db: DB, user: Current
+) -> dict[str, Any]:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(404, "Case not found")
+    case_access(db, user, item)
+    require(db, user, item.environment_id, "case.update")
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
+        raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לערוך אותה")
+    hidden = set(db.scalars(select(EnvironmentGlobalCaseField.global_field_id).where(
+        EnvironmentGlobalCaseField.environment_id == item.environment_id,
+        EnvironmentGlobalCaseField.is_visible.is_(False))))
+    fields = {row.id: row for row in db.scalars(select(GlobalCaseFieldDefinition).where(
+        GlobalCaseFieldDefinition.id.in_(values), GlobalCaseFieldDefinition.is_active.is_(True)))}
+    if len(fields) != len(values) or hidden.intersection(values):
+        raise HTTPException(422, "אחד השדות הגלובליים אינו זמין בסביבה זו")
+    for field_id, value in values.items():
+        row = db.get(GlobalCaseFieldValue, (case_id, field_id))
+        if row:
+            row.value_json = value
+        else:
+            db.add(GlobalCaseFieldValue(case_id=case_id, global_field_id=field_id, value_json=value))
+    audit(db, user, "case", item.id, "global_fields_updated", after={str(key): value for key, value in values.items()})
+    db.commit()
+    return global_field_values(case_id, db, user)
 
 
 @router.patch("/cases/{case_id}", response_model=CaseOut)
@@ -1323,8 +1322,7 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
     require(db, user, item.environment_id, "case.update")
-    granted = permissions(db, user, item.environment_id)
-    if item.is_locked and not (user.is_system_admin or "environment.manage" in granted):
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לערוך אותה")
     if item.version != data.version:
         raise HTTPException(409, "Case was updated by another user")
@@ -1373,8 +1371,7 @@ def set_case_lock(case_id: uuid.UUID, data: CaseLockIn, db: DB, user: Current) -
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "הקריאה לא נמצאה")
-    granted = permissions(db, user, item.environment_id)
-    if not user.is_system_admin and "environment.manage" not in granted:
+    if not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "רק מנהל מערכת או מנהל הסביבה רשאי לנעול קריאה")
     if item.version != data.version:
         raise HTTPException(409, "הקריאה עודכנה על ידי משתמש אחר")
@@ -1397,8 +1394,7 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.assign")
-    granted = permissions(db, user, item.environment_id)
-    if item.is_locked and not (user.is_system_admin or "environment.manage" in granted):
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לשנות מטפל")
     if item.version != data.version:
         raise HTTPException(409, "Case was updated by another user")
@@ -1476,12 +1472,11 @@ def add_comment(case_id: uuid.UUID, data: CommentIn, db: DB, user: Current) -> C
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    require(
-        db,
-        user,
-        item.environment_id,
-        "case.internal_comment" if data.visibility == Visibility.internal else "case.comment",
-    )
+    if data.visibility == Visibility.internal:
+        if not can_manage_locked_case(db, user, item.environment_id):
+            raise HTTPException(403, "הערות מנהל זמינות רק למנהל הסביבה או למנהל מערכת")
+    else:
+        require(db, user, item.environment_id, "case.comment")
     comment = Comment(case_id=item.id, author_id=user.id, **data.model_dump())
     db.add(comment)
     db.flush()
@@ -1496,7 +1491,7 @@ def add_participant(case_id: uuid.UUID, data: ParticipantIn, db: DB, user: Curre
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.manage_participants")
-    if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה לשינוי משתתפים")
     row = CaseParticipant(
         case_id=case_id, user_id=data.user_id, participant_type=data.participant_type, added_by=user.id
@@ -1530,7 +1525,7 @@ def remove_participant(case_id: uuid.UUID, participant_user_id: uuid.UUID, db: D
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.manage_participants")
-    if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה לשינוי משתתפים")
     if participant_user_id in {item.requester_id, item.reporter_id}:
         raise HTTPException(409, "לא ניתן להסיר את פותח הקריאה")
@@ -1581,7 +1576,7 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     if not item:
         raise HTTPException(404, "Case not found")
     require(db, user, item.environment_id, "case.change_status")
-    if item.is_locked and not (user.is_system_admin or "environment.manage" in permissions(db, user, item.environment_id)):
+    if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה לשינוי סטטוס")
     target = db.get(GlobalStatusDefinition, data.workflow_status_id)
     if not target or not target.is_active:

@@ -22,6 +22,16 @@ After implementation, do not use an ad-hoc subset as final validation. Always ru
 
 כאשר פעולה יכולה להתבצע באופן ישיר וברור במסך, אין להוסיף שלב, Dialog, מצב עריכה או כפתור נוסף ללא צורך ממשי. שדה פשוט שניתן לעריכה יוצג כ־inline editable; אין להסתיר ערכים רלוונטיים או להוסיף ניווט כאשר הפעולה יכולה להתבצע במקום. לפני השלמת UI יש לשאול האם אפשר לבצע את אותה פעולה בפחות צעדים ולבחור בפתרון הפשוט יותר.
 
+## NO HARDCODED CONFIGURATION
+
+- אין להגדיר בקוד שדה עסקי גלובלי או סביבתי, אפשרות/ערך שדה, Status, Priority, SubPriority, Request Type, Department, Job Title, ערך אישור או תצורה עסקית אחרת.
+- הקוד רשאי להגדיר רק סוגי שדות, metadata סמנטי ויכולות טכניות. כל Definition וכל Value עסקי מגיעים מה־Database ומנוהלים דרך UI/API.
+- Database חדש וריק עולה עם אפס הגדרות שדות עסקיים וללא Seed עסקי.
+- ישויות configurable חדשות נוצרות כתצורה שמורה ב־Database; Global Fields הם Definitions דינמיים ואינם constants בקוד.
+- קובץ שהמערכת מייצאת ומיועד לעריכת משתמש חייב לתמוך ב־Round-trip Import דרך אותו חוזה מנורמל.
+- מנהלי מערכת וחברי קבוצת Admin מסומנת מקבלים `edit` אוטומטי בכל Permission Domain קיים ועתידי, בלי Assignment rows לכל Domain.
+- פעולת שמירה אינה נחשבת הצלחה עד ש־GET חדש מחזיר את הערך שנשמר.
+
 ## מקורות אמת ותלויות UI
 
 An option displayed to a user must be valid for submission. UI option sources and backend validation must use the same domain service/source of truth.
@@ -314,6 +324,13 @@ Permission to perform a business action includes read access to the configuratio
 ## הרשאה לפיצ'ר חדש
 
 כאשר נוסף Feature שמצריך הרשאה יש ליצור Permission Domain עם שם ותיאור בעברית ו-Scope, להציגו ב-UI של משתמשים וקבוצות, לאכוף אותו ב-Backend, להוסיף Tests ולהציגו בהסבר ההרשאה האפקטיבית. הסתרת UI בלבד אינה השלמת הרשאה.
+
+- Admin Group הוא מושג מערכת המזוהה רק באמצעות flag יציב, לעולם לא לפי שם, ומקבל `edit` אוטומטי לכל Permission Domain קיים או עתידי.
+- הרשאות Environment Manager הן מפורשות ומוגבלות לסביבה אחת.
+- הערות מנהל ועקיפת נעילת קריאה אינן ניתנות למשתמש רגיל באמצעות Permission כללית.
+- נראות קריאות משתמשת בשירות Backend משותף אחד עבור Dashboard, דוחות, יצוא וגישה ישירה.
+- Export→Import נבדק אוטומטית באמצעות קובץ ה־Export המדויק; XLSX נקרא בספרייה תקנית ולא באמצעות parsing ידני של XML.
+- החלפת זהות מחייבת ניקוי מלא של כל cache תלוי־זהות ב־Frontend וטעינה מחדש של זהות המשתמש.
 
 ## UX וקבצים
 

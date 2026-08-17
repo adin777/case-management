@@ -47,8 +47,8 @@
 | קיים | GET | `/api/case-creation/environments` |
 
 `GET /api/case-creation/environments/{environment_id}/configuration` דורש `case.create`
-ומחזיר מקור קריאה מצומצם לקריאה בלבד: סוגי קריאה פעילים, עדיפויות ותתי־עדיפויות פעילות,
-סטטוס התחלתי ואפשרויות סטטוס, טופס דינמי ומשתתפים זכאים רק כאשר קיימת הרשאת ניהול
+ומחזיר מקור קריאה מצומצם לקריאה בלבד: סוגי קריאה פעילים, שדות גלובליים פעילים ומוצגים,
+טופס דינמי ומשתתפים זכאים רק כאשר קיימת הרשאת ניהול
 משתתפים. הנתיב אינו מעניק הרשאת יצירה, עריכה או מחיקה של Configuration. מסך פתיחת
 קריאה צורך רק נתיב זה, והשרת מאמת שוב את אותם IDs בעת `POST /api/cases`.
 
@@ -97,15 +97,12 @@ Request Type, Status, Priority או Sub-priority באמצעות מערך IDs מ�
   "request_type_id": "uuid",
   "title": "בעיה בהזמנה",
   "description": "תיאור מלא",
-  "workflow_status_id": "uuid",
-  "priority_id": "uuid",
-  "sub_priority_id": "uuid-or-null",
   "participant_ids": [],
-  "values": []
+  "values": [{"field_definition_id":"uuid","value":"..."}]
 }
 ```
 
-Request Type, Priority, Sub-priority, Workflow Status ושדות דינמיים חייבים להשתייך לסביבה
+Request Type ושדות דינמיים חייבים להשתייך לסביבה
 ולטופס הרלוונטיים. הפרה מחזירה `422` עם הודעה עסקית. מותר ליצור מספר בלתי מוגבל של
 קריאות בעלות אותם ערכים עסקיים; הזהויות הייחודיות היחידות הן `Case.id` ו־`case_number`.
 עדכון inline משתמש ב־`PATCH` וב־`version`; conflict מחזיר `409`.
@@ -117,14 +114,14 @@ Request Type, Priority, Sub-priority, Workflow Status ושדות דינמיים 
 - `GET/POST /api/cases/{id}/participants`; `DELETE /api/cases/{id}/participants/{user_id}`.
 - `include_participating=false` כברירת מחדל; `true` אינו עוקף הרשאת צפייה.
 - `GET/POST /api/cases/{id}/public-comments` מיועד לשיחה הציבורית של בעלי גישה לקריאה.
-- `GET /api/cases/{id}/manager-comments` דורש `comment.manager.read`; `POST` דורש
-  `comment.manager.create`. הערוץ אינו נחשף כלל ב־UI ללא הרשאת הקריאה.
+- `GET/POST /api/cases/{id}/manager-comments` מותרים רק ל־System Admin או למשתמש בעל
+  `EnvironmentMembership.is_environment_manager=true` בסביבת הקריאה. Permission כללית אינה מספיקה.
 - תגובות ציבוריות והודעות מנהלים נשמרות ומוחזרות בנפרד; הרשאת visibility נאכפת בשרת
   ואינה תלויה בהסתרת רכיבים ב־UI.
 - החלטת אישור: `POST /api/approval-tasks/{task_id}/decision`. רק המאשר של task פעיל רשאי
   להחליט; מנהל מערכת אינו מאשר במקום אדם אחר.
 - `GET /api/approvals/pending-for-me` מחזיר רק משימות פעילות בשלב הפעיל של המשתמש המחובר.
-- נעילה ושחרור נעילה מותרים רק למנהל מערכת או לבעל `environment.manage` באותה סביבה.
+- נעילה ושחרור נעילה מותרים רק למנהל מערכת או למנהל סביבה מפורש באותה סביבה.
   בקריאה נעולה משתמש אחר מקבל `403` בעדכון שדות, סטטוס או משתתפים; תגובה ציבורית נשארת
   מותרת לפי הרשאת התגובה.
 
@@ -162,9 +159,15 @@ forbidden ו־not found, ולוודא שה־UI צורך אותו מקור אמת
 
 `GET /api/users` מחזיר משתמשים פעילים כברירת מחדל. הפרמטר `active_only=false` מאפשר לכלול משתמשים לא פעילים ובארכיון; ניתן לסנן גם באמצעות `status_filter`, `source`, `department`, `job_title` ו־`search`. `POST /api/users` יוצר משתמש ידני ו־`PATCH /api/users/{user_id}` מעדכן פרטים ארגוניים או מצב `active`, `inactive`, `archived`. השבתה או העברה לארכיון אינה מוחקת היסטוריה, ומשתמש שאינו פעיל אינו יכול להתחבר או לקבל משימת אישור חדשה.
 
-שיוך משתמש לסביבה אינו כולל Role: `PUT /api/users/{user_id}/environment-memberships` מקבל מערך של `{environment_id}`, ו־`POST /api/environments/{environment_id}/memberships` מקבל משתמש או קבוצה ללא `role_id`. נתיבי `/api/roles` ו־`/api/groups/{group_id}/roles` הם מורשת מושבתת ומחזירים `410`; הרשאות נפתרות מקבוצות, רמות גישה וחריגות משתמש בלבד.
+שיוך משתמש לסביבה אינו כולל Role: `PUT /api/users/{user_id}/environment-memberships` מקבל מערך של `{environment_id}`, ו־`POST /api/environments/{environment_id}/memberships` מקבל משתמש או קבוצה ללא `role_id`. שיוך משתמש מפורש כולל `is_environment_manager`; ניתן לעדכנו ב־`PATCH /api/environments/{environment_id}/memberships/{membership_id}`. נתיבי `/api/roles` ו־`/api/groups/{group_id}/roles` הם מורשת מושבתת ומחזירים `410`; הרשאות נפתרות מקבוצות, רמות גישה וחריגות משתמש בלבד.
 
-Excel: `GET /api/users/import/template` מוריד תבנית; `POST /api/users/import/preview` מקבל קובץ שנוצר מאותו Schema משותף ומחזיר חדשים, לעדכון, ללא שינוי ושגיאות ללא כתיבה; `POST /api/users/import/apply` מחיל רק נתונים שאושרו; `GET /api/users-export` מייצא XLSX לפי מסנני מצב, מקור, מחלקה, תפקיד ארגוני וחיפוש. תבנית ה-Endpoint עצמה משמשת בבדיקת Round-trip אוטומטית.
+Excel: `GET /api/users/import/template` מוריד תבנית; `POST /api/users/import/preview` מקבל הן
+את כותרות התבנית הידידותיות והן את סכימת ה־snake_case המלאה של `GET /api/users-export`.
+ה־Preview מחזיר לכל שורה פעולה, `changed_fields`, ‏warnings ו־errors ללא כתיבה.
+עמודות התאריכים ו־`source` הן לקריאה בלבד; `Groups` ו־`Environments` מוחלים רק כאשר
+הערכים כבר קיימים, ואחרת מוחזרת שגיאת Preview ברורה. `POST /api/users/import/apply`
+מחיל snapshot מאושר. כל קובץ Export ניתן לייבוא חוזר ללא שינוי (round-trip). קריאה וכתיבה
+של XLSX מבוצעות באמצעות `openpyxl`, ללא parsing ישיר של worksheet XML.
 
 ביצירת משתמש ידני `email` הוא מזהה הכניסה. `user_principal_name` אופציונלי; כאשר הוא ריק השרת שומר בו את כתובת ה-email המנורמלת. `display_name` ו-email תקין הם חובה, וסיסמה ידנית חייבת לכלול לפחות 8 תווים.
 
@@ -254,6 +257,9 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 המורשות, ועם סביבה מוחזרים ערכיה בלבד. נתיבי `/api/reports/approvals`, `/users` ו־`/audit`
 תומכים במסננים וב־pagination בצד השרת. דוח האישורים מחזיר `task_id` ו־`can_decide`
 ומשתמש בנתיב ההחלטה המשותף `POST /api/approval-tasks/{task_id}/decision`.
+מסנן הסביבה בדוח הקריאות אופציונלי. ללא סביבה הדוח והייצוא מחזירים את איחוד השורות
+הנראות למשתמש לפי `CaseVisibilityService`; אותו שירות נאכף גם ב־`GET /api/cases` ובגישה ישירה.
+נראות מתקבלת ליוצר, למבקש, למטפל, למשתתף או לבעל `case.read`/`case.read_environment` בסביבה.
 
 קבצים מצורפים מאומתים לפי שם, סיומת חסומה, MIME וגודל configurable. הרשימה המותרת
 כוללת מסמכים, קובצי נתונים, תמונות, ארכיונים ודואר נתמכים; קובצי הרצה נדחים תמיד.
@@ -281,27 +287,32 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 מערכי הדרישות לערכים ריקים בטוחים ומציג מצב טעינה בכל מעבר. חריגת render בלתי
 צפויה נתפסת ב־Error Boundary ברמת האפליקציה ומציעה ניסיון חוזר.
 
-### Global case values and workflow independence
+### Dynamic global case fields
 
-`GET /api/global-case-values` מחזיר את שלושת הקטלוגים הגלובליים: `statuses`,
-`priorities` ו־`sub-priorities`. נתיבי `GET/POST /api/global-case-values/{kind}`
-ו־`PATCH /api/global-case-values/{kind}/{id}` מנהלים ערכים; כתיבה מותרת למנהל מערכת
-בלבד. `PUT /api/global-case-values/{kind}/order` מקבל מערך IDs בסדר החדש.
-`POST /api/global-case-values/statuses/{id}/set-initial` מגדיר סטטוס התחלתי גלובלי
-יחיד; סטטוס התחלתי חייב להיות פעיל ואי אפשר להשביתו לפני בחירת חלופה.
+Database חדש מתחיל ללא הגדרות שדות גלובליים. `GET/POST /api/global-case-fields`,
+`PATCH/DELETE /api/global-case-fields/{id}` ו־`PUT /api/global-case-fields/order` מנהלים
+Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number`, `date`, `datetime`,
+`boolean`, `single_select`, `multi_select`, `user`, `email`, `url`; ה־key וה־IDs נוצרים
+בשרת. מחיקה של שדה בשימוש מחזירה `409`, והשבתה שומרת ערכים היסטוריים.
 
-פתיחת קריאה אינה תלויה ב־Workflow או ב־`RequestType.workflow_definition_id`.
-היא משתמשת בסטטוס ההתחלתי הגלובלי וב־IDs גלובליים של עדיפות ותת־עדיפות. אם לא קיים
-סטטוס התחלתי מוחזר `409` עם `code=GLOBAL_INITIAL_STATUS_MISSING` ו־
-`settings_path=/admin/case-values`. `case-config` אינו מחזיר דרישת Workflow.
-העברה בין סביבות שומרת Status/Priority/SubPriority גלובליים פעילים ואינה ממפה אותם.
+לשדות בחירה קיימים `POST/PATCH/DELETE /api/global-case-fields/{field_id}/options[/{option_id}]`
+ו־`PUT /api/global-case-fields/{field_id}/options/order`. ערך בשימוש אינו נמחק פיזית.
+`PUT /api/environments/{environment_id}/global-case-fields/{field_id}/visibility?is_visible=`
+שומר חריגת נראות; בהיעדר row ברירת המחדל היא מוצג. שדה לא פעיל לעולם אינו מוחזר כגלוי.
+
+`GET /api/environments/{environment_id}/case-fields?request_type_id=` הוא מקור האמת המאוחד
+ומחזיר `{global_fields, environment_fields}` לפי פעילות, נראות, סדר והרשאה. הוא משמש
+לפתיחה, פרטי קריאה, העברה ודוחות. `GET/PUT /api/cases/{case_id}/global-field-values`
+קורא ושומר ערכים; עדכון דורש `case.update`, מכבד נעילה ומאמת שהשדה פעיל וגלוי בסביבה.
 
 ### Subject access matrix
 
 `GET /api/access/subjects/{user|group}/{id}/matrix?environment_id=` מחזיר View Model
 אחיד לכל Permission Domain: `domain_code`, `domain_name`, `direct_level`,
-`effective_level`, `source`, `scope`, `can_override`. עבור System Admin כל תחום מוחזר
+`effective_level`, `source`, `scope`, `description`, `can_override`. עבור System Admin כל תחום מוחזר
 כ־`edit`, המקור הוא „מנהל מערכת” ו־`can_override=false`; אין צורך ליצור Assignment rows.
+חבר בקבוצה המסומנת `is_system_admin_group=true` מקבל באותו אופן `edit` לכל Domain קיים
+או עתידי, עם מקור „קבוצת Admin”, ללא Assignment rows וללא אפשרות Override בקבוצה זו.
 
 ### Operational reports
 
