@@ -332,3 +332,17 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 משתמשים תומך במסננים נפרדים `name`, `email`, `username`, וב־`search` התואם לאחור,
 וכן במצב, מקור, מחלקה, תפקיד, `group_ids` וסביבה. דוח Audit
 תומך במשתמש, משתמש אפקטיבי בהתחזות, פעולה, ישות, Entity ID, סביבה, תאריכים וחיפוש.
+
+### Semantic global fields and import snapshots
+
+ל־Global Field קיים `semantic_binding` אופציונלי. `case.assignee` מותר רק לשדה `user`,
+ורק שדה פעיל אחד יכול להחזיק אותו. ערכו ו־`Case.assignee_id` מסונכרנים דו־כיוונית,
+והמשתמש נבדק מול רשימת המטפלים הפעילים והמשויכים לסביבה. תצורת שדה גלובלי בסביבה
+כוללת `is_visible`, `is_required`, `show_on_create`, `show_on_edit`; שדה edit-only אינו
+חוסם יצירה. `GET /api/environments/{id}/case-fields` תומך `presentation=create|edit`,
+ו־`GET/PUT /api/environments/{id}/global-case-fields/configuration[/{field_id}]` מנהלים
+את התצורה.
+
+`POST /api/users/import/preview` מחזיר `import_session_id` ושומר snapshot מאושר.
+`POST /api/users/import/apply` מקבל את המזהה ומחיל פעם אחת בלבד את אותו snapshot,
+ללא parsing חוזר של תוכן שהלקוח יכול לשנות.

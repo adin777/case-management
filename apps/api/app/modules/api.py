@@ -638,11 +638,11 @@ def case_creation_environment_configuration(
     request_types = list(db.scalars(select(RequestType).where(
         RequestType.environment_id == environment_id, RequestType.is_active.is_(True)
     ).order_by(RequestType.sort_order, RequestType.name_he)))
-    hidden = set(db.scalars(select(EnvironmentGlobalCaseField.global_field_id).where(
-        EnvironmentGlobalCaseField.environment_id == environment_id,
-        EnvironmentGlobalCaseField.is_visible.is_(False))))
+    field_configs = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
+        EnvironmentGlobalCaseField.environment_id == environment_id))}
     global_fields = [row for row in db.scalars(select(GlobalCaseFieldDefinition).where(
-        GlobalCaseFieldDefinition.is_active.is_(True)).order_by(GlobalCaseFieldDefinition.sort_order)) if row.id not in hidden]
+        GlobalCaseFieldDefinition.is_active.is_(True)).order_by(GlobalCaseFieldDefinition.sort_order))
+        if visible_on_create(field_configs.get(row.id))]
     type_rows = []
     for request_type in request_types:
         form = db.get(FormDefinition, request_type.form_version_id) if request_type.form_version_id else None
@@ -664,10 +664,13 @@ def case_creation_environment_configuration(
     return {
         "environment_id": environment.id, "request_types": type_rows,
         "global_fields": [{"id": row.id, "key": row.key, "label_he": row.label_he,
-            "label_en": row.label_en, "field_type": row.field_type, "is_required": row.is_required,
+            "label_en": row.label_en, "field_type": row.field_type,
+            "is_required": configured_required(field_configs.get(row.id)),
             "is_active": row.is_active, "sort_order": row.sort_order,
-            "configuration_json": row.configuration_json or {}} for row in global_fields],
+            "configuration_json": row.configuration_json or {},
+            "semantic_binding": row.semantic_binding} for row in global_fields],
         "participants": participant_rows,
+        "eligible_assignees": eligible_assignee_rows(db, environment_id),
     }
 
 
@@ -1019,6 +1022,23 @@ def typed_value(case_id: uuid.UUID, field: FieldDefinition, value: Any) -> CaseF
     return row
 
 
+def visible_on_create(config: EnvironmentGlobalCaseField | None) -> bool:
+    return config is None or (config.is_visible and config.show_on_create)
+
+
+def configured_required(config: EnvironmentGlobalCaseField | None) -> bool:
+    return bool(config and config.is_required)
+
+
+def eligible_assignee_rows(db: DB, environment_id: uuid.UUID) -> list[dict[str, Any]]:
+    rows = db.scalars(select(User).join(EnvironmentMembership,
+        EnvironmentMembership.user_id == User.id).where(
+        EnvironmentMembership.environment_id == environment_id,
+        EnvironmentMembership.is_active.is_(True), User.is_active.is_(True),
+        User.status == "active").distinct().order_by(User.display_name))
+    return [{"id": row.id, "display_name": row.display_name, "email": row.email} for row in rows]
+
+
 @router.post("/cases", response_model=CaseOut, status_code=201)
 def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     require(db, user, data.environment_id, "case.create")
@@ -1030,13 +1050,15 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
         raise HTTPException(409, "הטופס המקושר לסוג הקריאה אינו קיים")
     provided = {v.field_definition_id: v.value for v in data.values}
     active_fields = [field for field in form.fields if field.is_active] if form else []
-    hidden = set(db.scalars(select(EnvironmentGlobalCaseField.global_field_id).where(
-        EnvironmentGlobalCaseField.environment_id == data.environment_id,
-        EnvironmentGlobalCaseField.is_visible.is_(False))))
+    field_configs = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
+        EnvironmentGlobalCaseField.environment_id == data.environment_id))}
     global_fields = [row for row in db.scalars(select(GlobalCaseFieldDefinition).where(
-        GlobalCaseFieldDefinition.is_active.is_(True))) if row.id not in hidden]
+        GlobalCaseFieldDefinition.is_active.is_(True)))
+        if visible_on_create(field_configs.get(row.id))]
     missing = [f.label_he for f in active_fields if f.is_required and provided.get(f.id) in (None, "")]
-    missing.extend(f.label_he for f in global_fields if f.is_required and provided.get(f.id) in (None, ""))
+    missing.extend(f.label_he for f in global_fields
+                   if configured_required(field_configs.get(f.id))
+                   and provided.get(f.id) in (None, ""))
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
     item = Case(
@@ -1058,6 +1080,11 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     for field in global_fields:
         if field.id in provided:
             db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=field.id, value_json=provided[field.id]))
+            if field.semantic_binding == "case.assignee":
+                candidate = provided[field.id]
+                if candidate and str(candidate) not in {str(row["id"]) for row in eligible_assignee_rows(db, data.environment_id)}:
+                    raise HTTPException(422, "המטפל שנבחר אינו פעיל או אינו משויך לסביבה")
+                item.assignee_id = uuid.UUID(str(candidate)) if candidate else None
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
         if participant_id != user.id and participant_user:
@@ -1075,6 +1102,11 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
                          {"request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id)})
     AutomationEngine.run(db, item, "case_created", {"request_type": str(item.request_type_id)})
     start_matching_approvals(db, item)
+    bound = next((field for field in global_fields if field.semantic_binding == "case.assignee"
+                  and field.id in provided), None)
+    if bound:
+        candidate = provided[bound.id]
+        item.assignee_id = uuid.UUID(str(candidate)) if candidate else None
     db.commit()
     return item
 
@@ -1292,19 +1324,30 @@ def update_global_field_values(
     require(db, user, item.environment_id, "case.update")
     if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לערוך אותה")
-    hidden = set(db.scalars(select(EnvironmentGlobalCaseField.global_field_id).where(
-        EnvironmentGlobalCaseField.environment_id == item.environment_id,
-        EnvironmentGlobalCaseField.is_visible.is_(False))))
+    configurations = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
+        EnvironmentGlobalCaseField.environment_id == item.environment_id))}
+    hidden = {field_id for field_id, config in configurations.items()
+              if not config.is_visible or not config.show_on_edit}
     fields = {row.id: row for row in db.scalars(select(GlobalCaseFieldDefinition).where(
         GlobalCaseFieldDefinition.id.in_(values), GlobalCaseFieldDefinition.is_active.is_(True)))}
     if len(fields) != len(values) or hidden.intersection(values):
         raise HTTPException(422, "אחד השדות הגלובליים אינו זמין בסביבה זו")
+    missing = [field.label_he for field_id, field in fields.items()
+               if configurations.get(field_id) and configurations[field_id].is_required
+               and values.get(field_id) in (None, "")]
+    if missing:
+        raise HTTPException(422, {"missing_required_fields": missing})
     for field_id, value in values.items():
         row = db.get(GlobalCaseFieldValue, (case_id, field_id))
         if row:
             row.value_json = value
         else:
             db.add(GlobalCaseFieldValue(case_id=case_id, global_field_id=field_id, value_json=value))
+        if fields[field_id].semantic_binding == "case.assignee":
+            eligible = {str(row["id"]) for row in eligible_assignee_rows(db, item.environment_id)}
+            if value and str(value) not in eligible:
+                raise HTTPException(422, "המטפל שנבחר אינו פעיל או אינו משויך לסביבה")
+            item.assignee_id = uuid.UUID(str(value)) if value else None
     audit(db, user, "case", item.id, "global_fields_updated", after={str(key): value for key, value in values.items()})
     db.commit()
     return global_field_values(case_id, db, user)
@@ -1402,6 +1445,16 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
         if not candidate or candidate.status != "active" or not candidate.is_active or not membership:
             raise HTTPException(422, "ניתן לשייך רק משתמש פעיל המשויך לסביבת הקריאה")
     item.assignee_id = data.assignee_id
+    bound_field = db.scalar(select(GlobalCaseFieldDefinition).where(
+        GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
+        GlobalCaseFieldDefinition.is_active.is_(True)))
+    if bound_field:
+        bound_value = db.get(GlobalCaseFieldValue, (item.id, bound_field.id))
+        if bound_value:
+            bound_value.value_json = str(data.assignee_id) if data.assignee_id else None
+        else:
+            db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=bound_field.id,
+                                        value_json=str(data.assignee_id) if data.assignee_id else None))
     item.version += 1
     if item.status == CaseStatus.submitted:
         item.status = CaseStatus.assigned
@@ -1420,12 +1473,7 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
 @router.get("/environments/{environment_id}/eligible-assignees")
 def eligible_assignees(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "case.assign")
-    rows = db.scalars(select(User).join(EnvironmentMembership,
-        EnvironmentMembership.user_id == User.id).where(
-        EnvironmentMembership.environment_id == environment_id,
-        EnvironmentMembership.is_active.is_(True), User.is_active.is_(True),
-        User.status == "active").distinct().order_by(User.display_name))
-    return [{"id": row.id, "display_name": row.display_name, "email": row.email} for row in rows]
+    return eligible_assignee_rows(db, environment_id)
 
 
 @router.get("/cases/{case_id}/allowed-transitions")

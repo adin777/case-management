@@ -1,3 +1,5 @@
+import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -14,7 +16,15 @@ from app.modules.directory.excel import EXPORT_HEADERS, HEADERS, parse, workbook
 from app.modules.directory.fake import FakeDirectoryProvider
 from app.modules.directory.provider import DirectoryBatch, DirectoryProvider, NormalizedDirectoryUser
 from app.modules.directory.sync_service import UserSyncService
-from app.modules.models import DirectorySyncRun, Environment, EnvironmentMembership, Group, GroupMember, User
+from app.modules.models import (
+    DirectorySyncRun,
+    Environment,
+    EnvironmentMembership,
+    Group,
+    GroupMember,
+    User,
+    UserImportSession,
+)
 
 router = APIRouter(prefix="/api", tags=["directory"])
 
@@ -23,6 +33,10 @@ class ApplyIn(BaseModel):
     provider: str
     users: list[NormalizedDirectoryUser]
     delta_link: str | None = None
+
+
+class ImportApplyIn(BaseModel):
+    import_session_id: uuid.UUID
 
 
 def admin(user: Current) -> None:
@@ -78,12 +92,26 @@ async def import_preview(db: DB, user: Current, file: Annotated[UploadFile, File
     admin(user)
     try: batch = DirectoryBatch(users=parse(await file.read()))
     except ValueError as exc: raise HTTPException(422, str(exc)) from exc
-    return UserSyncService(db, "excel").preview(batch)
+    result = UserSyncService(db, "excel").preview(batch)
+    session = UserImportSession(created_by=user.id, snapshot_json=result["users"])
+    db.add(session); db.commit()
+    return {**result, "import_session_id": session.id}
 
 
 @router.post("/users/import/apply")
-def import_apply(data: list[NormalizedDirectoryUser], db: DB, user: Current) -> dict[str, Any]:
-    admin(user); run = UserSyncService(db, "excel").apply(DirectoryBatch(users=data), user.id); audit(db, user, "directory_sync_run", run.id, "excel_import_applied"); db.commit(); return run_dict(run)
+def import_apply(data: ImportApplyIn, db: DB, user: Current) -> dict[str, Any]:
+    admin(user)
+    session = db.get(UserImportSession, data.import_session_id)
+    if not session or session.created_by != user.id:
+        raise HTTPException(404, "תצוגת הייבוא אינה קיימת")
+    if session.applied_at:
+        raise HTTPException(409, "תצוגת הייבוא כבר הוחלה")
+    users = [NormalizedDirectoryUser.model_validate(row) for row in session.snapshot_json]
+    run = UserSyncService(db, "excel").apply(DirectoryBatch(users=users), user.id)
+    session.applied_at = datetime.now(UTC)
+    audit(db, user, "directory_sync_run", run.id, "excel_import_applied")
+    db.commit()
+    return run_dict(run)
 
 
 @router.get("/users-export")

@@ -334,3 +334,64 @@ def test_dynamic_global_field_crud_visibility_and_case_value_roundtrip() -> None
         "label_he":"מערכת יעד","label_en":"Target system","field_type":"single_select",
         "is_required":False,"is_active":False})
     assert disabled.status_code == 200 and disabled.json()["is_active"] is False
+
+
+def test_assignee_semantic_binding_environment_configuration_and_sync() -> None:
+    headers = auth(); environment, request_type, _ = context(headers)
+    assignees = client.get(f"/api/environments/{environment['id']}/eligible-assignees", headers=headers).json()
+    assert assignees
+    field_response = client.post("/api/global-case-fields", headers=headers, json={
+        "label_he": "מטפל configurable", "label_en": "Assignee", "field_type": "user",
+        "is_required": False, "is_active": True, "semantic_binding": "case.assignee",
+    })
+    assert field_response.status_code == 201, field_response.text
+    field = field_response.json()
+    duplicate = client.post("/api/global-case-fields", headers=headers, json={
+        "label_he": "מטפל נוסף", "field_type": "user", "is_active": True,
+        "semantic_binding": "case.assignee",
+    })
+    assert duplicate.status_code == 409
+    configured = client.put(
+        f"/api/environments/{environment['id']}/global-case-fields/{field['id']}/configuration",
+        headers=headers, json={"is_visible": True, "is_required": True,
+                               "show_on_create": True, "show_on_edit": True})
+    assert configured.status_code == 200
+    creation = client.get(
+        f"/api/case-creation/environments/{environment['id']}/configuration", headers=headers).json()
+    bound = next(row for row in creation["global_fields"] if row["id"] == field["id"])
+    assert bound["is_required"] is True and bound["semantic_binding"] == "case.assignee"
+    assert creation["eligible_assignees"]
+    form = client.get(f"/api/forms/{request_type['form_version_id']}", headers=headers).json()
+    values = [{"field_definition_id": row["id"], "value":
+               (row["configuration_json"].get("options") or ["בדיקה"])[0] if row["field_type"] == "single_select" else "בדיקה"}
+              for row in form["fields"] if row["is_required"]]
+    values.append({"field_definition_id": field["id"], "value": assignees[0]["id"]})
+    created = client.post("/api/cases", headers=headers, json={
+        "environment_id": environment["id"], "request_type_id": request_type["id"],
+        "title": "מטפל סמנטי", "description": "בדיקת סנכרון", "values": values})
+    assert created.status_code == 201, created.text
+    assert created.json()["assignee_id"] == assignees[0]["id"]
+    saved = client.get(f"/api/cases/{created.json()['id']}/global-field-values", headers=headers).json()
+    assert saved[field["id"]] == assignees[0]["id"]
+    next_assignee = assignees[-1]
+    updated = client.put(f"/api/cases/{created.json()['id']}/global-field-values", headers=headers,
+        json={field["id"]: next_assignee["id"]})
+    assert updated.status_code == 200, updated.text
+    assert client.get(f"/api/cases/{created.json()['id']}", headers=headers).json()["assignee_id"] == next_assignee["id"]
+    report = client.get(f"/api/reports/cases?assignee_id={next_assignee['id']}", headers=headers).json()
+    assert any(row["case_number"] == created.json()["case_number"] for row in report["items"])
+    edit_only = client.put(
+        f"/api/environments/{environment['id']}/global-case-fields/{field['id']}/configuration",
+        headers=headers, json={"is_visible": True, "is_required": True,
+                               "show_on_create": False, "show_on_edit": True})
+    assert edit_only.status_code == 200
+    creation = client.get(
+        f"/api/case-creation/environments/{environment['id']}/configuration", headers=headers).json()
+    assert field["id"] not in {row["id"] for row in creation["global_fields"]}
+    editing = client.get(
+        f"/api/environments/{environment['id']}/case-fields?presentation=edit", headers=headers).json()
+    assert field["id"] in {row["id"] for row in editing["global_fields"]}
+    disabled = client.patch(f"/api/global-case-fields/{field['id']}", headers=headers, json={
+        "label_he": field["label_he"], "label_en": field["label_en"], "field_type": "user",
+        "is_required": False, "is_active": False, "semantic_binding": "case.assignee"})
+    assert disabled.status_code == 200

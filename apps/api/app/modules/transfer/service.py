@@ -19,6 +19,8 @@ from app.modules.models import (
     Environment,
     EnvironmentMembership,
     FieldDefinition,
+    GlobalCaseFieldDefinition,
+    GlobalCaseFieldValue,
     GlobalPriorityDefinition,
     GlobalStatusDefinition,
     GlobalSubPriorityDefinition,
@@ -300,6 +302,30 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.priority_id = priority.id
     item.sub_priority_id = payload.sub_priority_id if payload.sub_priority_id is not None else item.sub_priority_id
     item.assignee_id = payload.assignee_id
+    bound_assignee_field = db.scalar(
+        select(GlobalCaseFieldDefinition).where(
+            GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
+            GlobalCaseFieldDefinition.is_active.is_(True),
+        )
+    )
+    if bound_assignee_field:
+        bound_value = db.scalar(
+            select(GlobalCaseFieldValue).where(
+                GlobalCaseFieldValue.case_id == item.id,
+                GlobalCaseFieldValue.global_field_id == bound_assignee_field.id,
+            )
+        )
+        serialized_assignee = str(payload.assignee_id) if payload.assignee_id else None
+        if bound_value:
+            bound_value.value_json = serialized_assignee
+        else:
+            db.add(
+                GlobalCaseFieldValue(
+                    case_id=item.id,
+                    global_field_id=bound_assignee_field.id,
+                    value_json=serialized_assignee,
+                )
+            )
     item.assigned_group_id = None
     item.sla_policy_id = None
     item.response_due_at = None

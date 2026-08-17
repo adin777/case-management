@@ -545,6 +545,7 @@ class GlobalCaseFieldDefinition(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    semantic_binding: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
 
 
 class EnvironmentGlobalCaseField(Base):
@@ -554,6 +555,9 @@ class EnvironmentGlobalCaseField(Base):
     global_field_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("global_case_field_definitions.id", ondelete="CASCADE"), primary_key=True)
     is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    show_on_create: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_on_edit: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class GlobalCaseFieldValue(Base):
@@ -562,6 +566,14 @@ class GlobalCaseFieldValue(Base):
     global_field_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("global_case_field_definitions.id"), primary_key=True)
     value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+
+
+class UserImportSession(TimestampMixin, Base):
+    __tablename__ = "user_import_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    snapshot_json: Mapped[list] = mapped_column(JSON, default=list)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class UserPermissionAssignment(TimestampMixin, Base):

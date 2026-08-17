@@ -8,7 +8,7 @@ import type { Case, Environment, Form, RequestType, User } from '../../types';
 import { activeRequestTypes, caseCreationConfigurationUrl } from './caseCreationSources';
 
 type CreationType=RequestType&{form?:Form};
-type CreationConfig={request_types:CreationType[];global_fields:Form['fields'];participants:User[]};
+type CreationConfig={request_types:CreationType[];global_fields:Form['fields'];participants:User[];eligible_assignees:User[]};
 
 export function CreateCasePage() {
   const navigate = useNavigate();
@@ -22,7 +22,7 @@ export function CreateCasePage() {
   const [submitting, setSubmitting] = useState(false);
   const { data: environments = [], error: environmentsError } = useQuery({ queryKey: ['case-creation-environments'], queryFn: () => api<Environment[]>('/case-creation/environments') });
   const { data: creationConfig, error: configError } = useQuery({ queryKey: ['case-creation-configuration', environmentId], queryFn: () => api<CreationConfig>(caseCreationConfigurationUrl(environmentId)), enabled: !!environmentId, retry:false });
-  const requestTypeRows=creationConfig?.request_types||[];const globalFields=creationConfig?.global_fields||[];const users=creationConfig?.participants||[];
+  const requestTypeRows=creationConfig?.request_types||[];const globalFields=creationConfig?.global_fields||[];const users=creationConfig?.participants||[];const eligibleAssignees=creationConfig?.eligible_assignees||[];
   const requestTypes = activeRequestTypes(requestTypeRows, environmentId);
   const selectedType = requestTypes.find((item) => item.id === requestTypeId);
   const caseConfig=selectedType as CreationType|undefined;const form=caseConfig?.form;
@@ -55,7 +55,7 @@ export function CreateCasePage() {
       <FormControl required disabled={!environmentId}><InputLabel>סוג קריאה</InputLabel><Select label="סוג קריאה" value={requestTypeId} onChange={(event) => setRequestTypeId(event.target.value)}>{requestTypes.map((type) => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}</Select></FormControl>
       {configError && <Alert severity="error">לא ניתן לטעון את תצורת השדות. {(configError as Error).message}</Alert>}
       <FormControl><InputLabel>משתתפים</InputLabel><Select multiple label="משתתפים" value={participantIds} onChange={(event) => setParticipantIds(typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)} renderValue={(selected) => <Stack direction="row" gap={.5} flexWrap="wrap">{selected.map((id) => <Chip key={id} size="small" label={users.find((user) => user.id === id)?.display_name || id} />)}</Stack>}>{users.filter((user) => user.is_active !== false).map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}</Select></FormControl>
-      {[...globalFields,...(form?.fields||[])].filter((field) => field.is_active !== false).map((field) => <DynamicField key={field.id} field={field} value={values[field.id!]} users={users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />)}
+      {[...globalFields,...(form?.fields||[])].filter((field) => field.is_active !== false).map((field) => <Stack key={field.id} spacing={1}><DynamicField field={field} value={values[field.id!]} users={field.semantic_binding==='case.assignee'?eligibleAssignees:users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />{field.semantic_binding==='case.assignee'&&!eligibleAssignees.length&&<Alert severity="info">אין משתמשים פעילים המורשים לטפל בסביבה זו.</Alert>}</Stack>)}
       <Button type="submit" variant="contained" size="large" disabled={!caseConfig || submitting || !environmentId || !requestTypeId || !title.trim() || !description.trim()}>{submitting ? <><CircularProgress size={20} color="inherit" sx={{ ml: 1 }} />שומר קריאה...</> : 'פתיחת הקריאה'}</Button>
     </Stack></CardContent></Card>
   </Stack></Container>;

@@ -24,6 +24,7 @@ class FieldIn(BaseModel):
     field_type: str
     is_required: bool = False
     is_active: bool = True
+    semantic_binding: str | None = None
 
 
 class OptionIn(BaseModel):
@@ -40,6 +41,7 @@ def admin(user: Current) -> None:
 def output(row: GlobalCaseFieldDefinition) -> dict[str, Any]:
     return {"id": row.id, "key": row.key, "label_he": row.label_he, "label_en": row.label_en,
             "field_type": row.field_type, "is_required": row.is_required, "is_active": row.is_active,
+            "semantic_binding": row.semantic_binding,
             "sort_order": row.sort_order, "configuration": row.configuration_json or {},
             "options": sorted((row.configuration_json or {}).get("options", []), key=lambda item: item["sort_order"])}
 
@@ -57,6 +59,7 @@ def create(data: FieldIn, db: DB, user: Current) -> dict[str, Any]:
     admin(user)
     if data.field_type not in FIELD_TYPES:
         raise HTTPException(422, "סוג השדה אינו נתמך")
+    validate_binding(db, data)
     item = GlobalCaseFieldDefinition(key=f"global_{uuid.uuid4().hex[:16]}",
         sort_order=db.scalar(select(func.count()).select_from(GlobalCaseFieldDefinition)) or 0,
         configuration_json={"options": []}, **data.model_dump())
@@ -69,6 +72,7 @@ def update(field_id: uuid.UUID, data: FieldIn, db: DB, user: Current) -> dict[st
     admin(user); item = db.get(GlobalCaseFieldDefinition, field_id)
     if not item: raise HTTPException(404, "השדה לא נמצא")
     if data.field_type not in FIELD_TYPES: raise HTTPException(422, "סוג השדה אינו נתמך")
+    validate_binding(db, data, field_id)
     for key, value in data.model_dump().items(): setattr(item, key, value)
     audit(db, user, "global_case_field", item.id, "updated"); db.commit(); return output(item)
 
@@ -137,11 +141,55 @@ def reorder_options(field_id: uuid.UUID, ids: list[str], db: DB, user: Current) 
     item.configuration_json = configuration; db.commit(); return configuration["options"]
 
 
-@router.put("/environments/{environment_id}/global-case-fields/{field_id}/visibility")
-def visibility(environment_id: uuid.UUID, field_id: uuid.UUID, is_visible: bool, db: DB, user: Current) -> dict[str, bool]:
+class EnvironmentFieldConfigIn(BaseModel):
+    is_visible: bool = True
+    is_required: bool = False
+    show_on_create: bool = True
+    show_on_edit: bool = True
+
+
+@router.get("/environments/{environment_id}/global-case-fields/configuration")
+def environment_configuration(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+    admin(user)
+    saved = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
+        EnvironmentGlobalCaseField.environment_id == environment_id))}
+    return [{"global_field_id": field.id,
+             "is_visible": saved[field.id].is_visible if field.id in saved else True,
+             "is_required": saved[field.id].is_required if field.id in saved else False,
+             "show_on_create": saved[field.id].show_on_create if field.id in saved else True,
+             "show_on_edit": saved[field.id].show_on_edit if field.id in saved else True}
+            for field in db.scalars(select(GlobalCaseFieldDefinition).order_by(
+                GlobalCaseFieldDefinition.sort_order))]
+
+
+def validate_binding(db: DB, data: FieldIn, current_id: uuid.UUID | None = None) -> None:
+    if data.semantic_binding not in {None, "none", "case.assignee"}:
+        raise HTTPException(422, "החיבור הסמנטי אינו נתמך")
+    if data.semantic_binding == "case.assignee":
+        if data.field_type != "user":
+            raise HTTPException(422, "רק שדה משתמש יכול להתחבר למטפל")
+        duplicate = db.scalar(select(GlobalCaseFieldDefinition.id).where(
+            GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
+            GlobalCaseFieldDefinition.is_active.is_(True),
+            GlobalCaseFieldDefinition.id != current_id if current_id else GlobalCaseFieldDefinition.id.is_not(None),
+        ))
+        if duplicate and data.is_active:
+            raise HTTPException(409, "כבר קיים שדה פעיל המחובר למטפל")
+
+
+@router.put("/environments/{environment_id}/global-case-fields/{field_id}/configuration")
+def configure(environment_id: uuid.UUID, field_id: uuid.UUID, data: EnvironmentFieldConfigIn,
+              db: DB, user: Current) -> dict[str, bool]:
     admin(user)
     if not db.get(Environment, environment_id) or not db.get(GlobalCaseFieldDefinition, field_id):
         raise HTTPException(404, "הסביבה או השדה לא נמצאו")
     row = db.get(EnvironmentGlobalCaseField, (environment_id, field_id))
     if not row: row = EnvironmentGlobalCaseField(environment_id=environment_id, global_field_id=field_id); db.add(row)
-    row.is_visible = is_visible; db.commit(); return {"is_visible": row.is_visible}
+    for key, value in data.model_dump().items(): setattr(row, key, value)
+    db.commit()
+    return data.model_dump()
+
+
+@router.put("/environments/{environment_id}/global-case-fields/{field_id}/visibility")
+def visibility(environment_id: uuid.UUID, field_id: uuid.UUID, is_visible: bool, db: DB, user: Current) -> dict[str, bool]:
+    return configure(environment_id, field_id, EnvironmentFieldConfigIn(is_visible=is_visible), db, user)

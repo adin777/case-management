@@ -97,7 +97,7 @@ def test_excel_preview_import_and_export() -> None:
         files={"file": ("users.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
     assert preview.status_code == 200 and preview.json()["created"] == 1
     applied = client.post("/api/users/import/apply", headers=headers,
-        json=[preview.json()["rows"][0]["data"]])
+        json={"import_session_id": preview.json()["import_session_id"]})
     assert applied.status_code == 200 and applied.json()["created_count"] == 1
     exported = client.get("/api/users-export?source=excel", headers=headers)
     assert exported.status_code == 200 and exported.content.startswith(b"PK")
@@ -116,7 +116,8 @@ def test_excel_preview_import_and_export() -> None:
     assert export_preview.status_code == 200 and export_preview.json()["errors"] == 0
     roundtrip = next(row for row in export_preview.json()["rows"] if row["email"] == "export-roundtrip@example.com")
     assert roundtrip["action"] == "created"
-    assert client.post("/api/users/import/apply", headers=headers, json=[roundtrip["data"]]).status_code == 200
+    assert client.post("/api/users/import/apply", headers=headers,
+        json={"import_session_id": export_preview.json()["import_session_id"]}).status_code == 200
     with SessionLocal() as db:
         assert db.scalar(select(User).where(User.email == "export-roundtrip@example.com"))
     second_preview = client.post("/api/users/import/preview", headers=headers,
@@ -153,7 +154,8 @@ def test_full_export_snake_case_updates_creates_and_applies_known_memberships() 
     assert preview.json()["updated"] == 1 and preview.json()["created"] == 1
     changed = next(item for item in preview.json()["rows"] if item["email"] == "admin@example.com")
     assert {"department", "job_title"} <= set(changed["changed_fields"])
-    applied = client.post("/api/users/import/apply", headers=headers, json=[item["data"] for item in preview.json()["rows"]])
+    applied = client.post("/api/users/import/apply", headers=headers,
+        json={"import_session_id": preview.json()["import_session_id"]})
     assert applied.status_code == 200, applied.text
     with SessionLocal() as db:
         admin = db.scalar(select(User).where(User.email == "admin@example.com"))

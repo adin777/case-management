@@ -15,6 +15,18 @@ A feature is not Done when the implementation changed but the API contract/tests
 Every feature, bug fix, or behavioral change must add or update at least one regression test.
 Bug fixes require a regression test that fails before the fix and passes after it.
 
+Configurable fields are identified by stable IDs, never by labels. Business behavior attached
+to a configurable field must use an explicit `semantic_binding`; no code may infer business
+meaning from Hebrew or English labels. A Global Field may have environment-specific visibility,
+requiredness, and create/edit presentation rules, consumed from the same configuration by the
+backend and frontend. When a Preview flow exists, Apply must operate on exactly the previewed
+snapshot and must have a permanent regression test.
+
+A feature is broken when a displayed button has no observable effect, a mutation does not refresh
+the UI, Preview works but Apply does not, the backend exposes `can_decide` without a frontend
+action, or a semantic configurable field is ignored by its business consumer. Every reported
+regression becomes permanent automated coverage.
+
 After implementation, do not use an ad-hoc subset as final validation. Always run:
 `powershell -ExecutionPolicy Bypass -File .\scripts\run-regression.ps1`.
 

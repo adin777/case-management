@@ -87,22 +87,35 @@ def case_field_dict(row: CaseFieldDefinition) -> dict[str, Any]:
 
 @router.get("/environments/{environment_id}/case-fields")
 def list_case_fields(environment_id: uuid.UUID, db: DB, user: Current,
-                     request_type_id: uuid.UUID | None = None) -> dict[str, list[dict[str, Any]]]:
+                     request_type_id: uuid.UUID | None = None,
+                     presentation: str | None = None) -> dict[str, list[dict[str, Any]]]:
     require(db, user, environment_id, "environment.read")
     query = select(CaseFieldDefinition).where(CaseFieldDefinition.environment_id == environment_id)
     if request_type_id:
         query = query.where(or_(CaseFieldDefinition.request_type_id.is_(None),
                                 CaseFieldDefinition.request_type_id == request_type_id))
     environment_fields = [case_field_dict(row) for row in db.scalars(query.order_by(CaseFieldDefinition.sort_order))]
-    visibility = {row.global_field_id: row.is_visible for row in db.scalars(select(EnvironmentGlobalCaseField).where(
+    configurations = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
         EnvironmentGlobalCaseField.environment_id == environment_id))}
     global_fields = []
     for row in db.scalars(select(GlobalCaseFieldDefinition).order_by(GlobalCaseFieldDefinition.sort_order)):
-        if row.is_active and visibility.get(row.id, True):
+        config = configurations.get(row.id)
+        visible = (config.is_visible if config else True)
+        if presentation == "create": visible = visible and (config.show_on_create if config else True)
+        if presentation == "edit": visible = visible and (config.show_on_edit if config else True)
+        if row.is_active and visible:
             global_fields.append({"id": row.id, "key": row.key, "label_he": row.label_he,
-                "label_en": row.label_en, "field_type": row.field_type, "is_required": row.is_required,
+                "label_en": row.label_en, "field_type": row.field_type,
+                "is_required": config.is_required if config else False,
                 "is_active": row.is_active, "sort_order": row.sort_order,
-                "configuration_json": row.configuration_json or {}, "source": "global"})
+                "configuration_json": row.configuration_json or {}, "source": "global",
+                "semantic_binding": row.semantic_binding,
+                "environment_configuration": {
+                    "is_visible": config.is_visible if config else True,
+                    "is_required": config.is_required if config else False,
+                    "show_on_create": config.show_on_create if config else True,
+                    "show_on_edit": config.show_on_edit if config else True,
+                }})
     return {"global_fields": global_fields, "environment_fields": environment_fields}
 
 
