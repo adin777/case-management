@@ -1,7 +1,7 @@
 import { alpha, createTheme } from '@mui/material/styles';
 
-export const appTheme = createTheme({
-  direction: 'rtl',
+export const createAppTheme = (direction: 'rtl'|'ltr') => createTheme({
+  direction,
   palette: {
     primary: { main: '#1d4ed8', dark: '#173b8f', light: '#dbeafe' },
     secondary: { main: '#0f766e' },

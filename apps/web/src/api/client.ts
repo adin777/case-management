@@ -1,29 +1,30 @@
 import type {ApiValidationError,User} from '../types';
+import i18n from '../i18n';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 const ACCESS_KEY = 'case_management_access';
 const REFRESH_KEY = 'case_management_refresh';
 
 export class ApiError extends Error {
-  constructor(message: string, public status?: number, public kind: 'credentials'|'network'|'timeout'|'server'='server', public fieldErrors: Record<string,string>={}) { super(message); }
+  constructor(message: string, public status?: number, public kind: 'credentials'|'network'|'timeout'|'server'='server', public fieldErrors: Record<string,string>={}, public code?:string) { super(message); }
 }
 
-const FIELD_LABELS: Record<string,string> = {name:'שם הקבוצה',key:'מפתח השדה',label_he:'תווית בעברית',label_en:'תווית באנגלית',options_json:'ערכים לבחירה',environment_ids:'סביבות רלוונטיות'};
+export function translatedApiMessage(code:string|undefined,fallback:string){return code?i18n.t(`errors.${code}`,{defaultValue:fallback}):fallback}
 
 export function parseValidationErrors(errors: ApiValidationError[] = []): {message:string;fieldErrors:Record<string,string>} {
   const fieldErrors: Record<string,string> = {};
   for (const error of errors) {
     const field = String([...error.loc].reverse().find((part) => typeof part === 'string' && part !== 'body') || 'form');
-    let message = error.msg;
+    let message = i18n.t('common.required');
     if (field === 'name' && (error.type === 'string_too_short' || error.type === 'value_error')) message = 'יש להזין שם קבוצה הכולל לפחות שני תווים';
     else if (field === 'key' && error.type === 'string_pattern_mismatch') message = 'מפתח השדה חייב להתחיל באות אנגלית קטנה ויכול להכיל אותיות באנגלית, מספרים וקו תחתון בלבד';
     else if (field === 'label_he' && error.type === 'string_too_short') message = 'יש להזין תווית בעברית';
-    else if (error.type === 'missing') message = `יש להזין ${FIELD_LABELS[field] || field}`;
-    else if (error.type === 'value_error') message = error.msg.replace(/^Value error,\s*/,'');
+    else if (error.type === 'missing') message = i18n.t('common.required');
+    else if (error.type === 'value_error') message = i18n.language === 'he' ? error.msg.replace(/^Value error,\s*/,'') : i18n.t('errors.server');
     fieldErrors[field] = message;
   }
   const messages = [...new Set(Object.values(fieldErrors))];
-  return {message:messages.join(' · ') || 'יש לתקן את השדות המסומנים',fieldErrors};
+  return {message:messages.join(' · ') || i18n.t('common.required'),fieldErrors};
 }
 
 export const token = {
@@ -48,19 +49,20 @@ export async function api<T>(path: string, init: RequestInit = {}, options: {ski
     if (contentType.includes('application/json')) payload = await response.json();
     else payload = await response.text();
     if (!response.ok) {
-      const objectPayload = typeof payload === 'object' && payload ? payload as {detail?:unknown;errors?:ApiValidationError[]} : undefined;
-      const detail = typeof objectPayload?.detail === 'string' ? objectPayload.detail : typeof objectPayload?.detail === 'object' && objectPayload.detail && 'message' in objectPayload.detail ? String((objectPayload.detail as {message:unknown}).message) : undefined;
+      const objectPayload = typeof payload === 'object' && payload ? payload as {code?:string;message?:string;detail?:unknown;errors?:ApiValidationError[]} : undefined;
+      const detail = objectPayload?.message || (typeof objectPayload?.detail === 'string' ? objectPayload.detail : typeof objectPayload?.detail === 'object' && objectPayload.detail && 'message' in objectPayload.detail ? String((objectPayload.detail as {message:unknown}).message) : undefined);
       if (response.status === 422 && objectPayload?.errors?.length) { const parsed=parseValidationErrors(objectPayload.errors); throw new ApiError(parsed.message,422,'server',parsed.fieldErrors); }
       if (response.status === 422 && objectPayload?.detail && typeof objectPayload.detail === 'object' && 'field' in objectPayload.detail && 'message' in objectPayload.detail) { const validation=objectPayload.detail as {field:unknown;message:unknown}; throw new ApiError(String(validation.message),422,'server',{[String(validation.field)]:String(validation.message)}); }
-      if (response.status === 401 && options.skipAuthRedirect) throw new ApiError('המייל או הסיסמה אינם נכונים', 401, 'credentials');
+      if (response.status === 401 && options.skipAuthRedirect) throw new ApiError(i18n.t('errors.credentials'), 401, 'credentials');
       if (response.status === 401) { token.clear(); location.assign('/login'); }
-      throw new ApiError(detail || `שגיאת שרת (${response.status})`, response.status, 'server');
+      const fallback=detail || i18n.t('errors.server');
+      throw new ApiError(translatedApiMessage(objectPayload?.code,fallback), response.status, 'server',{},objectPayload?.code);
     }
     return response.status === 204 ? undefined as T : payload as T;
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    if (error instanceof DOMException && error.name === 'AbortError') throw new ApiError('השרת לא הגיב בתוך 10 שניות', undefined, 'timeout');
-    if (error instanceof TypeError) throw new ApiError('לא ניתן להתחבר לשרת המערכת. יש לבדוק שהשירות המקומי פועל.', undefined, 'network');
+    if (error instanceof DOMException && error.name === 'AbortError') throw new ApiError(i18n.t('errors.timeout'), undefined, 'timeout');
+    if (error instanceof TypeError) throw new ApiError(i18n.t('errors.network'), undefined, 'network');
     throw error;
   } finally { window.clearTimeout(timeout); }
 }

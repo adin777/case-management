@@ -355,6 +355,14 @@ Permission to perform a business action includes read access to the configuratio
 
 - UI/UX הוא חלק מדרישת Done: hierarchy חזותית, פעולות ברורות, Empty/Loading/Error states, אישור לפעולות רגישות, רספונסיביות וללא codes טכניים למשתמש.
 - יעד גודל לקובץ הוא פחות מ-250 שורות כאשר הפיצול משפר אחריות ותחזוקה; Business Logic אינו נשמר בתוך Components או Routes.
+- כל טקסט הפונה למשתמש עובר דרך שכבת i18n המרכזית. עברית ואנגלית הן שפות נתמכות;
+  אין להוסיף טקסט משתמש קשיח ב־JSX, והיעדר תרגום אנגלי בישות configurable נופל בבטחה לעברית.
+- עברית פועלת ב־RTL ואנגלית ב־LTR, לרבות MUI, Drawer, טפסים, טבלאות ו־Dialogs.
+- Validation עסקי אינו משתמש ב־browser-native validation. טפסים משתמשים ב־`noValidate`
+  ומציגים errors מתורגמים בתוך הממשק; warnings, confirmations ו־status messages משתמשים בשפה הפעילה.
+- Single Select נסגר מיד לאחר בחירה מוצלחת. Multi Select רשאי להישאר פתוח לבחירה חוזרת.
+  לכל dropdown יש label גלוי, מקור ערכים תקף, empty state מתורגם, keyboard support וכיווניות נכונה.
+- UI הרשאות מציג תמיד אמת: default, direct override ו־effective state אינם רשאים לסתור זה את זה חזותית.
 
 ## Migrations ושמירת מידע
 

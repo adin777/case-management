@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,8 +68,19 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
 async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content=jsonable_encoder({"detail": "Validation failed", "errors": exc.errors()}),
+        content=jsonable_encoder({"code": "FIELD_REQUIRED", "message": "Validation failed", "detail": "Validation failed", "errors": exc.errors()}),
     )
+
+
+@app.exception_handler(HTTPException)
+async def business_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    if isinstance(exc.detail, dict) and "code" in exc.detail:
+        content = exc.detail
+    else:
+        code = {401: "AUTHENTICATION_REQUIRED", 403: "PERMISSION_DENIED", 404: "RESOURCE_NOT_FOUND",
+                409: "CONFLICT", 422: "INVALID_VALUE"}.get(exc.status_code, "BUSINESS_ERROR")
+        content = {"code": code, "message": str(exc.detail), "detail": exc.detail, "details": {}}
+    return JSONResponse(status_code=exc.status_code, content=jsonable_encoder(content), headers=exc.headers)
 
 
 @app.get("/health")

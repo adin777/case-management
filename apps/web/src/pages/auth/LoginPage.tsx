@@ -13,8 +13,10 @@ import {
   Typography,
 } from '@mui/material';
 import { ApiError, getCurrentUser, login, token } from '../../api/client';
+import { useTranslation } from 'react-i18next';
 
 export function LoginPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [email, setEmail] = useState('admin@example.com');
@@ -26,12 +28,12 @@ export function LoginPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
-    setApiStatus('מתחבר לשרת...');
+    setApiStatus(t('login.connecting'));
     setIsSubmitting(true);
     try {
       const result = await login(email, password);
       token.set(result.access_token, result.refresh_token);
-      setApiStatus('מאמת משתמש...');
+      setApiStatus(t('login.verifying'));
       const user = await getCurrentUser();
       queryClient.setQueryData(['me'], user);
       navigate('/', { replace: true });
@@ -39,13 +41,13 @@ export function LoginPage() {
       token.clear();
       console.error('Login failed', caught);
       if (caught instanceof ApiError) {
-        if (caught.kind === 'credentials') setError('המייל או הסיסמה אינם נכונים');
+        if (caught.kind === 'credentials') setError(t('errors.credentials'));
         else if (caught.kind === 'network')
-          setError('לא ניתן להתחבר לשרת המערכת. יש לבדוק שהשירות המקומי פועל.');
+          setError(t('errors.network'));
         else if (caught.kind === 'timeout')
-          setError('אירעה שגיאת תקשורת. בדוק שהמערכת פועלת ב-http://localhost:8000');
-        else setError(caught.message);
-      } else setError('הכניסה נכשלה. פרטי השגיאה נרשמו בקונסול.');
+          setError(t('errors.timeout'));
+        else setError(t('errors.server'));
+      } else setError(t('errors.server'));
       setApiStatus('');
     } finally {
       setIsSubmitting(false);
@@ -56,20 +58,20 @@ export function LoginPage() {
     <Box className="login-art">
       <Card sx={{ width: { xs: '92%', sm: 460 }, p: 2 }}>
         <CardContent>
-          <Box component="form" onSubmit={handleSubmit}>
+          <Box component="form" noValidate onSubmit={handleSubmit}>
             <Stack spacing={3}>
-              <Typography variant="h4">מרכז השירות</Typography>
-              <Typography color="text.secondary">ניהול פניות ותהליכי עבודה במקום אחד</Typography>
+              <Typography variant="h4">{t('app.name')}</Typography>
+              <Typography color="text.secondary">{t('app.tagline')}</Typography>
               {error && <Alert severity="error">{error}</Alert>}
               {apiStatus && <Alert severity="info">{apiStatus}</Alert>}
               <TextField
-                label="דוא״ל"
+                label={t('login.email')}
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 disabled={isSubmitting}
               />
               <TextField
-                label="סיסמה"
+                label={t('login.password')}
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
@@ -85,14 +87,14 @@ export function LoginPage() {
                 {isSubmitting ? (
                   <>
                     <CircularProgress size={20} color="inherit" sx={{ ml: 1 }} />
-                    מתחבר...
+                    {t('login.submitting')}
                   </>
                 ) : (
-                  'כניסה למערכת'
+                  t('login.submit')
                 )}
               </Button>
               <Typography textAlign="center">
-                עדיין אין לך חשבון? <Link to="/register">הרשמה</Link>
+                {t('login.noAccount')} <Link to="/register">{t('login.register')}</Link>
               </Typography>
             </Stack>
           </Box>

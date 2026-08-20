@@ -1,16 +1,21 @@
 import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Card, CardContent, Chip, CircularProgress, Container, FormControl, InputLabel, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Button, Card, CardContent, CircularProgress, Container, Stack, TextField, Typography } from '@mui/material';
 import { api } from '../../api/client';
 import { DynamicField } from '../../components/DynamicField';
 import type { Case, Environment, Form, RequestType, User } from '../../types';
 import { activeRequestTypes, caseCreationConfigurationUrl } from './caseCreationSources';
+import { useTranslation } from 'react-i18next';
+import { localized } from '../../i18n';
+import { AppSelect } from '../../components/AppSelect';
+import { AppMultiSelect } from '../../components/AppMultiSelect';
 
 type CreationType=RequestType&{form?:Form};
 type CreationConfig={request_types:CreationType[];global_fields:Form['fields'];participants:User[];eligible_assignees:User[]};
 
 export function CreateCasePage() {
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [environmentId, setEnvironmentId] = useState('');
   const [requestTypeId, setRequestTypeId] = useState('');
@@ -30,8 +35,8 @@ export function CreateCasePage() {
   async function submit(event: FormEvent) {
     event.preventDefault(); setError('');
     const missing = [...globalFields,...(form?.fields||[])].filter((field) => field.is_active !== false && field.is_required && (values[field.id!] === undefined || values[field.id!] === ''));
-    if (missing?.length) { setError(`יש למלא: ${missing.map((field) => field.label_he).join(', ')}`); return; }
-    if (!environmentId || !requestTypeId || !title.trim() || !description.trim()) { setError('יש למלא את כל שדות הליבה'); return; }
+    if (missing?.length) { setError(t('cases.fieldsRequired',{fields:missing.map((field) => localized(field.label_he,field.label_en,i18n.language)).join(', ')})); return; }
+    if (!environmentId || !requestTypeId || !title.trim() || !description.trim()) { setError(t('cases.coreRequired')); return; }
     setSubmitting(true);
     try {
       const result = await api<Case>('/cases', { method: 'POST', body: JSON.stringify({
@@ -45,18 +50,18 @@ export function CreateCasePage() {
   }
 
   return <Container maxWidth="md"><Stack spacing={3}>
-    <div><Typography variant="h4" fontWeight={800}>פתיחת קריאה חדשה</Typography><Typography color="text.secondary">מלאו את פרטי הליבה והוסיפו משתתפים לפי הצורך</Typography></div>
+    <div><Typography variant="h4" fontWeight={800}>{t('cases.createTitle')}</Typography><Typography color="text.secondary">{t('cases.createSubtitle')}</Typography></div>
     {error && <Alert severity="error">{error}</Alert>}
-    {environmentsError && <Alert severity="error">לא ניתן לטעון את הסביבות המורשות. {(environmentsError as Error).message}</Alert>}
-    <Card variant="outlined"><CardContent><Stack component="form" onSubmit={submit} spacing={2.5}>
-      <FormControl required><InputLabel>סביבה</InputLabel><Select label="סביבה" value={environmentId} onChange={(event) => { setEnvironmentId(event.target.value); setRequestTypeId(''); setValues({}); }}>{environments.map((environment) => <MenuItem key={environment.id} value={environment.id}>{environment.name_he}</MenuItem>)}</Select></FormControl>
-      <TextField label="נושא" required value={title} onChange={(event) => setTitle(event.target.value)} />
-      <TextField label="תיאור" required multiline minRows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
-      <FormControl required disabled={!environmentId}><InputLabel>סוג קריאה</InputLabel><Select label="סוג קריאה" value={requestTypeId} onChange={(event) => setRequestTypeId(event.target.value)}>{requestTypes.map((type) => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}</Select></FormControl>
-      {configError && <Alert severity="error">לא ניתן לטעון את תצורת השדות. {(configError as Error).message}</Alert>}
-      <FormControl><InputLabel>משתתפים</InputLabel><Select multiple label="משתתפים" value={participantIds} onChange={(event) => setParticipantIds(typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)} renderValue={(selected) => <Stack direction="row" gap={.5} flexWrap="wrap">{selected.map((id) => <Chip key={id} size="small" label={users.find((user) => user.id === id)?.display_name || id} />)}</Stack>}>{users.filter((user) => user.is_active !== false).map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}</Select></FormControl>
-      {[...globalFields,...(form?.fields||[])].filter((field) => field.is_active !== false).map((field) => <Stack key={field.id} spacing={1}><DynamicField field={field} value={values[field.id!]} users={field.semantic_binding==='case.assignee'?eligibleAssignees:users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />{field.semantic_binding==='case.assignee'&&!eligibleAssignees.length&&<Alert severity="info">אין משתמשים פעילים המורשים לטפל בסביבה זו.</Alert>}</Stack>)}
-      <Button type="submit" variant="contained" size="large" disabled={!caseConfig || submitting || !environmentId || !requestTypeId || !title.trim() || !description.trim()}>{submitting ? <><CircularProgress size={20} color="inherit" sx={{ ml: 1 }} />שומר קריאה...</> : 'פתיחת הקריאה'}</Button>
+    {environmentsError && <Alert severity="error">{t('cases.loadEnvironmentsFailed')}</Alert>}
+    <Card variant="outlined"><CardContent><Stack component="form" noValidate onSubmit={submit} spacing={2.5}>
+      <AppSelect required label={t('cases.environment')} value={environmentId} onChange={(value) => { setEnvironmentId(value); setRequestTypeId(''); setValues({}); }} options={environments.map(environment=>({value:environment.id,label:localized(environment.name_he,environment.name_en,i18n.language)}))}/>
+      <TextField label={t('cases.subject')} value={title} onChange={(event) => setTitle(event.target.value)} />
+      <TextField label={t('cases.description')} multiline minRows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
+      <AppSelect required disabled={!environmentId} label={t('cases.requestType')} value={requestTypeId} onChange={setRequestTypeId} options={requestTypes.map(type=>({value:type.id,label:localized(type.name_he,type.name_en,i18n.language)}))}/>
+      {configError && <Alert severity="error">{t('cases.loadConfigFailed')}</Alert>}
+      <AppMultiSelect label={t('cases.participants')} value={participantIds} onChange={setParticipantIds} options={users.filter(user=>user.is_active!==false).map(user=>({value:user.id,label:`${user.display_name} · ${user.email}`}))}/>
+      {[...globalFields,...(form?.fields||[])].filter((field) => field.is_active !== false).map((field) => <Stack key={field.id} spacing={1}><DynamicField field={{...field,label_he:localized(field.label_he,field.label_en,i18n.language)}} value={values[field.id!]} users={field.semantic_binding==='case.assignee'?eligibleAssignees:users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />{field.semantic_binding==='case.assignee'&&!eligibleAssignees.length&&<Alert severity="info">{t('cases.noAssignees')}</Alert>}</Stack>)}
+      <Button type="submit" variant="contained" size="large" disabled={!caseConfig || submitting}>{submitting ? <><CircularProgress size={20} color="inherit" sx={{ ml: 1 }} />{t('cases.submitting')}</> : t('cases.submit')}</Button>
     </Stack></CardContent></Card>
   </Stack></Container>;
 }

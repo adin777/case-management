@@ -33,6 +33,12 @@
 יעד: מחיקה בטוחה, חברות במספר קבוצות, העתקת קבוצות והרשאות ו־effective access מוסבר.
 סדר ההכרעה: חריגת משתמש בסביבה, קבוצות בסביבה, חריגה כללית, קבוצות כלליות, none.
 מנהל מערכת מקבל edit בכל domain אך אינו עוקף כלל עסקי כגון זהות מאשר.
+`GET /api/access/subjects/{subject_type}/{subject_id}/matrix` מחזיר לכל תחום
+`domain_code`, `domain_name`, `default_level`, `direct_level`, `effective_level`, `source`
+ו־`can_override`. קבוצת Admin מזוהה רק באמצעות `is_system_admin_group`; ללא Override היא
+מקבלת `default_level=edit`, `direct_level=inherit`, `effective_level=edit` ו־
+`source=admin_group_default`. Override מפורש (`none`, `view`, `edit`) גובר על ברירת המחדל,
+ושמירת `inherit` מוחקת אותו ומחזירה את ברירת המחדל.
 התחזות דורשת `system.impersonate_users`, מנפיקה access token קצר־חיים לזהות היעד ואינה
 מבצעת Login או שינוי סיסמה. ה־token שומר `real_actor_id`, וכל Audit בזמן התחזות שומר
 `real_actor_user_id` ו־`impersonated_user_id` ב־metadata.
@@ -148,6 +154,10 @@ Audit הוא append-only ושומר actor, environment, before/after ו־timesta
 `400` בקשה עסקית לא תקינה; `401` לא מחובר; `403` אסור; `404` לא נמצא; `409` conflict;
 `422` validation; `500` תקלה בלתי צפויה. אין לחשוף SQL או stack trace. `IntegrityError`
 בלתי צפוי אינו מתורגם אוטומטית ל־duplicate; unique עסקי צפוי נבדק בשירות ומוחזר כ־409.
+
+כל `HTTPException` עסקי מוחזר במעטפה יציבה הכוללת `code`, ‏`message` ו־`details`.
+שגיאת validation של סכימת בקשה מחזירה `code=FIELD_REQUIRED` ומערך `errors`. ה־Frontend
+מתרגם לפי `code` לשפה הפעילה ואינו מציג הודעות FastAPI/Pydantic גולמיות.
 
 ## Health ותהליך שינוי
 

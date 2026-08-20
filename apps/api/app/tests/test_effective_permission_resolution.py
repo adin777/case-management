@@ -126,7 +126,35 @@ def test_subject_matrix_returns_direct_effective_source_and_system_admin_edit() 
     group = client.get("/api/groups", headers=headers).json()[0]
     group_matrix = client.get(f"/api/access/subjects/group/{group['id']}/matrix", headers=headers)
     assert group_matrix.status_code == 200
-    assert {"domain_code", "domain_name", "direct_level", "effective_level", "source", "scope", "can_override"} <= group_matrix.json()[0].keys()
+    assert {"domain_code", "domain_name", "default_level", "direct_level", "effective_level", "source", "scope", "can_override"} <= group_matrix.json()[0].keys()
+
+
+def test_admin_group_override_persists_and_inherit_restores_edit_default() -> None:
+    headers = admin_headers()
+    admin_group = next(row for row in client.get("/api/groups", headers=headers).json()
+                       if row["is_system_admin_group"])
+    domain = client.get("/api/access/domains", headers=headers).json()[0]
+    initial = client.get(f"/api/access/subjects/group/{admin_group['id']}/matrix", headers=headers).json()
+    row = next(item for item in initial if item["domain_code"] == domain["code"])
+    assert row["default_level"] == row["effective_level"] == "edit"
+    assert row["direct_level"] == "inherit" and row["source"] == "admin_group_default"
+
+    saved = client.post("/api/access/bulk", headers=headers, json={"subject_type": "groups",
+        "subject_ids": [admin_group["id"]], "environment_id": None,
+        "levels": {domain["code"]: "none"}})
+    assert saved.status_code == 200, saved.text
+    fresh = client.get(f"/api/access/subjects/group/{admin_group['id']}/matrix", headers=headers).json()
+    row = next(item for item in fresh if item["domain_code"] == domain["code"])
+    assert row["direct_level"] == row["effective_level"] == "none"
+    assert row["source"] == "admin_group_override"
+
+    removed = client.post("/api/access/bulk", headers=headers, json={"subject_type": "groups",
+        "subject_ids": [admin_group["id"]], "environment_id": None,
+        "levels": {domain["code"]: "inherit"}})
+    assert removed.status_code == 200, removed.text
+    restored = client.get(f"/api/access/subjects/group/{admin_group['id']}/matrix", headers=headers).json()
+    row = next(item for item in restored if item["domain_code"] == domain["code"])
+    assert row["direct_level"] == "inherit" and row["effective_level"] == "edit"
 
 
 def test_normal_group_permission_save_survives_fresh_matrix_get() -> None:

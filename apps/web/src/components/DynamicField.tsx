@@ -1,9 +1,16 @@
-import {Checkbox,FormControl,FormControlLabel,InputLabel,MenuItem,Select,TextField} from '@mui/material';
+import {Checkbox,FormControlLabel,TextField} from '@mui/material';
+import {useTranslation} from 'react-i18next';
 import type {Field,User} from '../types';
+import {localized} from '../i18n';
+import {AppMultiSelect} from './AppMultiSelect';
+import {AppSelect,type AppSelectOption} from './AppSelect';
 
 export function DynamicField({field,value,onChange,users=[]}:{field:Field;value:unknown;onChange:(value:unknown)=>void;users?:User[]}) {
-  if(field.field_type==='boolean') return <FormControlLabel control={<Checkbox checked={Boolean(value)} onChange={e=>onChange(e.target.checked)}/>} label={field.label_he}/>;
-  if(['single_select','multi_select','user'].includes(field.field_type)) return <FormControl required={field.is_required}><InputLabel>{field.label_he}</InputLabel><Select multiple={field.field_type==='multi_select'} label={field.label_he} value={field.field_type==='multi_select'?(value as string[]||[]):String(value||'')} onChange={e=>onChange(e.target.value)}>{field.field_type==='user'?users.map(u=><MenuItem key={u.id} value={u.id}>{u.display_name}</MenuItem>):field.configuration_json.options?.filter(option=>typeof option==='string'||option.is_active!==false).map(option=>{const id=typeof option==='string'?option:option.id;const label=typeof option==='string'?option:option.label_he;return <MenuItem key={id} value={id}>{label}</MenuItem>})}</Select></FormControl>;
+  const {i18n}=useTranslation();const label=`${localized(field.label_he,field.label_en,i18n.language)}${field.is_required?' *':''}`;
+  if(field.field_type==='boolean') return <FormControlLabel control={<Checkbox checked={Boolean(value)} onChange={event=>onChange(event.target.checked)}/>} label={label}/>;
+  const options:AppSelectOption[]=field.field_type==='user'?users.map(user=>({value:user.id,label:user.display_name})):(field.configuration_json.options||[]).filter(option=>typeof option==='string'||option.is_active!==false).map(option=>typeof option==='string'?{value:option,label:option}:{value:option.id,label:localized(option.label_he,option.label_en,i18n.language)});
+  if(field.field_type==='multi_select')return <AppMultiSelect label={label} value={(value as string[])||[]} options={options} onChange={onChange}/>;
+  if(['single_select','user'].includes(field.field_type))return <AppSelect label={label} value={String(value||'')} options={options} onChange={onChange}/>;
   const type={number:'number',date:'date',datetime:'datetime-local'}[field.field_type]||'text';
-  return <TextField label={field.label_he} required={field.is_required} type={type} multiline={['long_text','textarea'].includes(field.field_type)} minRows={['long_text','textarea'].includes(field.field_type)?3:undefined} value={value??''} onChange={e=>onChange(field.field_type==='number'?Number(e.target.value):e.target.value)} slotProps={type==='date'||type==='datetime-local'?{inputLabel:{shrink:true}}:undefined}/>;
+  return <TextField label={label} type={type} multiline={['long_text','textarea'].includes(field.field_type)} minRows={['long_text','textarea'].includes(field.field_type)?3:undefined} value={value??''} onChange={event=>onChange(field.field_type==='number'?Number(event.target.value):event.target.value)} slotProps={type==='date'||type==='datetime-local'?{inputLabel:{shrink:true}}:undefined}/>;
 }
