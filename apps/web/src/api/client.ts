@@ -42,7 +42,7 @@ export async function api<T>(path: string, init: RequestInit = {}, options: {ski
     const response = await fetch(API_URL + path, {
       ...init,
       signal: controller.signal,
-      headers: {'Content-Type': 'application/json', ...(accessToken ? {Authorization: `Bearer ${accessToken}`} : {}), ...init.headers},
+      headers: {'Content-Type': 'application/json','Accept-Language':i18n.language, ...(accessToken ? {Authorization: `Bearer ${accessToken}`} : {}), ...init.headers},
     });
     let payload: unknown;
     const contentType = response.headers.get('content-type') || '';
@@ -77,11 +77,11 @@ export async function register(display_name:string,email:string,password:string)
   return api<{access_token:string;refresh_token:string;token_type:string}>('/auth/register',{method:'POST',body:JSON.stringify({display_name,email,password})},{skipAuthRedirect:true});
 }
 
-export async function apiDownload(path:string):Promise<Blob>{const response=await fetch(API_URL+path,{headers:{Authorization:`Bearer ${token.get()||''}`}});if(!response.ok)throw new ApiError(`ייצוא הדוח נכשל (${response.status})`,response.status);return response.blob()}
+export async function apiDownload(path:string):Promise<Blob>{const response=await fetch(API_URL+path,{headers:{Authorization:`Bearer ${token.get()||''}`,'Accept-Language':i18n.language}});if(!response.ok)throw new ApiError(i18n.t('errors.server'),response.status);return response.blob()}
 
 export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   const response = await fetch(API_URL + path, {
-    method: 'POST', headers: { Authorization: `Bearer ${token.get() || ''}` }, body: form,
+    method: 'POST', headers: { Authorization: `Bearer ${token.get() || ''}`, 'Accept-Language':i18n.language }, body: form,
   });
   const payload = await response.json();
   if (!response.ok) throw new ApiError(payload.detail || `העלאת הקובץ נכשלה (${response.status})`, response.status);

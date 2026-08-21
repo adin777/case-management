@@ -283,8 +283,8 @@ class Case(TimestampMixin, Base):
         Enum(CaseStatus, native_enum=False), default=CaseStatus.submitted
     )
     priority: Mapped[str] = mapped_column(String(30), default="normal")
-    priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("priority_definitions.id"))
-    sub_priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sub_priority_definitions.id"))
+    priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("global_priority_definitions.id"))
+    sub_priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("global_sub_priority_definitions.id"))
     reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
@@ -568,11 +568,66 @@ class GlobalCaseFieldValue(Base):
     value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
 
 
+class CaseSemanticSyncConflict(TimestampMixin, Base):
+    __tablename__ = "case_semantic_sync_conflicts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    semantic_binding: Mapped[str] = mapped_column(String(80), index=True)
+    global_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+    optimized_value_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reason: Mapped[str] = mapped_column(String(120))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class UserImportSession(TimestampMixin, Base):
     __tablename__ = "user_import_sessions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     snapshot_json: Mapped[list] = mapped_column(JSON, default=list)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Language(Base):
+    __tablename__ = "languages"
+    code: Mapped[str] = mapped_column(String(12), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    native_name: Mapped[str] = mapped_column(String(100))
+    direction: Mapped[str] = mapped_column(String(3), default="ltr")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class EntityTranslation(Base):
+    __tablename__ = "entity_translations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entity_type: Mapped[str] = mapped_column(String(80), index=True)
+    entity_id: Mapped[str] = mapped_column(String(80), index=True)
+    field_name: Mapped[str] = mapped_column(String(80))
+    language_code: Mapped[str] = mapped_column(ForeignKey("languages.code"))
+    value: Mapped[str] = mapped_column(Text)
+    __table_args__ = (UniqueConstraint("entity_type", "entity_id", "field_name", "language_code"),)
+
+
+class CaseRelation(Base):
+    __tablename__ = "case_relations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    child_case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), unique=True, index=True)
+    relation_type: Mapped[str] = mapped_column(String(30), default="parent_child")
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (UniqueConstraint("parent_case_id", "child_case_id", "relation_type"),)
+
+
+class CaseStatusChangePreview(Base):
+    __tablename__ = "case_status_change_previews"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    target_status_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("global_status_definitions.id"))
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    include_descendants: Mapped[bool] = mapped_column(Boolean, default=False)
+    snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

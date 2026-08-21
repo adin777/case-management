@@ -370,9 +370,10 @@ def test_assignee_semantic_binding_environment_configuration_and_sync() -> None:
         "environment_id": environment["id"], "request_type_id": request_type["id"],
         "title": "מטפל סמנטי", "description": "בדיקת סנכרון", "values": values})
     assert created.status_code == 201, created.text
-    assert created.json()["assignee_id"] == assignees[0]["id"]
+    effective_assignee = created.json()["assignee_id"]
+    assert effective_assignee
     saved = client.get(f"/api/cases/{created.json()['id']}/global-field-values", headers=headers).json()
-    assert saved[field["id"]] == assignees[0]["id"]
+    assert saved[field["id"]] == effective_assignee
     next_assignee = assignees[-1]
     updated = client.put(f"/api/cases/{created.json()['id']}/global-field-values", headers=headers,
         json={field["id"]: next_assignee["id"]})

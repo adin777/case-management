@@ -1,0 +1,1 @@
+"""Semantic global-field synchronization."""

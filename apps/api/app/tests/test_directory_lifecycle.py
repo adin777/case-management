@@ -125,6 +125,33 @@ def test_excel_preview_import_and_export() -> None:
     assert second_preview.json()["created"] == 0
 
 
+def test_excel_active_markers_are_strict_and_y_creates_active_user() -> None:
+    headers = auth()
+    template = client.get("/api/users/import/template", headers=headers).content
+    for marker, email, expected_active in (
+        ("Y", "itay@gmail.com", True),
+        ("N", f"inactive-marker-{uuid.uuid4().hex[:6]}@example.com", False),
+    ):
+        content = add_template_row(template, ["איתי", "נקר", "איתי", email, "יאתי", "IT",
+            "בודק תוכנה", "", "", "124" if expected_active else "125", "7709", marker])
+        preview = client.post("/api/users/import/preview", headers=headers,
+            files={"file": ("users.xlsx", content)})
+        assert preview.status_code == 200 and preview.json()["errors"] == 0
+        applied = client.post("/api/users/import/apply", headers=headers,
+            json={"import_session_id": preview.json()["import_session_id"]})
+        assert applied.status_code == 200
+        with SessionLocal() as db:
+            imported = db.scalar(select(User).where(User.email == email))
+            assert imported and imported.is_active is expected_active
+        visible = client.get(f"/api/users?active_only={'true' if expected_active else 'false'}", headers=headers)
+        assert any(row["email"] == email and row["is_active"] is expected_active for row in visible.json())
+    invalid = add_template_row(template, ["Bad", "Marker", "Bad Marker", "bad-marker@example.com",
+        "bad-marker@example.com", "", "", "", "", "126", "", "maybe"])
+    response = client.post("/api/users/import/preview", headers=headers,
+        files={"file": ("users.xlsx", invalid)})
+    assert response.status_code == 422 and "Active" in response.json()["detail"]
+
+
 def test_full_export_snake_case_updates_creates_and_applies_known_memberships() -> None:
     headers = auth()
     with SessionLocal() as db:

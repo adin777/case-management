@@ -1,9 +1,9 @@
 import io
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
@@ -15,7 +15,9 @@ from app.modules.access.models import PermissionDomain
 from app.modules.access.service import replace_levels
 from app.modules.api import DB, Current, audit, case_access, permissions, require
 from app.modules.approvals.service import create_step_tasks, resubmit_approval
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.case_visibility.service import CaseVisibilityService
+from app.modules.localization.service import LocalizationService
 from app.modules.models import (
     ApprovalFlowDefinition,
     ApprovalInstance,
@@ -88,28 +90,50 @@ def case_field_dict(row: CaseFieldDefinition) -> dict[str, Any]:
 @router.get("/environments/{environment_id}/case-fields")
 def list_case_fields(environment_id: uuid.UUID, db: DB, user: Current,
                      request_type_id: uuid.UUID | None = None,
-                     presentation: str | None = None) -> dict[str, list[dict[str, Any]]]:
+                     presentation: str | None = None,
+                     accept_language: Annotated[str | None, Header()] = None) -> dict[str, list[dict[str, Any]]]:
     require(db, user, environment_id, "environment.read")
     query = select(CaseFieldDefinition).where(CaseFieldDefinition.environment_id == environment_id)
     if request_type_id:
         query = query.where(or_(CaseFieldDefinition.request_type_id.is_(None),
                                 CaseFieldDefinition.request_type_id == request_type_id))
-    environment_fields = [case_field_dict(row) for row in db.scalars(query.order_by(CaseFieldDefinition.sort_order))]
+    localizer = LocalizationService(db, accept_language)
+    environment_fields = []
+    for row in db.scalars(query.order_by(CaseFieldDefinition.sort_order)):
+        payload = case_field_dict(row)
+        payload["label"] = localizer.text("case_field",row.id,"label",legacy_he=row.label_he,
+            legacy_en=row.label_en,technical_fallback=row.key)
+        payload["options_json"] = [{**option,"label":localizer.text("case_field_option",
+            f"{row.id}:{option.get('value')}","label",legacy_he=option.get("label_he"),
+            legacy_en=option.get("label_en"),technical_fallback=str(option.get("value","")))}
+            for option in (row.options_json or [])]
+        environment_fields.append(payload)
     configurations = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
         EnvironmentGlobalCaseField.environment_id == environment_id))}
     global_fields = []
-    for row in db.scalars(select(GlobalCaseFieldDefinition).order_by(GlobalCaseFieldDefinition.sort_order)):
-        config = configurations.get(row.id)
+    semantics = CaseSemanticFieldService(db)
+    for global_row in db.scalars(select(GlobalCaseFieldDefinition).order_by(GlobalCaseFieldDefinition.sort_order)):
+        config = configurations.get(global_row.id)
         visible = (config.is_visible if config else True)
         if presentation == "create": visible = visible and (config.show_on_create if config else True)
         if presentation == "edit": visible = visible and (config.show_on_edit if config else True)
-        if row.is_active and visible:
-            global_fields.append({"id": row.id, "key": row.key, "label_he": row.label_he,
-                "label_en": row.label_en, "field_type": row.field_type,
+        if global_row.is_active and visible:
+            global_fields.append({"id": global_row.id, "key": global_row.key, "label_he": global_row.label_he,
+                "label_en": global_row.label_en, "field_type": global_row.field_type,
+                "label":localizer.text("global_case_field",global_row.id,"label",legacy_he=global_row.label_he,
+                    legacy_en=global_row.label_en,technical_fallback=global_row.key),
                 "is_required": config.is_required if config else False,
-                "is_active": row.is_active, "sort_order": row.sort_order,
-                "configuration_json": row.configuration_json or {}, "source": "global",
-                "semantic_binding": row.semantic_binding,
+                "is_active": global_row.is_active, "sort_order": global_row.sort_order,
+                "configuration_json": {**(global_row.configuration_json or {}), "options":(
+                    semantics.options(global_row.semantic_binding)
+                    if global_row.semantic_binding in {"case.status","case.priority","case.sub_priority"}
+                    else [
+                    {**option,"label":localizer.text("global_case_field_option",
+                        f"{global_row.id}:{option.get('id',option.get('value'))}","label",
+                        legacy_he=option.get("label_he"),legacy_en=option.get("label_en"),
+                        technical_fallback=str(option.get("id",option.get("value",""))))}
+                    for option in (global_row.configuration_json or {}).get("options",[])])}, "source": "global",
+                "semantic_binding": global_row.semantic_binding,
                 "environment_configuration": {
                     "is_visible": config.is_visible if config else True,
                     "is_required": config.is_required if config else False,
@@ -485,21 +509,22 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
                  workflow_status_id: uuid.UUID | None = None,
                  priority_id: uuid.UUID | None = None,
                  include_participating: bool = False) -> Any:
+    semantics=CaseSemanticFieldService(db)
     query = select(Case, Environment, RequestType, User).join(Environment, Case.environment_id == Environment.id).join(
         RequestType, Case.request_type_id == RequestType.id).join(User, Case.requester_id == User.id)
     query = CaseVisibilityService(db, user).apply(query)
     if environment_id: query = query.where(Case.environment_id == environment_id)
     if request_type_id: query = query.where(Case.request_type_id == request_type_id)
     status_label = select(GlobalStatusDefinition.label_he).where(
-        GlobalStatusDefinition.id == Case.workflow_status_id).correlate(Case).scalar_subquery()
+        GlobalStatusDefinition.id == semantics.indexed_column("case.status")).correlate(Case).scalar_subquery()
     priority_label = select(GlobalPriorityDefinition.label_he).where(
-        GlobalPriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery()
+        GlobalPriorityDefinition.id == semantics.indexed_column("case.priority")).correlate(Case).scalar_subquery()
     assignee_label = select(User.display_name).where(
-        User.id == Case.assignee_id).correlate(Case).scalar_subquery()
+        User.id == semantics.indexed_column("case.assignee")).correlate(Case).scalar_subquery()
     if status: query = query.where(status_label == status)
     if search: query = query.where(or_(Case.case_number.ilike(f"%{search}%"), Case.title.ilike(f"%{search}%")))
     if created_by_id: query = query.where(Case.reporter_id == created_by_id)
-    if assignee_id: query = query.where(Case.assignee_id == assignee_id)
+    if assignee_id: query = query.where(semantics.indexed_column("case.assignee") == assignee_id)
     if created_from: query = query.where(Case.created_at >= created_from)
     if created_to: query = query.where(Case.created_at <= created_to)
     if updated_from: query = query.where(Case.updated_at >= updated_from)
@@ -508,8 +533,8 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
     if title: query = query.where(Case.title.ilike(f"%{title}%"))
     if description: query = query.where(Case.description.ilike(f"%{description}%"))
     if priority: query = query.where(Case.priority == priority)
-    if workflow_status_id: query = query.where(Case.workflow_status_id == workflow_status_id)
-    if priority_id: query = query.where(Case.priority_id == priority_id)
+    if workflow_status_id: query = query.where(semantics.indexed_column("case.status") == workflow_status_id)
+    if priority_id: query = query.where(semantics.indexed_column("case.priority") == priority_id)
     columns = {"case_number": Case.case_number, "created_at": Case.created_at,
                "updated_at": Case.updated_at, "priority": priority_label, "status": status_label,
                "title": Case.title, "environment": Environment.name_he,
@@ -519,15 +544,13 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
     return query.order_by(column.asc() if direction == "asc" else column.desc())
 
 
-def report_row(row: Any) -> dict[str, Any]:
+def report_row(row:Any,semantics:CaseSemanticFieldService)->dict[str,Any]:
     item, env, request_type, requester = row[:4]
     assignee = row[4] if len(row) > 4 else None
-    status_label = row[5] if len(row) > 5 else item.status.value
-    priority_label = row[6] if len(row) > 6 else item.priority
     return {"case_number": item.case_number, "environment": env.name_he,
             "request_type": request_type.name_he, "title": item.title,
-            "description": item.description or "", "status": status_label or item.status.value,
-            "priority": priority_label or "לא הוגדרה", "requester": requester.display_name,
+            "description":item.description or "","status":semantics.label(item,"case.status"),
+            "priority":semantics.label(item,"case.priority"),"requester":requester.display_name,
             "assignee": assignee or "ללא מטפל",
             "created_at": item.created_at.isoformat(), "updated_at": item.updated_at.isoformat()}
 
@@ -559,21 +582,31 @@ def cases_report(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
                          case_number, title, description, priority, workflow_status_id, priority_id,
                          include_participating)
-    query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
-    query = query.add_columns(select(GlobalStatusDefinition.label_he).where(GlobalStatusDefinition.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
-    query = query.add_columns(select(GlobalPriorityDefinition.label_he).where(GlobalPriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
+    query=query.add_columns(select(User.display_name).where(
+        User.id == CaseSemanticFieldService(db).indexed_column("case.assignee")).correlate(Case).scalar_subquery().label("assignee"))
     rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
-    return {"items": [report_row(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+    semantics=CaseSemanticFieldService(db)
+    return {"items":[report_row(row,semantics) for row in rows],"total":total,"page":page,"page_size":page_size}
 
 
 @router.get("/reports/cases/value-sources")
-def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None = None) -> dict[str, Any]:
+def report_value_sources(db: DB, user: Current, environment_id: uuid.UUID | None = None,
+                         accept_language: Annotated[str | None, Header()] = None) -> dict[str, Any]:
     require_report_access(db, user, environment_id)
     status_query = select(GlobalStatusDefinition).where(GlobalStatusDefinition.is_active.is_(True))
     priority_query = select(GlobalPriorityDefinition).where(GlobalPriorityDefinition.is_active.is_(True))
-    statuses = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(status_query.order_by(GlobalStatusDefinition.sort_order))]
-    priorities = [{"id": row.id, "code": row.code, "label_he": row.label_he} for row in db.scalars(priority_query.order_by(GlobalPriorityDefinition.sort_order))]
+    localizer = LocalizationService(db, accept_language)
+    statuses = [{"id":row.id,"code":row.code,
+        "label_he":localizer.text("global_status",row.id,"label",legacy_he=row.label_he,
+            legacy_en=row.label_en,technical_fallback=row.code),"label_en":row.label_en,
+        "label":localizer.text("global_status",row.id,"label",legacy_he=row.label_he,
+            legacy_en=row.label_en,technical_fallback=row.code)}
+        for row in db.scalars(status_query.order_by(GlobalStatusDefinition.sort_order))]
+    priorities = [{"id":row.id,"code":row.code,"label_he":row.label_he,"label_en":row.label_en,
+        "label":localizer.text("global_priority",row.id,"label",legacy_he=row.label_he,
+            legacy_en=row.label_en,technical_fallback=row.code)}
+        for row in db.scalars(priority_query.order_by(GlobalPriorityDefinition.sort_order))]
     return {"statuses": statuses, "priorities": priorities}
 
 
@@ -612,9 +645,9 @@ def export_cases(db: DB, user: Current, environment_id: uuid.UUID | None = None,
                          created_by_id, assignee_id, created_from, created_to, updated_from, updated_to,
                          case_number, title, description, priority, workflow_status_id, priority_id,
                          include_participating=include_participating)
-    query = query.add_columns(select(User.display_name).where(User.id == Case.assignee_id).correlate(Case).scalar_subquery().label("assignee"))
-    query = query.add_columns(select(GlobalStatusDefinition.label_he).where(GlobalStatusDefinition.id == Case.workflow_status_id).correlate(Case).scalar_subquery().label("workflow_status"))
-    query = query.add_columns(select(GlobalPriorityDefinition.label_he).where(GlobalPriorityDefinition.id == Case.priority_id).correlate(Case).scalar_subquery().label("priority_label"))
-    rows = [report_row(row) for row in db.execute(query.limit(5000)).all()]
+    semantics=CaseSemanticFieldService(db)
+    query=query.add_columns(select(User.display_name).where(
+        User.id == semantics.indexed_column("case.assignee")).correlate(Case).scalar_subquery().label("assignee"))
+    rows=[report_row(row,semantics) for row in db.execute(query.limit(5000)).all()]
     content = xlsx_bytes(rows, {"environment_id": str(environment_id or ""), "request_type_id": str(request_type_id or ""), "status": status or "", "search": search or "", "sort": sort, "direction": direction})
     return StreamingResponse(io.BytesIO(content), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="case-report.xlsx"'})

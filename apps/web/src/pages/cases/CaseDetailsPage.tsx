@@ -13,6 +13,8 @@ import { ConversationPanel } from './details/ConversationPanel';
 import { CaseApprovalsPanel } from './details/CaseApprovalsPanel';
 import { InlineTextField } from './details/InlineTextField';
 import { CaseTransferWizard } from './details/CaseTransferWizard';
+import { RelatedCasesPanel } from './details/RelatedCasesPanel';
+import { StatusCascadeDialog } from './details/StatusCascadeDialog';
 
 type StatusOption = { id: string; label_he: string; current: boolean; allowed: boolean; reason?: string };
 type CaseWithEnvironment = Case & { environment_name?: string };
@@ -26,6 +28,7 @@ export function CaseDetailsPage() {
   const [lockOpen, setLockOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [globalValues, setGlobalValues] = useState<Record<string,unknown>>({});
+  const [pendingStatus, setPendingStatus] = useState<string>();
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/auth/me') });
   const { data: item, isLoading } = useQuery({ queryKey: ['case', id], queryFn: () => api<CaseWithEnvironment>(`/cases/${id}`) });
   const enabled = !!item;
@@ -37,6 +40,7 @@ export function CaseDetailsPage() {
   const { data: caseFields = {global_fields:[] as Field[],environment_fields:[] as Field[]} } = useQuery({ queryKey: ['case-fields', item?.environment_id, item?.request_type_id], queryFn: () => api<{global_fields:Field[];environment_fields:Field[]}>(`/environments/${item!.environment_id}/case-fields?request_type_id=${item!.request_type_id}&presentation=edit`), enabled });
   const hasBoundAssigneeField = caseFields.global_fields.some((field) => field.semantic_binding === 'case.assignee');
   const { data: storedGlobalValues = {} } = useQuery({ queryKey: ['case-global-field-values', id], queryFn: () => api<Record<string,unknown>>(`/cases/${id}/global-field-values`), enabled });
+  const {data:relations} = useQuery({queryKey:['case-relations',id],queryFn:()=>api<{children:{id:string}[]}>(`/cases/${id}/relations`),enabled});
   useEffect(()=>setGlobalValues(storedGlobalValues),[storedGlobalValues]);
   const candidates = useMemo(() => users.filter((user) => user.is_active !== false && !participants.some((row) => row.user_id === user.id)), [users, participants]);
   const refresh = () => qc.invalidateQueries({ queryKey: ['case', id] });
@@ -47,6 +51,7 @@ export function CaseDetailsPage() {
     } catch (caught) { setError((caught as Error).message); throw caught; }
   }
   async function transition(workflow_status_id: string) {
+    if(relations?.children.length){setPendingStatus(workflow_status_id);return;}
     try { await api(`/cases/${id}/transitions`, { method: 'POST', body: JSON.stringify({ workflow_status_id }) }); await refresh(); }
     catch (caught) { setError((caught as Error).message); }
   }
@@ -68,7 +73,7 @@ export function CaseDetailsPage() {
   async function saveGlobalFields(){try{const saved=await api<Record<string,unknown>>(`/cases/${id}/global-field-values`,{method:'PUT',body:JSON.stringify(globalValues)});setGlobalValues(saved);setSuccess('השדות הגלובליים נשמרו ואומתו מחדש');await qc.invalidateQueries({queryKey:['case-global-field-values',id]});}catch(caught){setError((caught as Error).message);}}
   if (isLoading || !item) return <Box sx={{ display: 'grid', placeItems: 'center', minHeight: 400 }}><CircularProgress/></Box>;
   const editable = item.permissions.can_edit;
-  const currentStatus = statuses.find((row) => row.current)?.label_he || statusLabel(item.status);
+  const currentStatus = statuses.find((row) => row.current)?.label_he || item.status_label || statusLabel(item.status);
   return <Box sx={{ minHeight: '100%', py: 3 }}><Container maxWidth="xl"><Stack spacing={2.5}>
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
     {success && <Alert severity="success" onClose={() => setSuccess('')}>{success}</Alert>}
@@ -102,10 +107,12 @@ export function CaseDetailsPage() {
           {item.permissions.can_manage_participants && <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} mt={2}><TextField select fullWidth label="הוספת משתמש" value={participantId} onChange={(event) => setParticipantId(event.target.value)}>{candidates.map((user) => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}</TextField><Button startIcon={<PersonAdd/>} disabled={!participantId} onClick={addParticipant}>הוספה</Button></Stack>}
         </CardContent></Card>
         <CaseApprovalsPanel caseId={item.id}/>
+        <RelatedCasesPanel caseId={item.id} canEdit={editable}/>
         <CaseAttachments caseId={item.id}/>
       </Stack></Grid>
     </Grid>
     <CaseLockDialog open={lockOpen} locked={item.is_locked} onClose={() => setLockOpen(false)} onSave={saveLock}/>
     <CaseTransferWizard caseId={item.id} currentEnvironmentId={item.environment_id} open={transferOpen} onClose={()=>setTransferOpen(false)} onTransferred={()=>{setSuccess('הקריאה הועברה בהצלחה');refresh()}}/>
+    <StatusCascadeDialog caseId={item.id} statusId={pendingStatus} open={!!pendingStatus} onClose={()=>setPendingStatus(undefined)} onApplied={message=>{setSuccess(message);void refresh();void qc.invalidateQueries({queryKey:['case-relations',id]})}}/>
   </Stack></Container></Box>;
 }

@@ -111,7 +111,9 @@ def import_apply(data: ImportApplyIn, db: DB, user: Current) -> dict[str, Any]:
     session.applied_at = datetime.now(UTC)
     audit(db, user, "directory_sync_run", run.id, "excel_import_applied")
     db.commit()
-    return run_dict(run)
+    created_or_updated = [{"email":str(row.email),"display_name":row.display_name,
+        "is_active":row.directory_enabled} for row in users]
+    return {**run_dict(run), "users":created_or_updated}
 
 
 @router.get("/users-export")

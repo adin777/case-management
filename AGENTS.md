@@ -30,6 +30,17 @@ regression becomes permanent automated coverage.
 After implementation, do not use an ad-hoc subset as final validation. Always run:
 `powershell -ExecutionPolicy Bypass -File .\scripts\run-regression.ps1`.
 
+## FIELD CONSUMER MIGRATION RULE
+
+Whenever a field model or source changes, the change is incomplete until every consumer is migrated.
+The mandatory consumer audit covers Create, Edit, Details, Dashboard, Lists, Reports, Filters,
+Sorting, Export, Import, Transfer, Automations, Approvals, API DTOs, and Tests.
+
+There must be exactly one source of truth for each business value. Legacy columns may remain as
+automatically synchronized query indexes, but must not remain independent active consumers after
+migration to configurable or Global Fields. Every query-index write must pass through the shared
+domain service that owns the configurable value.
+
 ## SIMPLE FIRST
 
 כאשר פעולה יכולה להתבצע באופן ישיר וברור במסך, אין להוסיף שלב, Dialog, מצב עריכה או כפתור נוסף ללא צורך ממשי. שדה פשוט שניתן לעריכה יוצג כ־inline editable; אין להסתיר ערכים רלוונטיים או להוסיף ניווט כאשר הפעולה יכולה להתבצע במקום. לפני השלמת UI יש לשאול האם אפשר לבצע את אותה פעולה בפחות צעדים ולבחור בפתרון הפשוט יותר.
@@ -363,6 +374,12 @@ Permission to perform a business action includes read access to the configuratio
 - Single Select נסגר מיד לאחר בחירה מוצלחת. Multi Select רשאי להישאר פתוח לבחירה חוזרת.
   לכל dropdown יש label גלוי, מקור ערכים תקף, empty state מתורגם, keyboard support וכיווניות נכונה.
 - UI הרשאות מציג תמיד אמת: default, direct override ו־effective state אינם רשאים לסתור זה את זה חזותית.
+- Backend localization uses one shared `LocalizationService`; Components and report queries do not
+  implement independent dynamic-label fallback rules.
+- Adding a supported language never adds `*_language` columns or requires a schema migration for
+  business entities; translations are DB-backed by stable entity IDs.
+- A feature is not multilingual when only its menu is translated. Page content, configurable labels,
+  values, errors, reports and dialogs must all resolve in the active language with the defined fallback.
 
 ## Migrations ושמירת מידע
 

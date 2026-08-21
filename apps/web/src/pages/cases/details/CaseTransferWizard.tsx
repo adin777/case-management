@@ -12,6 +12,8 @@ type Preview = {
   request_types: { id: string; name_he: string; requires_approval: boolean }[];
   removed_participant_ids: string[];
   assignee_will_be_removed: boolean;
+  global_fields_preserved: number;
+  environment_fields_removed: number;
   warning: string;
 };
 export type TransferRequirements = {
@@ -74,10 +76,6 @@ export function CaseTransferWizard({ caseId, currentEnvironmentId, open, onClose
         const result = await api<unknown>(`/cases/${caseId}/transfer-requirements?request_type_id=${requestType}`);
         setRequirements(normalizeTransferRequirements(result));
         setStep(2);
-      } else if (step === 2) {
-        const missing = (requirements?.required_fields ?? []).filter(field => !(values[field.id] || '').trim());
-        if (missing.length) throw new Error(`חובה למלא: ${missing.map(field => field.label).join(', ')}`);
-        setStep(3);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'טעינת נתוני ההעברה נכשלה');
@@ -103,7 +101,7 @@ export function CaseTransferWizard({ caseId, currentEnvironmentId, open, onClose
   return <Dialog open={open} onClose={loading ? undefined : onClose} fullWidth maxWidth="md">
     <DialogTitle>העברת קריאה לסביבה אחרת</DialogTitle>
     <DialogContent><Stack spacing={2} sx={{ pt: 1 }}>
-      <Stepper activeStep={step}>{['סביבת יעד', 'השוואה', 'השלמת מידע', 'אישור'].map(label => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}</Stepper>
+      <Stepper activeStep={step}>{['סביבת יעד', 'השוואה', 'אישור'].map(label => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}</Stepper>
       {(error || environmentsQuery.error) && <Alert severity="error">{error || (environmentsQuery.error as Error).message}</Alert>}
       {loading && <Stack direction="row" spacing={1} alignItems="center"><CircularProgress size={20}/><Typography>טוען נתונים…</Typography></Stack>}
       {step === 0 && <TextField select label="סביבת יעד" value={target} disabled={loading} onChange={event => { setTarget(event.target.value); clearDependent(); }}>
@@ -112,26 +110,24 @@ export function CaseTransferWizard({ caseId, currentEnvironmentId, open, onClose
       {step === 1 && preview && <>
         {preview.warning && <Alert severity="warning">{preview.warning}</Alert>}
         <Typography>העברה אל: <strong>{preview.target_environment_name}</strong></Typography>
+        <Typography>שדות גלובליים שיישמרו: {preview.global_fields_preserved}</Typography>
+        <Typography>שדות סביבתיים שיוסרו: {preview.environment_fields_removed}</Typography>
         <Typography>משתתפים שיוסרו: {preview.removed_participant_ids.length}</Typography>
+        <Typography>מטפל: {preview.assignee_will_be_removed ? 'יוסר כי אינו זכאי בסביבת היעד' : 'יישמר אם הוא זכאי'}</Typography>
         <TextField select label="סוג קריאה בסביבת היעד" value={requestType} disabled={loading} onChange={event => setRequestType(event.target.value)}>
           {preview.request_types.map(type => <MenuItem key={type.id} value={type.id}>{type.name_he}</MenuItem>)}
         </TextField>
       </>}
-      {step === 2 && requirements && <>
-        <Typography>סטטוס התחלתי: <strong>{req.initial_status_label || 'לא הוגדר'}</strong></Typography>
+      {step === 2 && preview && requirements && <>
         <Alert severity="info">הסטטוס, העדיפות ותת־העדיפות הגלובליים יישמרו ללא שינוי.</Alert>
         <TextField select label="מטפל בסביבת היעד" value={assignee} disabled={loading} onChange={event => setAssignee(event.target.value)}>
           <MenuItem value="">ללא שיוך</MenuItem>{req.assignees.map(user => <MenuItem key={user.id} value={user.id}>{user.display_name} · {user.email}</MenuItem>)}
         </TextField>
-        {req.required_fields.map(field => <TextField key={field.id} required label={field.label} value={values[field.id] || ''} onChange={event => setValues(current => ({ ...current, [field.id]: event.target.value }))}/>)}
-      </>}
-      {step === 3 && preview && requirements && <>
         <Alert severity="warning">העברת הקריאה תשנה את סביבת העבודה. המידע ההיסטורי יישמר.</Alert>
         <Typography>סביבה: {preview.target_environment_name}</Typography>
-        <Typography>סטטוס חדש: {req.initial_status_label || 'לא הוגדר'}</Typography>
         <TextField label="סיבת ההעברה (רשות)" multiline value={reason} onChange={event => setReason(event.target.value)}/>
       </>}
     </Stack></DialogContent>
-    <DialogActions><Button disabled={loading} onClick={onClose}>ביטול</Button>{step > 0 && <Button disabled={loading} onClick={() => setStep(current => current - 1)}>חזרה</Button>}{step < 3 ? <Button variant="contained" disabled={loading || (step === 0 && !target)} onClick={next}>המשך</Button> : <Button variant="contained" color="warning" disabled={loading} onClick={execute}>העברת הקריאה</Button>}</DialogActions>
+    <DialogActions><Button disabled={loading} onClick={onClose}>ביטול</Button>{step > 0 && <Button disabled={loading} onClick={() => setStep(current => current - 1)}>חזרה</Button>}{step < 2 ? <Button variant="contained" disabled={loading || (step === 0 && !target)} onClick={next}>המשך</Button> : <Button variant="contained" color="warning" disabled={loading} onClick={execute}>העברת הקריאה</Button>}</DialogActions>
   </Dialog>;
 }

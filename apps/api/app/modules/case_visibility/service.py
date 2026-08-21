@@ -4,6 +4,7 @@ from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.access.service import domain_permissions
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.environment_manager.service import EnvironmentManagerService
 from app.modules.models import Case, CaseParticipant, Environment, User
 
@@ -33,7 +34,7 @@ class CaseVisibilityService:
         conditions = [
             Case.reporter_id == self.user.id,
             Case.requester_id == self.user.id,
-            Case.assignee_id == self.user.id,
+            CaseSemanticFieldService(self.db).indexed_column("case.assignee") == self.user.id,
             Case.environment_id.in_(self.readable_environment_ids()),
         ]
         if include_participants:

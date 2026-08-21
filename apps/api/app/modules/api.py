@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from typing import cast as typing_cast
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer
 from pwdlib import PasswordHash
 from pydantic import BaseModel, EmailStr, Field
@@ -21,10 +21,12 @@ from app.database.session import get_db
 from app.modules.access.service import domain_permissions
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.case_visibility.service import CaseVisibilityService, can_manage_locked_case
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_clone.service import clone_configuration
 from app.modules.global_case_values.service import active_values, initial_status
+from app.modules.localization.service import LocalizationService
 from app.modules.models import (
     AuditEvent,
     Case,
@@ -40,9 +42,7 @@ from app.modules.models import (
     FormStatus,
     GlobalCaseFieldDefinition,
     GlobalCaseFieldValue,
-    GlobalPriorityDefinition,
     GlobalStatusDefinition,
-    GlobalSubPriorityDefinition,
     Group,
     RefreshToken,
     RequestType,
@@ -133,6 +133,7 @@ class EnvironmentOut(EnvironmentIn):
     system_number: str
     code: str
     is_active: bool
+    localized_name: str | None = None
     model_config = {"from_attributes": True}
 
 
@@ -168,6 +169,7 @@ class RequestTypeOut(RequestTypeIn):
     system_number: str | None
     is_active: bool
     form_version_id: uuid.UUID | None
+    localized_name: str | None = None
     model_config = {"from_attributes": True}
 
 
@@ -217,6 +219,7 @@ class CaseIn(BaseModel):
     sub_priority_id: uuid.UUID | None = None
     participant_ids: list[uuid.UUID] = Field(default_factory=list)
     values: list[ValueIn] = Field(default_factory=list)
+    parent_case_id: uuid.UUID | None = None
 
 
 class CommentOut(BaseModel):
@@ -267,6 +270,10 @@ class CaseOut(BaseModel):
     locked_by: uuid.UUID | None
     lock_reason: str | None
     workflow_status_id: uuid.UUID | None
+    status_label: str | None = None
+    priority_label: str | None = None
+    sub_priority_label: str | None = None
+    assignee_label: str | None = None
     sla_policy_id: uuid.UUID | None
     response_due_at: datetime | None
     resolution_due_at: datetime | None
@@ -592,8 +599,15 @@ def groups(db: DB, user: Current) -> list[dict]:
             for row in db.scalars(select(Group).order_by(Group.name))]
 
 
+def localized_environment(row: Environment, localizer: LocalizationService) -> dict[str, Any]:
+    payload = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+    payload["localized_name"] = localizer.text("environment", row.id, "name",
+        legacy_he=row.name_he, legacy_en=row.name_en, technical_fallback=row.code)
+    return payload
+
+
 @router.get("/environments", response_model=list[EnvironmentOut])
-def environments(db: DB, user: Current) -> list[Environment]:
+def environments(db: DB, user: Current, accept_language: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
     query = select(Environment).order_by(Environment.name_he)
     if not user.is_system_admin:
         query = query.join(EnvironmentMembership).where(EnvironmentMembership.user_id == user.id)
@@ -605,11 +619,13 @@ def environments(db: DB, user: Current) -> list[Environment]:
             changed = True
     if changed:
         db.commit()
-    return rows
+    localizer = LocalizationService(db, accept_language)
+    return [localized_environment(row, localizer) for row in rows]
 
 
 @router.get("/case-creation/environments", response_model=list[EnvironmentOut])
-def case_creation_environments(db: DB, user: Current) -> list[Environment]:
+def case_creation_environments(db: DB, user: Current,
+                               accept_language: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
     query = select(Environment).where(Environment.is_active.is_(True)).order_by(Environment.name_he)
     if not user.is_system_admin:
         query = query.join(EnvironmentMembership).where(
@@ -624,7 +640,8 @@ def case_creation_environments(db: DB, user: Current) -> list[Environment]:
             changed = True
     if changed:
         db.commit()
-    return rows
+    localizer = LocalizationService(db, accept_language)
+    return [localized_environment(row, localizer) for row in rows]
 
 
 @router.get("/case-creation/environments/{environment_id}/configuration")
@@ -835,12 +852,17 @@ def add_membership(environment_id: uuid.UUID, data: MembershipIn, db: DB, user: 
 
 @router.get("/request-types", response_model=list[RequestTypeOut])
 def request_types(db: DB, user: Current, environment_id: Annotated[uuid.UUID, Query()],
-                  active_only: bool = False) -> list[RequestType]:
+                  active_only: bool = False,
+                  accept_language: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
     require(db, user, environment_id, "request_type.read")
     query = select(RequestType).where(RequestType.environment_id == environment_id)
     if active_only:
         query = query.where(RequestType.is_active.is_(True))
-    return list(db.scalars(query.order_by(RequestType.sort_order, RequestType.name_he)))
+    localizer = LocalizationService(db, accept_language)
+    rows = list(db.scalars(query.order_by(RequestType.sort_order, RequestType.name_he)))
+    return [{**{column.name:getattr(row,column.name) for column in row.__table__.columns},
+             "localized_name":localizer.text("request_type",row.id,"name",legacy_he=row.name_he,
+                 legacy_en=row.name_en,technical_fallback=row.code)} for row in rows]
 
 
 @router.post("/request-types", response_model=RequestTypeOut, status_code=201)
@@ -1042,6 +1064,12 @@ def eligible_assignee_rows(db: DB, environment_id: uuid.UUID) -> list[dict[str, 
 @router.post("/cases", response_model=CaseOut, status_code=201)
 def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     require(db, user, data.environment_id, "case.create")
+    parent = db.get(Case, data.parent_case_id) if data.parent_case_id else None
+    if data.parent_case_id:
+        if not parent:
+            raise HTTPException(404, "הקריאה הראשית לא נמצאה")
+        case_access(db, user, parent)
+        require(db, user, parent.environment_id, "case.update")
     rt = db.get(RequestType, data.request_type_id)
     if not rt or rt.environment_id != data.environment_id or not rt.is_active:
         raise HTTPException(422, "סוג הקריאה שנבחר אינו תקף בסביבה זו")
@@ -1076,15 +1104,26 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     )
     db.add(item)
     db.flush()
+    semantics=CaseSemanticFieldService(db)
     item.values = [typed_value(item.id, f, provided.get(f.id)) for f in active_fields if f.id in provided]
     for field in global_fields:
         if field.id in provided:
-            db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=field.id, value_json=provided[field.id]))
-            if field.semantic_binding == "case.assignee":
+            if field.semantic_binding:
                 candidate = provided[field.id]
-                if candidate and str(candidate) not in {str(row["id"]) for row in eligible_assignee_rows(db, data.environment_id)}:
+                if field.semantic_binding == "case.assignee" and candidate and str(candidate) not in {
+                    str(row["id"]) for row in eligible_assignee_rows(db,data.environment_id)}:
                     raise HTTPException(422, "המטפל שנבחר אינו פעיל או אינו משויך לסביבה")
-                item.assignee_id = uuid.UUID(str(candidate)) if candidate else None
+                semantics.write(item,field.semantic_binding,candidate)
+            else:
+                db.add(GlobalCaseFieldValue(case_id=item.id,global_field_id=field.id,
+                    value_json=provided[field.id]))
+    semantic_fields={field.semantic_binding:field for field in global_fields if field.semantic_binding}
+    if "case.status" in semantic_fields and semantic_fields["case.status"].id not in provided:
+        semantics.write(item,"case.status",initial_status(db).id)
+    if "case.priority" in semantic_fields and semantic_fields["case.priority"].id not in provided:
+        semantics.write(item,"case.priority",data.priority_id or rt.default_priority_id)
+    if "case.sub_priority" in semantic_fields and semantic_fields["case.sub_priority"].id not in provided:
+        semantics.write(item,"case.sub_priority",data.sub_priority_id or rt.default_sub_priority_id)
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
         if participant_id != user.id and participant_user:
@@ -1102,11 +1141,10 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
                          {"request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id)})
     AutomationEngine.run(db, item, "case_created", {"request_type": str(item.request_type_id)})
     start_matching_approvals(db, item)
-    bound = next((field for field in global_fields if field.semantic_binding == "case.assignee"
-                  and field.id in provided), None)
-    if bound:
-        candidate = provided[bound.id]
-        item.assignee_id = uuid.UUID(str(candidate)) if candidate else None
+    if parent:
+        from app.modules.case_relations.service import create_relation
+        create_relation(db, parent, item, user)
+        audit(db, user, "case", parent.id, "child_case_created", after={"child_case_id":str(item.id)})
     db.commit()
     return item
 
@@ -1138,7 +1176,7 @@ def cases(
 ) -> list[Case]:
     query = CaseVisibilityService(db, user).apply(select(Case)).order_by(Case.created_at.desc())
     if assigned:
-        query = query.where(Case.assignee_id == user.id)
+        query = query.where(CaseSemanticFieldService(db).indexed_column("case.assignee") == user.id)
     return list(db.scalars(query.offset(offset).limit(limit)).unique())
 
 
@@ -1160,6 +1198,7 @@ def workspace_cases(
     page_size: int = Query(25, ge=1, le=100),
     sort: str = "updated_at:desc",
 ) -> dict[str, Any]:
+    semantics=CaseSemanticFieldService(db)
     active_memberships = list(
         db.scalars(
             select(EnvironmentMembership.environment_id).where(
@@ -1177,7 +1216,7 @@ def workspace_cases(
         select(Case), include_participants=include_participating
     )
     if view == "assigned":
-        query = query.where(Case.assignee_id == user.id)
+        query = query.where(semantics.indexed_column("case.assignee") == user.id)
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
     if title.strip():
@@ -1195,9 +1234,9 @@ def workspace_cases(
             GlobalStatusDefinition.semantic_category.in_(["resolved", "closed"])
         )
         query = query.where(
-            or_(Case.workflow_status_id.is_(None), Case.workflow_status_id.not_in(inactive_statuses))
+            or_(semantics.indexed_column("case.status").is_(None),semantics.indexed_column("case.status").not_in(inactive_statuses))
             if activity_state == "active"
-            else Case.workflow_status_id.in_(inactive_statuses)
+            else semantics.indexed_column("case.status").in_(inactive_statuses)
         )
     if dynamic_filters:
         try:
@@ -1239,12 +1278,6 @@ def workspace_cases(
     request_types_by_id = {
         row.id: row.name_he for row in db.scalars(select(RequestType).where(RequestType.id.in_({x.request_type_id for x in rows})))
     } if rows else {}
-    statuses_by_id = {
-        row.id: row.label_he for row in db.scalars(select(GlobalStatusDefinition).where(GlobalStatusDefinition.id.in_({x.workflow_status_id for x in rows if x.workflow_status_id})))
-    } if rows else {}
-    priorities_by_id = {
-        row.id: row.label_he for row in db.scalars(select(GlobalPriorityDefinition).where(GlobalPriorityDefinition.id.in_({x.priority_id for x in rows if x.priority_id})))
-    } if rows else {}
     return {
         "items": [
             {
@@ -1253,8 +1286,8 @@ def workspace_cases(
                 "title": row.title,
                 "environment": environments_by_id.get(row.environment_id, ""),
                 "request_type": request_types_by_id.get(row.request_type_id, ""),
-                "status": statuses_by_id.get(row.workflow_status_id, "") if row.workflow_status_id else "",
-                "priority": priorities_by_id.get(row.priority_id, row.priority) if row.priority_id else row.priority,
+                "status":semantics.label(row,"case.status"),
+                "priority":semantics.label(row,"case.priority"),
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }
@@ -1283,11 +1316,16 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
     can_override_lock = can_manage_locked_case(db, user, item.environment_id)
     reporter = db.get(User, item.reporter_id)
     environment = db.get(Environment, item.environment_id)
+    semantics=CaseSemanticFieldService(db)
     return CaseOut.model_validate(item).model_copy(
         update={
             "reporter_name": reporter.display_name if reporter else None,
             "reporter_email": reporter.email if reporter else None,
             "environment_name": environment.name_he if environment else None,
+            "status_label":semantics.label(item,"case.status") or None,
+            "priority_label":semantics.label(item,"case.priority") or None,
+            "sub_priority_label":semantics.label(item,"case.sub_priority") or None,
+            "assignee_label":semantics.label(item,"case.assignee") or None,
             "comments": [CommentOut.model_validate(c) for c in visible_comments],
             "permissions": {
                 "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
@@ -1337,17 +1375,20 @@ def update_global_field_values(
                and values.get(field_id) in (None, "")]
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
+    semantics=CaseSemanticFieldService(db)
     for field_id, value in values.items():
-        row = db.get(GlobalCaseFieldValue, (case_id, field_id))
-        if row:
-            row.value_json = value
+        binding=fields[field_id].semantic_binding
+        if binding:
+            eligible = {str(candidate["id"]) for candidate in eligible_assignee_rows(db,item.environment_id)}
+            if binding == "case.assignee" and value and str(value) not in eligible:
+                raise HTTPException(422,"המטפל שנבחר אינו פעיל או אינו משויך לסביבה")
+            semantics.write(item,binding,value)
         else:
-            db.add(GlobalCaseFieldValue(case_id=case_id, global_field_id=field_id, value_json=value))
-        if fields[field_id].semantic_binding == "case.assignee":
-            eligible = {str(row["id"]) for row in eligible_assignee_rows(db, item.environment_id)}
-            if value and str(value) not in eligible:
-                raise HTTPException(422, "המטפל שנבחר אינו פעיל או אינו משויך לסביבה")
-            item.assignee_id = uuid.UUID(str(value)) if value else None
+            row = db.get(GlobalCaseFieldValue, (case_id, field_id))
+            if row:
+                row.value_json = value
+            else:
+                db.add(GlobalCaseFieldValue(case_id=case_id,global_field_id=field_id,value_json=value))
     audit(db, user, "case", item.id, "global_fields_updated", after={str(key): value for key, value in values.items()})
     db.commit()
     return global_field_values(case_id, db, user)
@@ -1374,16 +1415,15 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
             raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם טופס שונה בלי תהליך המרה מפורש")
         if current_type and target_type.requires_approval != current_type.requires_approval:
             raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם מדיניות אישורים שונה")
+    semantics=CaseSemanticFieldService(db)
     if data.priority_id:
-        priority = db.get(GlobalPriorityDefinition, data.priority_id)
-        if not priority or not priority.is_active:
-            raise HTTPException(422, "העדיפות הגלובלית אינה פעילה")
+        semantics.validate_value("case.priority",data.priority_id)
     if data.sub_priority_id:
-        sub_priority = db.get(GlobalSubPriorityDefinition, data.sub_priority_id)
-        if not sub_priority or not sub_priority.is_active:
-            raise HTTPException(422, "תת־העדיפות הגלובלית אינה פעילה")
+        semantics.validate_value("case.sub_priority",data.sub_priority_id)
     for key, value in changes.items():
-        setattr(item, key, value)
+        binding={"priority_id":"case.priority","sub_priority_id":"case.sub_priority"}.get(key)
+        if binding: semantics.write(item,binding,value)
+        else: setattr(item,key,value)
     if data.values is not None:
         fields = {field.id: field for field in db.scalars(select(FieldDefinition).where(
             FieldDefinition.form_definition_id == item.form_definition_id))}
@@ -1444,17 +1484,7 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
             EnvironmentMembership.is_active.is_(True)))
         if not candidate or candidate.status != "active" or not candidate.is_active or not membership:
             raise HTTPException(422, "ניתן לשייך רק משתמש פעיל המשויך לסביבת הקריאה")
-    item.assignee_id = data.assignee_id
-    bound_field = db.scalar(select(GlobalCaseFieldDefinition).where(
-        GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
-        GlobalCaseFieldDefinition.is_active.is_(True)))
-    if bound_field:
-        bound_value = db.get(GlobalCaseFieldValue, (item.id, bound_field.id))
-        if bound_value:
-            bound_value.value_json = str(data.assignee_id) if data.assignee_id else None
-        else:
-            db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=bound_field.id,
-                                        value_json=str(data.assignee_id) if data.assignee_id else None))
+    CaseSemanticFieldService(db).write(item,"case.assignee",data.assignee_id)
     item.version += 1
     if item.status == CaseStatus.submitted:
         item.status = CaseStatus.assigned
@@ -1477,7 +1507,8 @@ def eligible_assignees(environment_id: uuid.UUID, db: DB, user: Current) -> list
 
 
 @router.get("/cases/{case_id}/allowed-transitions")
-def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current,
+                        accept_language: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
@@ -1485,21 +1516,29 @@ def allowed_transitions(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[
     if "case.change_status" not in permissions(db, user, item.environment_id):
         return []
     statuses = [row for row in active_values(db, "statuses") if row.id != item.workflow_status_id]
-    return [{"id": status.id, "label_he": status.label_he, "transition_id": None,
+    localizer = LocalizationService(db, accept_language)
+    return [{"id": status.id, "label_he": status.label_he, "label_en":status.label_en,
+             "label":localizer.text("global_status",status.id,"label",legacy_he=status.label_he,
+                 legacy_en=status.label_en,technical_fallback=status.semantic_category), "transition_id": None,
              "requires_comment": False} for status in statuses]
 
 
 @router.get("/cases/{case_id}/status-options")
-def status_options(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
+def status_options(case_id: uuid.UUID, db: DB, user: Current,
+                   accept_language: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
     statuses = active_values(db, "statuses")
     can_change = "case.change_status" in permissions(db, user, item.environment_id)
+    localizer = LocalizationService(db, accept_language)
     return [{
         "id": str(status.id),
         "label_he": status.label_he,
+        "label_en": status.label_en,
+        "label": localizer.text("global_status",status.id,"label",legacy_he=status.label_he,
+            legacy_en=status.label_en,technical_fallback=status.semantic_category),
         "current": status.id == item.workflow_status_id,
         "allowed": can_change and status.id != item.workflow_status_id,
         "reason": None if can_change and status.id != item.workflow_status_id else (
@@ -1625,7 +1664,7 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     if not target or not target.is_active:
         raise HTTPException(409, "סטטוס היעד הגלובלי אינו פעיל")
     before = item.workflow_status_id
-    item.workflow_status_id = target.id
+    CaseSemanticFieldService(db).write(item,"case.status",target.id)
     item.version += 1
     if target.semantic_category == "closed" or target.is_final:
         item.closed_at = datetime.now(UTC)

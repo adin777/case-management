@@ -197,7 +197,7 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 
 `GET /api/reports/available` מחזיר רק דוחות שהמשתמש מורשה לראות. מרכז הדוחות כולל דוח קריאות (`report.cases`), אישורים (`report.approvals`), משתמשים והרשאות (`report.users`) ו־Audit (`report.audit`). `GET /api/reports/approvals`, ‏`/reports/users` ו־`/reports/audit` מחזירים נתוני אמת מה־Database ואוכפים את Permission Domain המתאים בשרת.
 
-דוח הקריאות משתמש ב־`workflow_status_id` וב־`WorkflowStatus.label_he` כמקור האמת היחיד לתצוגה, סינון, מיון וייצוא. `sort` תומך ב־`case_number`, `title`, `environment`, `request_type`, `status`, `priority`, `requester`, `assignee`, `created_at`, `updated_at`; `direction` הוא `asc` או `desc`, והמיון מתבצע בשרת לפני pagination.
+דוח הקריאות משתמש ב־`CaseSemanticFieldService` וב־Global Field הפעיל המחובר ל־`case.status` כמקור האמת לתצוגה, סינון, מיון וייצוא. `Case.workflow_status_id` הוא אינדקס query מסונכרן בלבד ואינו consumer עסקי עצמאי. `sort` תומך ב־`case_number`, `title`, `environment`, `request_type`, `status`, `priority`, `requester`, `assignee`, `created_at`, `updated_at`; `direction` הוא `asc` או `desc`, והמיון מתבצע בשרת לפני pagination.
 
 `GET /api/environments/{environment_id}/eligible-assignees` מחזיר רק משתמשים פעילים בעלי שיוך פעיל לסביבה ודורש `case.assign`. `POST /api/cases/{case_id}/assign` מקבל `assignee_id` או `null` ו־`version`. בקריאה נעולה רק System Admin או Environment Manager מפורש של אותה סביבה רשאי לשנות מטפל. בהתאם לכך, `GET /api/cases/{case_id}` מחזיר `permissions.can_assign=false` למשתמש רגיל גם אם הוקצתה לו הרשאת `case.assign`.
 
@@ -345,6 +345,19 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 
 ### Semantic global fields and import snapshots
 
+החיבורים הנתמכים הם `case.status`, ‏`case.priority`, ‏`case.sub_priority` ו־`case.assignee`.
+רק Global Field פעיל יחיד יכול להיות מחובר לכל semantic. שדות Status/Priority/SubPriority הם
+`single_select`; שדה Assignee הוא `user`. כאשר קיים binding, ‏`GlobalCaseFieldValue` הוא הערך
+העסקי ועמודות `workflow_status_id`, ‏`priority_id`, ‏`sub_priority_id` ו־`assignee_id` הן אינדקסי
+שאילתה מסונכרנים בלבד. כל כתיבה עוברת דרך `CaseSemanticFieldService` ומעדכנת את שני הצדדים
+באותה transaction.
+
+Workspace, רשימות, Details, דוח הקריאות, מסננים, מיון, Export, Transfer, Automations,
+שינוי Status ושינוי Status היררכי משתמשים בשירות המשותף. Migration משלימה צד חסר כאשר ניתן
+לעשות זאת לפי ID יציב; mismatch או ערך שאינו שייך לקטלוג נרשם ב־`case_semantic_sync_conflicts`
+ואינו מוכרע בשקט. יצירת Case בלבד רשאית לבקש Initial Status. Transfer שומר את ה־Status הקיים,
+מאתחל SLA בלי לקרוא או לשנות Initial Status, ואינו מאמת שדות יעד הנדרשים רק בזמן Create.
+
 ל־Global Field קיים `semantic_binding` אופציונלי. `case.assignee` מותר רק לשדה `user`,
 ורק שדה פעיל אחד יכול להחזיק אותו. ערכו ו־`Case.assignee_id` מסונכרנים דו־כיוונית,
 והמשתמש נבדק מול רשימת המטפלים הפעילים והמשויכים לסביבה. תצורת שדה גלובלי בסביבה
@@ -356,3 +369,46 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 `POST /api/users/import/preview` מחזיר `import_session_id` ושומר snapshot מאושר.
 `POST /api/users/import/apply` מקבל את המזהה ומחיל פעם אחת בלבד את אותו snapshot,
 ללא parsing חוזר של תוכן שהלקוח יכול לשנות.
+
+## Transfer גלובלי ושדות סביבתיים
+
+- מעבר סביבה שומר ללא remapping את כל `GlobalCaseFieldValue` לפי `global_field_id`, כולל ערכי
+  בחירה ו־semantic bindings. Status, Priority ו־SubPriority הם מזהים גלובליים ונשמרים כאשר
+  הלקוח לא ביקש לשנותם; אין לאמת אותם מחדש מול סביבת היעד.
+- כל `CaseFieldValue` של טופס סביבת המקור מוסר מן הקריאה הפעילה ונשמר במלואו ב־
+  `CaseTransferHistory.removed_fields_snapshot`. אין מיפוי לפי key בין סביבות.
+- `required_fields` ב־`GET /cases/{id}/transfer-requirements` ריק: חובת שדה סביבתי בזמן Create
+  אינה חוסמת Transfer. `global_fields_preserved` מחזיר את מספר השדות הגלובליים שיישמרו.
+- מטפל קיים נשמר כאשר הוא פעיל ומשויך לסביבת היעד; אחרת הוא מוסר ונרשם ב־History.
+
+## היררכיית קריאות ושינוי סטטוס מקובץ
+
+- `GET /api/cases/{id}/relations` מחזיר `parent` ו־`children` הנראים למשתמש בלבד.
+- `POST /api/cases/{id}/children` ו־`POST /api/cases/{id}/relations` מקבלים
+  `{child_case_id}`. Child יכול להשתייך לסביבה אחרת, אך הרשאות צפייה ועדכון נאכפות על שתי
+  הקריאות. Child יכול להיות בעל Parent יחיד; self relation ו־cycle נדחים.
+- `DELETE /api/cases/{id}/relations/{relation_id}` מסיר קשר בלי למחוק Case.
+- `POST /api/cases` תומך ב־`parent_case_id`; ה־Case והקשר נוצרים באותה transaction.
+- `POST /api/cases/{id}/status-change-preview` מקבל `target_status_id` ו־
+  `include_descendants`, שומר Snapshot ומחזיר `preview_id`, ‏`eligible`, ‏`unauthorized`,
+  `locked` ו־`total_descendants`.
+- `POST /api/cases/{id}/status-change` מקבל רק `preview_id` ומחיל פעם אחת בדיוק את הרשומות
+  שב־Snapshot. אין Cascade אוטומטי. הפעולה נרשמת כ־`bulk_status_from_parent`.
+
+## Localization דינמי
+
+- `GET /api/languages` מחזיר שפות פעילות (`code`, ‏`native_name`, ‏`direction`, ‏default).
+- `EntityTranslation` מזוהה באמצעות `entity_type + entity_id + field_name + language_code`;
+  הוספת שפה אינה דורשת שינוי Schema.
+- `LocalizationService` הוא מקור האמת המשותף ל־Backend. הוא מכבד `Accept-Language`, נופל
+  לשפת ברירת המחדל ולאחר מכן ל־technical fallback, ולעולם אינו מחזיר label ריק.
+- `GET/PUT /api/localization/{entity_type}/{entity_id}/{field_name}` קורא ומנהל תרגומים;
+  עדכון דורש System Admin ושפה פעילה.
+- עמודות `*_he`/`*_en` קיימות נשארות שכבת תאימות למידע קיים; ישויות חדשות ותרגומים חדשים
+  משתמשים ב־`EntityTranslation` ולא מוסיפים עמודה לכל שפה.
+
+## Active בייבוא משתמשים
+
+עמודת `Active` מקבלת ללא תלות באותיות `Y/Yes/True/1/Active/כן` או
+`N/No/False/0/Inactive/לא`. ערך אחר דוחה Preview עם שורה ושדה מפורשים. Apply מחיל את
+Snapshot המנורמל; רשומת Excel ישנה שהושבתה רק בגלל parsing שגוי מופעלת מחדש כאשר מגיע Y.

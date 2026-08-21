@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import AutomationExecutionLog, AutomationRule, Case
 
 
@@ -27,7 +28,7 @@ class AutomationEngine:
                     for action in rule.actions_json or []:
                         if action_count >= cls.MAX_ACTIONS:
                             raise RuntimeError("Automation chain action limit exceeded")
-                        cls._apply(item, action)
+                        cls._apply(db,item,action)
                         executed.append(action)
                         action_count += 1
             except (RuntimeError, TypeError, ValueError) as exc:
@@ -55,21 +56,23 @@ class AutomationEngine:
         return all(results) if conditions.get("logic", "AND") == "AND" else any(results)
 
     @staticmethod
-    def _apply(item: Case, action: dict[str, Any]) -> None:
+    def _apply(db:Session,item:Case,action:dict[str,Any])->None:
         action_type, value = action.get("type"), action.get("value")
         if action_type == "set_field":
             field_code = action.get("field_code")
             value = action.get("value_id", action.get("value"))
-            if field_code == "status": item.workflow_status_id = UUID(value)
-            elif field_code == "priority": item.priority_id = UUID(value)
-            elif field_code == "sub_priority": item.sub_priority_id = UUID(value)
-            elif field_code == "assignee": item.assignee_id = UUID(value)
+            binding={"status":"case.status","priority":"case.priority",
+                     "sub_priority":"case.sub_priority","assignee":"case.assignee"}.get(
+                         field_code if isinstance(field_code, str) else ""
+                     )
+            if binding:
+                CaseSemanticFieldService(db).write(item, binding, UUID(str(value)))
             elif field_code == "assignee_group": item.assigned_group_id = UUID(value)
             else: raise ValueError(f"Unsupported automation target field: {field_code}")
             return
-        if action_type == "assign_user": item.assignee_id = UUID(value)
+        if action_type == "assign_user": CaseSemanticFieldService(db).write(item,"case.assignee",UUID(value))
         elif action_type == "assign_group": item.assigned_group_id = UUID(value)
-        elif action_type == "set_status": item.workflow_status_id = UUID(value)
-        elif action_type == "set_priority": item.priority_id = UUID(value)
-        elif action_type == "set_sub_priority": item.sub_priority_id = UUID(value)
+        elif action_type == "set_status": CaseSemanticFieldService(db).write(item,"case.status",UUID(value))
+        elif action_type == "set_priority": CaseSemanticFieldService(db).write(item,"case.priority",UUID(value))
+        elif action_type == "set_sub_priority": CaseSemanticFieldService(db).write(item,"case.sub_priority",UUID(value))
         else: raise ValueError(f"Unsupported automation action: {action_type}")
