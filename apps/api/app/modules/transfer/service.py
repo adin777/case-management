@@ -3,11 +3,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.global_case_values.service import active_values
 from app.modules.models import (
     ApprovalInstance,
@@ -19,7 +20,6 @@ from app.modules.models import (
     Environment,
     EnvironmentMembership,
     FieldDefinition,
-    GlobalCaseFieldDefinition,
     GlobalCaseFieldValue,
     GlobalPriorityDefinition,
     GlobalStatusDefinition,
@@ -27,7 +27,7 @@ from app.modules.models import (
     RequestType,
     User,
 )
-from app.modules.operations.service import initialize_operations
+from app.modules.operations.service import initialize_sla
 
 VALUE_COLUMNS = (
     "value_text",
@@ -104,6 +104,8 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
         row.field_definition_id: row
         for row in db.scalars(select(CaseFieldValue).where(CaseFieldValue.case_id == item.id))
     }
+    global_count = db.scalar(select(func.count()).select_from(GlobalCaseFieldValue).where(
+        GlobalCaseFieldValue.case_id == item.id)) or 0
     return {
         "case_id": str(item.id),
         "case_number": item.case_number,
@@ -116,6 +118,8 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
         ],
         "removed_participant_ids": removed,
         "assignee_will_be_removed": bool(item.assignee_id and not _member(db, target.id, item.assignee_id)),
+        "global_fields_preserved": global_count,
+        "environment_fields_removed": len(values),
         "current_fields": [
             {
                 "field_id": str(field.id),
@@ -149,17 +153,6 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
             .order_by(User.display_name)
         ).unique()
     )
-    old_by_key = {row.key: row for row in old_fields}
-    mapped, required = [], []
-    for field in fields:
-        old = old_by_key.get(field.key)
-        if old and old.field_type == field.field_type:
-            mapped.append(
-                {"from_field_id": str(old.id), "to_field_id": str(field.id), "label": field.label_he}
-            )
-        elif field.is_required:
-            required.append({"id": str(field.id), "label": field.label_he, "field_type": field.field_type})
-    mapped_old = {row["from_field_id"] for row in mapped}
     return {
         "initial_status_id": str(current_status.id) if current_status else None,
         "initial_status_label": current_status.label_he if current_status else "",
@@ -172,8 +165,8 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
             }
             for row in fields
         ],
-        "field_mappings": mapped,
-        "required_fields": required,
+        "field_mappings": [],
+        "required_fields": [],
         "priorities": [{"id": str(row.id), "label_he": row.label_he} for row in priorities],
         "sub_priorities": [
             {
@@ -187,8 +180,13 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
             {"id": str(row.id), "display_name": row.display_name, "email": row.email} for row in assignees
         ],
         "removed_fields": [
-            {"id": str(row.id), "label": row.label_he} for row in old_fields if str(row.id) not in mapped_old
+            {"id": str(row.id), "label": row.label_he} for row in old_fields
         ],
+        "global_fields_preserved": db.scalar(
+            select(func.count()).select_from(GlobalCaseFieldValue).where(
+                GlobalCaseFieldValue.case_id == item.id
+            )
+        ) or 0,
     }
 
 
@@ -202,22 +200,21 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
         raise HTTPException(422, "סוג הקריאה אינו פעיל בסביבת היעד")
     priority_id = payload.priority_id or item.priority_id
     priority = db.get(GlobalPriorityDefinition, priority_id) if priority_id else None
-    if not priority or not priority.is_active:
-        raise HTTPException(422, "יש לבחור עדיפות גלובלית פעילה")
+    if payload.priority_id and (not priority or not priority.is_active):
+        raise HTTPException(422, "העדיפות הגלובלית שנבחרה אינה פעילה")
     if payload.sub_priority_id:
         sub = db.get(GlobalSubPriorityDefinition, payload.sub_priority_id)
         if not sub or not sub.is_active:
             raise HTTPException(422, "תת־העדיפות הגלובלית אינה פעילה")
     if payload.assignee_id and not _member(db, payload.target_environment_id, payload.assignee_id):
         raise HTTPException(422, "המטפל אינו פעיל או משויך לסביבת היעד")
-    requirements = target_requirements(db, item, target_type)
     supplied = {str(row.field_definition_id): row.value for row in payload.new_field_values}
-    missing = [
-        row["label"] for row in requirements["required_fields"] if supplied.get(row["id"]) in (None, "", [])
-    ]
-    if missing:
-        raise HTTPException(422, "חובה למלא: " + ", ".join(missing))
-    old_env, old_type, old_status = item.environment_id, item.request_type_id, item.workflow_status_id
+    semantics = CaseSemanticFieldService(db)
+    conflicts = semantics.sync_case(item)
+    if conflicts:
+        raise HTTPException(409, "קיימת סתירה בערכים הסמנטיים של הקריאה; יש לפתור אותה לפני העברה")
+    old_env, old_type = item.environment_id, item.request_type_id
+    old_status = semantics.value_id(item, "case.status")
     old_sla = {
         "policy_id": str(item.sla_policy_id) if item.sla_policy_id else None,
         "response_due_at": item.response_due_at.isoformat() if item.response_due_at else None,
@@ -227,14 +224,9 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
         row.field_definition_id: row
         for row in db.scalars(select(CaseFieldValue).where(CaseFieldValue.case_id == item.id))
     }
-    mappings = {
-        uuid.UUID(row["to_field_id"]): uuid.UUID(row["from_field_id"])
-        for row in requirements["field_mappings"]
-    }
     removed_snapshot = [
         {"field_id": str(fid), "value": _value(value)}
         for fid, value in current_values.items()
-        if fid not in set(mappings.values())
     ]
     participants = list(db.scalars(select(CaseParticipant).where(CaseParticipant.case_id == item.id)))
     removed_participants = [
@@ -273,16 +265,6 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
             task.status = "cancelled"
             task.comment = "environment_transfer"
     db.execute(delete(CaseFieldValue).where(CaseFieldValue.case_id == item.id))
-    for target_id, source_id in mappings.items():
-        source = current_values.get(source_id)
-        if source:
-            db.add(
-                CaseFieldValue(
-                    case_id=item.id,
-                    field_definition_id=target_id,
-                    **{name: getattr(source, name) for name in VALUE_COLUMNS},
-                )
-            )
     target_fields = {row.id: row for row in _fields(db, target_type.form_version_id)}
     from app.modules.api import typed_value
 
@@ -299,33 +281,18 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.environment_id = payload.target_environment_id
     item.request_type_id = target_type.id
     item.form_definition_id = target_type.form_version_id
-    item.priority_id = priority.id
-    item.sub_priority_id = payload.sub_priority_id if payload.sub_priority_id is not None else item.sub_priority_id
-    item.assignee_id = payload.assignee_id
-    bound_assignee_field = db.scalar(
-        select(GlobalCaseFieldDefinition).where(
-            GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
-            GlobalCaseFieldDefinition.is_active.is_(True),
-        )
-    )
-    if bound_assignee_field:
-        bound_value = db.scalar(
-            select(GlobalCaseFieldValue).where(
-                GlobalCaseFieldValue.case_id == item.id,
-                GlobalCaseFieldValue.global_field_id == bound_assignee_field.id,
-            )
-        )
-        serialized_assignee = str(payload.assignee_id) if payload.assignee_id else None
-        if bound_value:
-            bound_value.value_json = serialized_assignee
-        else:
-            db.add(
-                GlobalCaseFieldValue(
-                    case_id=item.id,
-                    global_field_id=bound_assignee_field.id,
-                    value_json=serialized_assignee,
-                )
-            )
+    if payload.priority_id:
+        semantics.write(item, "case.priority", payload.priority_id)
+    if payload.sub_priority_id is not None:
+        semantics.write(item, "case.sub_priority", payload.sub_priority_id)
+    effective_assignee = payload.assignee_id
+    if effective_assignee is None and _member(db, payload.target_environment_id, item.assignee_id):
+        effective_assignee = item.assignee_id
+    semantics.write(item,"case.assignee",effective_assignee)
+    preserved_semantics = {
+        binding: semantics.value_id(item, binding)
+        for binding in ("case.status", "case.priority", "case.sub_priority", "case.assignee")
+    }
     item.assigned_group_id = None
     item.sla_policy_id = None
     item.response_due_at = None
@@ -335,8 +302,7 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.approval_status = "not_started"
     item.is_approved = False
     item.version += 1
-    initialize_operations(db, item, target_type)
-    item.workflow_status_id = old_status
+    initialize_sla(db,item)
     started = start_matching_approvals(db, item)
     AutomationEngine.run(
         db,
@@ -348,6 +314,8 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
             "request_type_id": str(item.request_type_id),
         },
     )
+    for binding, value_id in preserved_semantics.items():
+        semantics.write(item, binding, value_id, require_active=False)
     history = CaseTransferHistory(
         case_id=item.id,
         from_environment_id=old_env,

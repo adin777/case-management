@@ -1,13 +1,14 @@
 import uuid
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.modules.access.models import AccessLevelAssignment, PermissionDomain
 from app.modules.access.service import EffectivePermissionService, replace_levels
 from app.modules.api import DB, Current, audit
+from app.modules.localization.service import LocalizationService
 from app.modules.models import Group, User
 
 router = APIRouter(prefix="/api/access", tags=["access"])
@@ -35,10 +36,16 @@ def system_admin(user: Current) -> None:
 
 
 @router.get("/domains")
-def domains(db: DB, user: Current) -> list[dict]:
+def domains(db: DB, user: Current,
+            accept_language: Annotated[str | None, Header()] = None) -> list[dict]:
     system_admin(user)
     rows = db.scalars(select(PermissionDomain).where(PermissionDomain.is_active.is_(True)).order_by(PermissionDomain.sort_order))
-    return [{column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows]
+    localizer = LocalizationService(db, accept_language)
+    return [{**{column.name:getattr(row,column.name) for column in row.__table__.columns},
+        "localized_name":localizer.text("permission_domain",row.code,"name",legacy_he=row.name_he,
+            legacy_en=None,technical_fallback=row.code),
+        "localized_description":localizer.text("permission_domain",row.code,"description",
+            legacy_he=row.description_he,legacy_en=None,technical_fallback=row.code)} for row in rows]
 
 
 @router.get("/assignments")
@@ -109,7 +116,8 @@ def effective_access(user_id: uuid.UUID, db: DB, user: Current,
 
 @router.get("/subjects/{subject_type}/{subject_id}/matrix")
 def subject_matrix(subject_type: Literal["user", "group"], subject_id: uuid.UUID,
-                   db: DB, user: Current, environment_id: uuid.UUID | None = None) -> list[dict]:
+                   db: DB, user: Current, environment_id: uuid.UUID | None = None,
+                   accept_language: Annotated[str | None, Header()] = None) -> list[dict]:
     system_admin(user)
     domains = list(db.scalars(select(PermissionDomain).where(
         PermissionDomain.is_active.is_(True)).order_by(PermissionDomain.sort_order)))
@@ -119,28 +127,31 @@ def subject_matrix(subject_type: Literal["user", "group"], subject_id: uuid.UUID
         raise HTTPException(404, "המשתמש או הקבוצה לא נמצאו")
     direct = {row.domain_code: row.access_level for row in db.scalars(select(AccessLevelAssignment).where(
         field == subject_id, AccessLevelAssignment.environment_id == environment_id))}
+    localizer = LocalizationService(db, accept_language)
+    def names(domain: PermissionDomain) -> dict[str,str]:
+        return {"domain_name":localizer.text("permission_domain",domain.code,"name",
+                    legacy_he=domain.name_he,technical_fallback=domain.code),
+                "description":localizer.text("permission_domain",domain.code,"description",
+                    legacy_he=domain.description_he,technical_fallback=domain.code)}
     if subject_type == "user":
         target = db.get(User, subject_id)
         if not target:
             raise HTTPException(404, "המשתמש לא נמצא")
         resolved = {row["domain"]: row for row in EffectivePermissionService(db).explain_all(target, environment_id)}
-        return [{"domain_code": domain.code, "domain_name": domain.name_he,
-                 "description": domain.description_he,
+        return [{"domain_code": domain.code, **names(domain),
                  "default_level": "none",
                  "direct_level": direct.get(domain.code, "inherit"),
                  "effective_level": resolved[domain.code]["effective_level"],
                  "source": resolved[domain.code]["source_name"], "scope": domain.scope,
                  "can_override": not target.is_system_admin} for domain in domains]
     if isinstance(subject, Group) and subject.is_system_admin_group:
-        return [{"domain_code": domain.code, "domain_name": domain.name_he,
-                 "description": domain.description_he,
+        return [{"domain_code": domain.code, **names(domain),
                  "default_level": "edit",
                  "direct_level": direct.get(domain.code, "inherit"),
                  "effective_level": direct.get(domain.code, "edit"),
                  "source": "admin_group_override" if domain.code in direct else "admin_group_default",
                  "scope": domain.scope, "can_override": True} for domain in domains]
-    return [{"domain_code": domain.code, "domain_name": domain.name_he,
-             "description": domain.description_he,
+    return [{"domain_code": domain.code, **names(domain),
              "default_level": "none", "direct_level": direct.get(domain.code, "inherit"),
              "effective_level": direct.get(domain.code, "none"),
              "source": "group_override" if domain.code in direct else "group_default",

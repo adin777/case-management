@@ -17,6 +17,20 @@ EXPORT_HEADERS = FIELDS[:-1] + ["source", "status", "directory_enabled", "create
                                "last_login_at", "last_directory_sync_at", "Groups", "Environments"]
 HEADER_ALIASES = {**{label: field for label, field in USER_IMPORT_SCHEMA}, **{field: field for field in FIELDS},
                   "Groups": "group_names", "Environments": "environment_names", "status": "status"}
+ACTIVE_VALUES = {"y", "yes", "true", "1", "active", "כן", "פעיל"}
+INACTIVE_VALUES = {"n", "no", "false", "0", "inactive", "לא", "לא פעיל"}
+
+
+def parse_active(value: object, row_number: int) -> bool:
+    normalized = str(value).strip().casefold()
+    if normalized in ACTIVE_VALUES:
+        return True
+    if normalized in INACTIVE_VALUES:
+        return False
+    raise ValueError(
+        f"שורה {row_number}, Active: התקבל '{value}'; צפוי Y/Yes/True/1/Active/כן "
+        "או N/No/False/0/Inactive/לא"
+    )
 
 
 def workbook(rows: Sequence[Sequence[object]], sheet_name: str = "Users") -> bytes:
@@ -52,7 +66,7 @@ def parse(content: bytes) -> list[NormalizedDirectoryUser]:
         if not data["email"]:
             raise ValueError(f"שורה {number}, Email: התקבל ערך ריק; צפויה כתובת דוא״ל תקינה; שדה חובה")
         data["display_name"] = data["display_name"] or f'{data["first_name"]} {data["last_name"]}'.strip()
-        enabled_text = str(data.get("directory_enabled", data.get("status", "active"))).strip().casefold()
+        enabled = parse_active(data.get("directory_enabled", data.get("status", "active")), number)
         try:
             result.append(NormalizedDirectoryUser(
                 first_name=data["first_name"] or None, last_name=data["last_name"] or None,
@@ -61,7 +75,7 @@ def parse(content: bytes) -> list[NormalizedDirectoryUser]:
                 job_title=data["job_title"] or None, phone=data["phone"] or None,
                 mobile_phone=data["mobile_phone"] or None, employee_id=data["employee_id"] or None,
                 computer_identifier=data["computer_identifier"] or None,
-                directory_enabled=enabled_text in {"true", "1", "yes", "כן", "active", "פעיל"},
+                directory_enabled=enabled,
                 group_names=[v.strip() for v in str(data.get("group_names", "")).split(",") if v.strip()],
                 environment_names=[v.strip() for v in str(data.get("environment_names", "")).split(",") if v.strip()],
             ))

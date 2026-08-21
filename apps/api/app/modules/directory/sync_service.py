@@ -12,7 +12,7 @@ from app.modules.environment_assignments.service import apply_all_rules
 from app.modules.models import DirectorySyncRun, Environment, EnvironmentMembership, Group, GroupMember, User
 
 password_hash = PasswordHash.recommended()
-PROFILE_FIELDS = ("first_name", "last_name", "display_name", "user_principal_name", "department",
+PROFILE_FIELDS = ("first_name", "last_name", "display_name", "email", "user_principal_name", "department",
                   "job_title", "phone", "mobile_phone", "employee_id", "computer_identifier",
                   "directory_object_id", "directory_enabled")
 
@@ -68,6 +68,7 @@ class UserSyncService:
         self.db.add(run); self.db.flush(); now = datetime.now(UTC)
         for result, incoming in zip(preview["rows"], batch.users, strict=True):
             user = self._match(incoming)
+            previously_directory_enabled = user.directory_enabled if user else None
             if not user:
                 user = User(email=str(incoming.email).lower(), display_name=incoming.display_name,
                     password_hash=password_hash.hash(secrets.token_urlsafe(32)), source=self.source,
@@ -77,6 +78,9 @@ class UserSyncService:
             if not user.source: user.source = self.source
             user.last_directory_sync_at = now
             if not incoming.directory_enabled and user.status == "active": user.status = "inactive"
+            if (incoming.directory_enabled and user.source == "excel" and
+                    previously_directory_enabled is False and user.status == "inactive"):
+                user.status = "active"
             user.is_active = user.status == "active" and incoming.directory_enabled
             self.db.flush()
             for group_name in incoming.group_names:

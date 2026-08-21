@@ -2,6 +2,7 @@ import { Alert, Button, CircularProgress, Container, Pagination, Paper, Stack, T
 import { PlayArrow } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import type { CaseReportRow, Environment, RequestType, User } from '../../../types';
 import { emptyFilters, type ReportFilters } from './reportFilters';
@@ -17,6 +18,7 @@ const initialColumns = (): (keyof CaseReportRow)[] => {
 };
 
 export function CaseReportPage() {
+  const {t}=useTranslation();
   const [filters, setFilters] = useState<ReportFilters>({ ...emptyFilters });
   const [applied, setApplied] = useState<ReportFilters | null>(null);
   const [page, setPage] = useState(1);
@@ -31,13 +33,13 @@ export function CaseReportPage() {
   const run = () => { setPage(1); setApplied({ ...filters }); };
   const clear = () => { setFilters({ ...emptyFilters }); setApplied(null); setPage(1); };
   return <Container maxWidth="xl"><Stack spacing={2.5}>
-    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}><div><Typography variant="h4">דוח קריאות שירות</Typography><Typography color="text.secondary">בחרו מסננים והריצו את הדוח לקבלת תמונת מצב עדכנית</Typography></div><Stack direction="row" gap={1} alignItems="center"><ColumnSelector value={columns} onChange={changeColumns}/>{applied && <ExportExcelButton filters={applied}/>}</Stack></Stack>
+    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}><div><Typography variant="h4">{t('reports.casesTitle')}</Typography><Typography color="text.secondary">{t('reports.casesSubtitle')}</Typography></div><Stack direction="row" gap={1} alignItems="center"><ColumnSelector value={columns} onChange={changeColumns}/>{applied && <ExportExcelButton filters={applied}/>}</Stack></Stack>
     <CaseReportFilters value={filters} onChange={setFilters} environments={environments} types={types} users={users} statuses={sources.statuses}/>
-    <Stack direction="row" gap={1}><Button variant="contained" size="large" startIcon={<PlayArrow/>} onClick={run}>הרצת דוח</Button><Button onClick={clear}>ניקוי מסננים</Button></Stack>
-    {!applied ? <Paper variant="outlined" sx={{ p: 7, textAlign: 'center' }}><Typography variant="h6">הדוח מוכן להרצה</Typography><Typography color="text.secondary">התוצאות ייטענו רק לאחר לחיצה על “הרצת דוח”</Typography></Paper>
-      : report.isLoading ? <Stack alignItems="center" py={7}><CircularProgress/><Typography mt={2}>טוען תוצאות…</Typography></Stack>
-      : report.isError ? <Alert severity="error">לא ניתן להריץ את הדוח: {(report.error as Error).message}</Alert>
-      : !report.data?.items.length ? <Paper variant="outlined" sx={{ p: 7, textAlign: 'center' }}><Typography variant="h6">לא נמצאו תוצאות</Typography><Typography color="text.secondary">נסו לשנות את המסננים ולהריץ שוב</Typography></Paper>
-      : <><Typography fontWeight={700}>{report.data.total} תוצאות</Typography><CaseReportTable rows={report.data.items} visible={columns} filters={applied} onFilters={(next) => { setFilters(next); setApplied(next); setPage(1); }} sources={sources}/><Pagination count={Math.max(1, Math.ceil(report.data.total / report.data.page_size))} page={page} onChange={(_, value) => setPage(value)}/></>}
+    <Stack direction="row" gap={1}><Button variant="contained" size="large" startIcon={<PlayArrow/>} onClick={run}>{t('reports.run')}</Button><Button onClick={clear}>{t('reports.reset')}</Button></Stack>
+    {!applied ? <Paper variant="outlined" sx={{ p: 7, textAlign: 'center' }}><Typography variant="h6">{t('reports.ready')}</Typography><Typography color="text.secondary">{t('reports.readyHelp')}</Typography></Paper>
+      : report.isLoading ? <Stack alignItems="center" py={7}><CircularProgress/><Typography mt={2}>{t('reports.loading')}</Typography></Stack>
+      : report.isError ? <Alert severity="error">{t('reports.failed')}: {(report.error as Error).message}</Alert>
+      : !report.data?.items.length ? <Paper variant="outlined" sx={{ p: 7, textAlign: 'center' }}><Typography variant="h6">{t('reports.empty')}</Typography><Typography color="text.secondary">{t('reports.emptyHelp')}</Typography></Paper>
+      : <><Typography fontWeight={700}>{t('reports.results',{count:report.data.total})}</Typography><CaseReportTable rows={report.data.items} visible={columns} filters={applied} onFilters={(next) => { setFilters(next); setApplied(next); setPage(1); }} sources={sources}/><Pagination count={Math.max(1, Math.ceil(report.data.total / report.data.page_size))} page={page} onChange={(_, value) => setPage(value)}/></>}
   </Stack></Container>;
 }

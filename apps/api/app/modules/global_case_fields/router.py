@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.modules.api import DB, Current, audit
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import (
+    Case,
     Environment,
     EnvironmentGlobalCaseField,
     GlobalCaseFieldDefinition,
@@ -63,7 +65,11 @@ def create(data: FieldIn, db: DB, user: Current) -> dict[str, Any]:
     item = GlobalCaseFieldDefinition(key=f"global_{uuid.uuid4().hex[:16]}",
         sort_order=db.scalar(select(func.count()).select_from(GlobalCaseFieldDefinition)) or 0,
         configuration_json={"options": []}, **data.model_dump())
-    db.add(item); db.flush(); audit(db, user, "global_case_field", item.id, "created"); db.commit()
+    db.add(item);db.flush()
+    if item.semantic_binding:
+        for case in db.scalars(select(Case)):
+            CaseSemanticFieldService(db).sync_case(case)
+    audit(db,user,"global_case_field",item.id,"created");db.commit()
     return output(item)
 
 
@@ -74,6 +80,9 @@ def update(field_id: uuid.UUID, data: FieldIn, db: DB, user: Current) -> dict[st
     if data.field_type not in FIELD_TYPES: raise HTTPException(422, "סוג השדה אינו נתמך")
     validate_binding(db, data, field_id)
     for key, value in data.model_dump().items(): setattr(item, key, value)
+    if item.semantic_binding:
+        for case in db.scalars(select(Case)):
+            CaseSemanticFieldService(db).sync_case(case)
     audit(db, user, "global_case_field", item.id, "updated"); db.commit(); return output(item)
 
 
@@ -163,13 +172,16 @@ def environment_configuration(environment_id: uuid.UUID, db: DB, user: Current) 
 
 
 def validate_binding(db: DB, data: FieldIn, current_id: uuid.UUID | None = None) -> None:
-    if data.semantic_binding not in {None, "none", "case.assignee"}:
+    supported = {None,"none","case.status","case.priority","case.sub_priority","case.assignee"}
+    if data.semantic_binding not in supported:
         raise HTTPException(422, "החיבור הסמנטי אינו נתמך")
-    if data.semantic_binding == "case.assignee":
-        if data.field_type != "user":
-            raise HTTPException(422, "רק שדה משתמש יכול להתחבר למטפל")
+    expected_types={"case.status":"single_select","case.priority":"single_select",
+        "case.sub_priority":"single_select","case.assignee":"user"}
+    if data.semantic_binding in expected_types:
+        if data.field_type != expected_types[data.semantic_binding]:
+            raise HTTPException(422, "סוג השדה אינו מתאים לחיבור הסמנטי")
         duplicate = db.scalar(select(GlobalCaseFieldDefinition.id).where(
-            GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
+            GlobalCaseFieldDefinition.semantic_binding == data.semantic_binding,
             GlobalCaseFieldDefinition.is_active.is_(True),
             GlobalCaseFieldDefinition.id != current_id if current_id else GlobalCaseFieldDefinition.id.is_not(None),
         ))

@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, CardContent, CircularProgress, Container, Stack, TextField, Typography } from '@mui/material';
 import { api } from '../../api/client';
@@ -17,6 +17,8 @@ type CreationConfig={request_types:CreationType[];global_fields:Form['fields'];p
 export function CreateCasePage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const parentCaseId = searchParams.get('parentCaseId');
   const [environmentId, setEnvironmentId] = useState('');
   const [requestTypeId, setRequestTypeId] = useState('');
   const [title, setTitle] = useState('');
@@ -42,6 +44,7 @@ export function CreateCasePage() {
       const result = await api<Case>('/cases', { method: 'POST', body: JSON.stringify({
         environment_id: environmentId, request_type_id: requestTypeId, title, description,
         participant_ids: participantIds,
+        parent_case_id: parentCaseId || null,
         values: Object.entries(values).map(([field_definition_id, value]) => ({ field_definition_id, value })),
       }) });
       navigate(`/cases/${result.id}`);
@@ -50,14 +53,14 @@ export function CreateCasePage() {
   }
 
   return <Container maxWidth="md"><Stack spacing={3}>
-    <div><Typography variant="h4" fontWeight={800}>{t('cases.createTitle')}</Typography><Typography color="text.secondary">{t('cases.createSubtitle')}</Typography></div>
+    <div><Typography variant="h4" fontWeight={800}>{parentCaseId?t('relations.createChild'):t('cases.createTitle')}</Typography><Typography color="text.secondary">{t('cases.createSubtitle')}</Typography></div>
     {error && <Alert severity="error">{error}</Alert>}
     {environmentsError && <Alert severity="error">{t('cases.loadEnvironmentsFailed')}</Alert>}
     <Card variant="outlined"><CardContent><Stack component="form" noValidate onSubmit={submit} spacing={2.5}>
-      <AppSelect required label={t('cases.environment')} value={environmentId} onChange={(value) => { setEnvironmentId(value); setRequestTypeId(''); setValues({}); }} options={environments.map(environment=>({value:environment.id,label:localized(environment.name_he,environment.name_en,i18n.language)}))}/>
+      <AppSelect required label={t('cases.environment')} value={environmentId} onChange={(value) => { setEnvironmentId(value); setRequestTypeId(''); setValues({}); }} options={environments.map(environment=>({value:environment.id,label:environment.localized_name || localized(environment.name_he,environment.name_en,i18n.language)}))}/>
       <TextField label={t('cases.subject')} value={title} onChange={(event) => setTitle(event.target.value)} />
       <TextField label={t('cases.description')} multiline minRows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
-      <AppSelect required disabled={!environmentId} label={t('cases.requestType')} value={requestTypeId} onChange={setRequestTypeId} options={requestTypes.map(type=>({value:type.id,label:localized(type.name_he,type.name_en,i18n.language)}))}/>
+      <AppSelect required disabled={!environmentId} label={t('cases.requestType')} value={requestTypeId} onChange={setRequestTypeId} options={requestTypes.map(type=>({value:type.id,label:type.localized_name || localized(type.name_he,type.name_en,i18n.language)}))}/>
       {configError && <Alert severity="error">{t('cases.loadConfigFailed')}</Alert>}
       <AppMultiSelect label={t('cases.participants')} value={participantIds} onChange={setParticipantIds} options={users.filter(user=>user.is_active!==false).map(user=>({value:user.id,label:`${user.display_name} · ${user.email}`}))}/>
       {[...globalFields,...(form?.fields||[])].filter((field) => field.is_active !== false).map((field) => <Stack key={field.id} spacing={1}><DynamicField field={{...field,label_he:localized(field.label_he,field.label_en,i18n.language)}} value={values[field.id!]} users={field.semantic_binding==='case.assignee'?eligibleAssignees:users} onChange={(value) => setValues({ ...values, [field.id!]: value })} />{field.semantic_binding==='case.assignee'&&!eligibleAssignees.length&&<Alert severity="info">{t('cases.noAssignees')}</Alert>}</Stack>)}

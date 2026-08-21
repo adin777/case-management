@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 
 from app.modules.api import DB, Current, audit, case_access, permissions, require
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import Case
 from app.modules.operations.models import (
     CaseStatusHistory,
@@ -263,7 +264,7 @@ def run_transition(case_id: uuid.UUID, transition_id: uuid.UUID, data: Transitio
         raise HTTPException(422, "נדרש תיאור פתרון לביצוע המעבר")
     previous = item.workflow_status_id
     target = db.get(WorkflowStatus, transition.to_status_id)
-    item.workflow_status_id = transition.to_status_id
+    CaseSemanticFieldService(db).write(item,"case.status",transition.to_status_id)
     if target and target.is_closed:
         item.closed_at = item.resolved_at = datetime.now(UTC)
         item.sla_resolution_status = "met" if not item.resolution_due_at or item.resolved_at <= item.resolution_due_at else "breached"

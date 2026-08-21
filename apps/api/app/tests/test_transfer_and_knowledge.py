@@ -1,7 +1,8 @@
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.database.session import SessionLocal
 from app.main import app
@@ -14,6 +15,9 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    GlobalCaseFieldDefinition,
+    GlobalCaseFieldValue,
+    GlobalSubPriorityDefinition,
     PriorityDefinition,
     RequestType,
     SubPriorityDefinition,
@@ -41,6 +45,28 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             select(PriorityDefinition).where(PriorityDefinition.environment_id == source.id)
         )
         assert source_priority
+        source_sub_priority=db.scalar(select(SubPriorityDefinition).where(
+            SubPriorityDefinition.environment_id==source.id))
+        if not source_sub_priority:
+            source_sub_priority = SubPriorityDefinition(
+                system_number=f"SUB-{uuid.uuid4().hex[:8]}",
+                environment_id=source.id,
+                priority_id=source_priority.id,
+                code=f"source-sub-{uuid.uuid4().hex[:6]}",
+                label_he="תת־עדיפות מקור",
+                is_active=True,
+                sort_order=0,
+            )
+            db.add(source_sub_priority)
+            db.flush()
+            db.add(GlobalSubPriorityDefinition(
+                id=source_sub_priority.id,
+                code=f"source_sub_{uuid.uuid4().hex[:8]}",
+                label_he=source_sub_priority.label_he,
+                is_active=True,
+                sort_order=0,
+            ))
+            db.flush()
         source_status = db.scalar(
             select(WorkflowStatus)
             .join(WorkflowDefinition)
@@ -129,6 +155,7 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             title="קריאה להעברה",
             description="בדיקה",
             priority_id=source_priority.id,
+            sub_priority_id=source_sub_priority.id if source_sub_priority else None,
             reporter_id=admin.id,
             requester_id=admin.id,
             assignee_id=admin.id,
@@ -136,6 +163,20 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
         )
         db.add(case)
         db.flush()
+        source_field = FieldDefinition(
+            form_definition_id=source_type.form_version_id,
+            key=f"source_only_{uuid.uuid4().hex[:6]}", label_he="שדה מקור בלבד",
+            label_en="Source only", field_type="short_text", is_required=False,
+            is_read_only=False, is_active=True, sort_order=99, configuration_json={},
+        )
+        global_field = GlobalCaseFieldDefinition(
+            key=f"global_transfer_{uuid.uuid4().hex[:8]}", label_he="שדה גלובלי להעברה",
+            label_en="Transfer global field", field_type="single_select", is_active=True,
+        )
+        db.add_all([source_field, global_field])
+        db.flush()
+        db.add(CaseFieldValue(case_id=case.id, field_definition_id=source_field.id, value_text="ערך מקור"))
+        db.add(GlobalCaseFieldValue(case_id=case.id, global_field_id=global_field.id, value_json="option-stable-id"))
         db.add(
             CaseParticipant(
                 case_id=case.id, user_id=admin.id, participant_type="participant", added_by=admin.id
@@ -155,12 +196,16 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             )
         )
         db.commit()
-        return case.id, target.id, request_type.id, source_priority.id, sub_priority.id, required.id
+        return case.id,target.id,request_type.id,source_priority.id,source_sub_priority.id,required.id
 
 
-def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> None:
+def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity(
+    monkeypatch:pytest.MonkeyPatch,
+) -> None:
     auth = headers()
-    case_id, target_id, request_type_id, priority_id, _sub_priority_id, required_id = transfer_fixture()
+    case_id,target_id,request_type_id,priority_id,sub_priority_id,_required_id=transfer_fixture()
+    monkeypatch.setattr("app.modules.global_case_values.service.initial_status",
+        lambda db: (_ for _ in ()).throw(AssertionError("transfer must not read initial status")))
     preview = client.get(
         f"/api/cases/{case_id}/transfer-preview?target_environment_id={target_id}", headers=auth
     )
@@ -169,7 +214,9 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> No
         f"/api/cases/{case_id}/transfer-requirements?request_type_id={request_type_id}", headers=auth
     )
     assert requirements.status_code == 200
-    assert requirements.json()["required_fields"][0]["id"] == str(required_id)
+    assert requirements.json()["required_fields"] == []
+    assert requirements.json()["field_mappings"] == []
+    assert requirements.json()["global_fields_preserved"] == 1
     assert requirements.json()["priorities"]
     global_priority_id = str(priority_id)
     payload: dict[str, object] = {
@@ -179,40 +226,22 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity() -> No
         "sub_priority_id": None,
         "new_field_values": [],
     }
-    blocked = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json=payload)
-    assert blocked.status_code == 422
-    with SessionLocal() as db:
-        unchanged = db.get(Case, case_id)
-        assert unchanged and unchanged.environment_id != target_id
-        assert (
-            db.scalar(
-                select(func.count())
-                .select_from(CaseTransferHistory)
-                .where(CaseTransferHistory.case_id == case_id)
-            )
-            == 0
-        )
-    payload["new_field_values"] = [{"field_definition_id": str(required_id), "value": "הושלם"}]
     moved = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json=payload)
     assert moved.status_code == 200 and moved.json()["case_id"] == str(case_id)
     with SessionLocal() as db:
         case = db.get(Case, case_id)
         assert case
         assert case.environment_id == target_id and case.request_type_id == request_type_id
-        assert str(case.priority_id) == global_priority_id and case.sub_priority_id is None
+        assert str(case.priority_id)==global_priority_id and str(case.sub_priority_id)==str(sub_priority_id)
         assert case.assignee_id is None
         assert case.sla_policy_id is not None
         assert db.scalar(select(CaseParticipant).where(CaseParticipant.case_id == case_id)) is None
-        assert (
-            db.scalar(
-                select(CaseFieldValue).where(
-                    CaseFieldValue.case_id == case_id, CaseFieldValue.field_definition_id == required_id
-                )
-            )
-            is not None
-        )
+        assert db.scalar(select(CaseFieldValue).where(CaseFieldValue.case_id == case_id)) is None
+        global_value = db.scalar(select(GlobalCaseFieldValue).where(GlobalCaseFieldValue.case_id == case_id))
+        assert global_value and global_value.value_json == "option-stable-id"
         history = db.scalar(select(CaseTransferHistory).where(CaseTransferHistory.case_id == case_id))
         assert history and history.removed_participants and history.removed_assignee
+        assert history.removed_fields_snapshot[0]["value"] == "ערך מקור"
 
 
 def test_knowledge_upload_query_versioning_and_environment_isolation() -> None:
