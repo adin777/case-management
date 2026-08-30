@@ -76,8 +76,12 @@
 Request Type, Status, Priority או Sub-priority באמצעות מערך IDs מלא של אותה סביבה.
 
 `GET /api/environments/{id}/priorities` ו־`GET /api/environments/{id}/sub-priorities`
-הם מקורות האמת לערכים בסביבה; ה־UI מציג רק פעילים ושומר UUID. סטטוסים לפתיחה מגיעים
-מ־`case-config`. שינוי סביבה מאפס Request Type, Status, Priority, Sub-priority וערכי שדות.
+
+ממשקי הקטלוג הישנים נשמרים זמנית כתצוגות תאימות API ולתחזוקת נתונים היסטוריים בלבד.
+הם אינם משטח העריכה הפעיל של Status, Priority או Sub-priority. מקור האמת העסקי הפעיל
+הוא Global Field יחיד לכל `semantic_binding`, וכל מסכי ה-Case צורכים אותו ושומרים UUID.
+סטטוסים לפתיחה מגיעים מאותה תצורת Global Fields דרך `case-config`. שינוי סביבה מאפס
+Request Type וערכי שדות סביבתיים בלבד; ערכים גלובליים סמנטיים נשמרים.
 
 ## שדות וטפסים
 

@@ -46,6 +46,22 @@ automatically synchronized query indexes, but must not remain independent active
 migration to configurable or Global Fields. Every query-index write must pass through the shared
 domain service that owns the configurable value.
 
+## LEGACY REPLACEMENT RULE
+
+Legacy implementation must not remain active after its replacement is introduced. Every replaced
+UI, service, endpoint, route, and consumer must be audited and either removed or explicitly retained
+as read-only historical compatibility. Duplicate active business concepts are prohibited: each
+business value has one active source of truth and one editing surface.
+
+## CANONICAL REGRESSION AND GIT RULE
+
+All regression validation runs through the deterministic canonical command
+`powershell -ExecutionPolicy Bypass -File .\scripts\run-regression.ps1`. Codex must not reconstruct
+an ad-hoc test battery. New suites are added to the canonical runner, and every reported regression
+receives permanent automated coverage. A completed task is committed and pushed; `HEAD` must equal
+`origin/main`, the working tree must be clean, and runtime databases, uploads, secrets, and generated
+local state must never be committed.
+
 A configurable field and its options have exactly one canonical source of truth. No consumer may
 maintain or query an independent catalog for the same business field. Dropdown options must come
 from the exact field definition being rendered; rendering a field while loading values from a
