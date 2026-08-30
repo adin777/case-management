@@ -9,7 +9,12 @@ describe('case details semantic field architecture', () => {
   });
 
   it('renders the configurable global fields as the active editing surface', () => {
-    expect(source).toContain('caseFields.global_fields.map');
-    expect(source).toContain("field.semantic_binding==='case.assignee'");
+    expect(source).toContain('fields={caseFields.global_fields}');
+    expect(source).toContain('<GlobalFieldsPanel');
+  });
+
+  it('uses server permissions for lock overrides instead of blocking every locked case', () => {
+    expect(source).toContain('const editable = Boolean(item?.permissions.can_edit)');
+    expect(source).not.toContain('permissions.can_edit && !item?.is_locked');
   });
 });

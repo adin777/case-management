@@ -314,6 +314,15 @@ Environment Manager פעיל רואה תמיד את כל הקריאות בסבי
 מערכי הדרישות לערכים ריקים בטוחים ומציג מצב טעינה בכל מעבר. חריגת render בלתי
 צפויה נתפסת ב־Error Boundary ברמת האפליקציה ומציעה ניסיון חוזר.
 
+### Case Details UI contract
+
+עמוד פרטי הקריאה מציג את מספר הקריאה ללא הקידומת הטכנית `CASE-`. השדות הסמנטיים
+Status, Priority, Sub-priority ו־Assignee מוצגים ונערכים רק דרך `global_fields` שמוחזרים
+מ־`GET /api/environments/{id}/case-fields?presentation=edit`; אין selector מקביל המבוסס
+על עמודות התאימות. נעילת הקריאה הופכת את שדות הליבה והשדות הגלובליים לקריאה בלבד,
+בעוד כתיבת תגובה ציבורית נשארת זמינה. הערות מנהל מוצגות ונכתבות רק כאשר הרשאות
+`can_read_manager_comments` ו־`can_create_manager_comments` מוחזרות מהשרת.
+
 ### Dynamic global case fields
 
 Database חדש מתחיל ללא הגדרות שדות גלובליים. `GET/POST /api/global-case-fields`,
