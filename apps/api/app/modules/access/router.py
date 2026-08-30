@@ -69,6 +69,10 @@ def assignments(
 @router.post("/bulk")
 def bulk(data: BulkAccessIn, db: DB, user: Current) -> dict[str, int]:
     system_admin(user)
+    if data.subject_type == "groups" and db.scalar(select(Group.id).where(
+        Group.id.in_(data.subject_ids), Group.is_system_admin_group.is_(True)
+    )):
+        raise HTTPException(422, "לא ניתן לעקוף הרשאות של קבוצת Admin")
     aliases = {"users": "users_manage", "groups": "groups_manage", "access": "access_manage"}
     expanded: dict[str, Literal["inherit", "none", "view", "edit"]] = {}
     for code, level in data.levels.items():
@@ -147,10 +151,9 @@ def subject_matrix(subject_type: Literal["user", "group"], subject_id: uuid.UUID
     if isinstance(subject, Group) and subject.is_system_admin_group:
         return [{"domain_code": domain.code, **names(domain),
                  "default_level": "edit",
-                 "direct_level": direct.get(domain.code, "inherit"),
-                 "effective_level": direct.get(domain.code, "edit"),
-                 "source": "admin_group_override" if domain.code in direct else "admin_group_default",
-                 "scope": domain.scope, "can_override": True} for domain in domains]
+                 "direct_level": "inherit", "effective_level": "edit",
+                 "source": "admin_group_default",
+                 "scope": domain.scope, "can_override": False} for domain in domains]
     return [{"domain_code": domain.code, **names(domain),
              "default_level": "none", "direct_level": direct.get(domain.code, "inherit"),
              "effective_level": direct.get(domain.code, "none"),

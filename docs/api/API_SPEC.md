@@ -359,8 +359,14 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 אחיד לכל Permission Domain: `domain_code`, `domain_name`, `direct_level`,
 `effective_level`, `source`, `scope`, `description`, `can_override`. עבור System Admin כל תחום מוחזר
 כ־`edit`, המקור הוא „מנהל מערכת” ו־`can_override=false`; אין צורך ליצור Assignment rows.
+
+מסך ההרשאות מציג את `direct_level`, ‏`default_level`, ‏`effective_level` ו־`source` מאותה
+מטריצה ואינו מחשב ירושה בצד הלקוח. בחירה מרובה משתמשת ב־`GET /api/access/assignments`
+ושומרת דרך `POST /api/access/bulk`; לאחר שמירה מתבצעת קריאת מטריצה חדשה לאימות הערך.
 חבר בקבוצה המסומנת `is_system_admin_group=true` מקבל באותו אופן `edit` לכל Domain קיים
 או עתידי, עם מקור „קבוצת Admin”, ללא Assignment rows וללא אפשרות Override בקבוצה זו.
+`POST /api/access/bulk` דוחה ב־`422` כל ניסיון ליצור override לקבוצת Admin, והמטריצה
+מחזירה עבורה תמיד `direct_level=inherit`, ‏`effective_level=edit` ו־`can_override=false`.
 
 ### Operational reports
 

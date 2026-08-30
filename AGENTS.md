@@ -117,6 +117,13 @@ Ticket numbers are displayed as numeric identifiers only, without a technical pr
 must remove the legacy version completely. Dropdowns close immediately after selection. Report and
 Dashboard screens must share a consistent design system.
 
+Configurable fields and permissions must have one active source of truth. Replaced UI must remove
+the legacy version completely. Sort order of fields and values must be controlled by drag and drop,
+not by manual order fields. Permission screens must clearly show the effective permission state for
+the selected user or group. The Admin group always has full permissions by default, including newly
+added permissions. Every configurable value shown in UI must come from the database, never from
+hardcoded fallback lists.
+
 ## מטרת הפרויקט
 
 זהו מוצר Case Management גנרי לניהול קריאות שירות ותהליכים עסקיים בתחומים שונים.
