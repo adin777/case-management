@@ -32,6 +32,11 @@ After implementation, do not use an ad-hoc subset as final validation. Always ru
 
 ## FIELD CONSUMER MIGRATION RULE
 
+A configurable business field has exactly one canonical source of truth. Creating a second
+catalog or table containing independent IDs for the same configurable values is prohibited.
+Single-select fields store exactly one scalar stable option ID; multi-select fields store a
+collection. Regression tests must verify the same semantic ID and label across all consumers.
+
 Whenever a field model or source changes, the change is incomplete until every consumer is migrated.
 The mandatory consumer audit covers Create, Edit, Details, Dashboard, Lists, Reports, Filters,
 Sorting, Export, Import, Transfer, Automations, Approvals, API DTOs, and Tests.
@@ -40,6 +45,19 @@ There must be exactly one source of truth for each business value. Legacy column
 automatically synchronized query indexes, but must not remain independent active consumers after
 migration to configurable or Global Fields. Every query-index write must pass through the shared
 domain service that owns the configurable value.
+
+A configurable field and its options have exactly one canonical source of truth. No consumer may
+maintain or query an independent catalog for the same business field. Dropdown options must come
+from the exact field definition being rendered; rendering a field while loading values from a
+different domain model is a critical regression.
+
+Every configurable field must support edit, activate/deactivate, and safe delete. Delete performs
+dependency analysis. Used configuration is archived or deactivated unless explicit safe destructive
+deletion is approved; historical values are preserved.
+
+Automation conditions and actions reference stable configurable field IDs, never display labels.
+Empty is a first-class operator rather than a fake option value, and Automation value selectors use
+the same source-of-truth options as Case Create and Edit.
 
 ## SIMPLE FIRST
 

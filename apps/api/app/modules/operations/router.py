@@ -263,12 +263,14 @@ def run_transition(case_id: uuid.UUID, transition_id: uuid.UUID, data: Transitio
     if transition.requires_resolution and not data.resolution:
         raise HTTPException(422, "נדרש תיאור פתרון לביצוע המעבר")
     previous = item.workflow_status_id
-    target = db.get(WorkflowStatus, transition.to_status_id)
-    CaseSemanticFieldService(db).write(item,"case.status",transition.to_status_id)
-    if target and target.is_closed:
+    target = CaseSemanticFieldService(db).option_for_config_id("case.status", transition.to_status_id)
+    if not target:
+        raise HTTPException(409, "סטטוס היעד אינו אפשרות גלובלית תקינה")
+    CaseSemanticFieldService(db).write(item,"case.status",target.id)
+    if target.semantic_category == "closed" or target.is_final:
         item.closed_at = item.resolved_at = datetime.now(UTC)
         item.sla_resolution_status = "met" if not item.resolution_due_at or item.resolved_at <= item.resolution_due_at else "breached"
-    history = CaseStatusHistory(case_id=item.id, from_status_id=previous, to_status_id=transition.to_status_id, transition_id=transition.id, changed_by=user.id, comment=data.comment, automation_summary=[])
+    history = CaseStatusHistory(case_id=item.id, from_status_id=previous, to_status_id=target.id, transition_id=transition.id, changed_by=user.id, comment=data.comment, automation_summary=[])
     db.add(history)
     db.add(Notification(user_id=item.requester_id, notification_type="status_changed", title_he="סטטוס הקריאה השתנה", body_he=f"הקריאה {item.case_number} עברה לסטטוס {target.label_he if target else ''}", entity_type="case", entity_id=str(item.id)))
     audit(db, user, "case", item.id, "status_changed", before={"workflow_status_id": str(previous)}, after={"workflow_status_id": str(item.workflow_status_id)})

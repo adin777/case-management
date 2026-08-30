@@ -9,148 +9,138 @@ from app.modules.models import (
     Case,
     CaseSemanticSyncConflict,
     GlobalCaseFieldDefinition,
+    GlobalCaseFieldOption,
     GlobalCaseFieldValue,
-    GlobalPriorityDefinition,
-    GlobalStatusDefinition,
-    GlobalSubPriorityDefinition,
     User,
 )
 
 BINDINGS = {"case.status", "case.priority", "case.sub_priority", "case.assignee"}
-COLUMN_NAMES = {
-    "case.status": "workflow_status_id",
-    "case.priority": "priority_id",
-    "case.sub_priority": "sub_priority_id",
-    "case.assignee": "assignee_id",
-}
-CATALOGS: dict[str, type[Any]] = {
-    "case.status": GlobalStatusDefinition,
-    "case.priority": GlobalPriorityDefinition,
-    "case.sub_priority": GlobalSubPriorityDefinition,
-    "case.assignee": User,
-}
+COLUMN_NAMES = {"case.status":"workflow_status_id", "case.priority":"priority_id",
+                "case.sub_priority":"sub_priority_id", "case.assignee":"assignee_id"}
 
 
 class CaseSemanticFieldService:
-    """The only read/write boundary for semantic Global Case Fields.
-
-    Case columns are query indexes. When a binding exists, GlobalCaseFieldValue is the
-    business value and every write mirrors it to the corresponding indexed column.
-    """
-
-    def __init__(self, db: Session) -> None:
-        self.db = db
+    """Canonical access to semantic Global Field values and options."""
+    def __init__(self, db: Session) -> None: self.db = db
 
     def definition(self, binding: str) -> GlobalCaseFieldDefinition | None:
         return self.db.scalar(select(GlobalCaseFieldDefinition).where(
             GlobalCaseFieldDefinition.semantic_binding == binding,
-            GlobalCaseFieldDefinition.is_active.is_(True),
-        ))
+            GlobalCaseFieldDefinition.is_active.is_(True)))
 
     def indexed_column(self, binding: str) -> ColumnElement[Any]:
-        if binding not in COLUMN_NAMES:
-            raise ValueError(f"Unsupported semantic binding: {binding}")
+        if binding not in COLUMN_NAMES: raise ValueError(f"Unsupported semantic binding: {binding}")
         return getattr(Case, COLUMN_NAMES[binding])
+
+    @staticmethod
+    def scalar_value(value: Any) -> Any:
+        return value[0] if isinstance(value, list) and len(value) == 1 else value
 
     def value_id(self, item: Case, binding: str) -> uuid.UUID | None:
         field = self.definition(binding)
-        if field:
-            row = self.db.get(GlobalCaseFieldValue, (item.id, field.id))
-            if row and row.value_json not in (None, ""):
-                try:
-                    return uuid.UUID(str(row.value_json))
-                except ValueError:
-                    return None
-        return getattr(item, COLUMN_NAMES[binding])
+        if not field: return getattr(item, COLUMN_NAMES[binding])
+        row = self.db.get(GlobalCaseFieldValue, (item.id, field.id))
+        raw = self.scalar_value(row.value_json) if row else None
+        try: return uuid.UUID(str(raw)) if raw not in (None, "") and not isinstance(raw, list) else None
+        except ValueError: return None
+
+    def option(self, binding: str, value_id: uuid.UUID | None) -> GlobalCaseFieldOption | None:
+        field = self.definition(binding)
+        if not field or not value_id:
+            return None
+        row = self.db.get(GlobalCaseFieldOption, value_id)
+        return row if row and row.global_field_id == field.id else None
+
+    def option_for_config_id(self, binding: str, value_id: uuid.UUID) -> GlobalCaseFieldOption | None:
+        direct = self.option(binding, value_id)
+        if direct:
+            return direct
+        return next((row for row in self.db.scalars(select(GlobalCaseFieldOption))
+                     if (row.metadata_json or {}).get("legacy_id") == str(value_id)), None)
 
     def validate_value(self, binding: str, value_id: uuid.UUID | None,
                        *, require_active: bool = True) -> Any | None:
-        if value_id is None:
-            return None
-        model = CATALOGS[binding]
-        value = self.db.get(model, value_id)
-        if not value or (require_active and getattr(value, "is_active", True) is not True):
-            raise HTTPException(422, {"code":"INVALID_SEMANTIC_VALUE","binding":binding,
+        if value_id is None: return None
+        value = self.db.get(User, value_id) if binding == "case.assignee" else self.option(binding, value_id)
+        if not value or (require_active and not getattr(value, "is_active", True)):
+            raise HTTPException(422, {"code":"INVALID_SEMANTIC_VALUE", "binding":binding,
                                       "value_id":str(value_id)})
         return value
 
+    def option_rows(self, binding: str, *, active_only: bool = True) -> list[GlobalCaseFieldOption]:
+        field = self.definition(binding)
+        if not field or binding == "case.assignee": return []
+        query = select(GlobalCaseFieldOption).where(GlobalCaseFieldOption.global_field_id == field.id)
+        if active_only:
+            query = query.where(GlobalCaseFieldOption.is_active.is_(True))
+        return list(self.db.scalars(query.order_by(
+            GlobalCaseFieldOption.sort_order, GlobalCaseFieldOption.label_he)))
+
     def options(self, binding: str) -> list[dict[str, Any]]:
-        model=CATALOGS[binding]
-        if binding == "case.assignee":
-            return []
-        rows=self.db.scalars(select(model).where(model.is_active.is_(True)).order_by(
-            model.sort_order,model.label_he))
-        return [{"id":str(row.id),"label_he":row.label_he,"label_en":row.label_en or "",
-                 "is_active":True,"sort_order":row.sort_order} for row in rows]
+        rows = self.option_rows(binding)
+        return [{"id":str(row.id), "label_he":row.label_he, "label_en":row.label_en,
+                 "is_active":row.is_active, "sort_order":row.sort_order,
+                 "metadata":row.metadata_json or {}} for row in rows]
+
+    def options_for_field(self, field_id: uuid.UUID, *, active_only: bool = True) -> list[dict[str, Any]]:
+        query = select(GlobalCaseFieldOption).where(GlobalCaseFieldOption.global_field_id == field_id)
+        if active_only:
+            query = query.where(GlobalCaseFieldOption.is_active.is_(True))
+        rows = self.db.scalars(query.order_by(GlobalCaseFieldOption.sort_order,
+                                              GlobalCaseFieldOption.label_he))
+        return [{"id":str(row.id), "label_he":row.label_he, "label_en":row.label_en,
+                 "is_active":row.is_active, "sort_order":row.sort_order,
+                 "metadata":row.metadata_json or {}} for row in rows]
 
     def write(self, item: Case, binding: str, value: uuid.UUID | str | None,
               *, require_active: bool = True) -> None:
-        if binding not in BINDINGS:
-            raise ValueError(f"Unsupported semantic binding: {binding}")
         parsed = uuid.UUID(str(value)) if value not in (None, "") else None
         self.validate_value(binding, parsed, require_active=require_active)
         field = self.definition(binding)
         if field:
             row = self.db.get(GlobalCaseFieldValue, (item.id, field.id))
-            if row:
-                row.value_json = str(parsed) if parsed else None
+            if parsed is None:
+                if row:
+                    self.db.delete(row)
+            elif row:
+                row.value_json = str(parsed)
             else:
                 self.db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=field.id,
-                    value_json=str(parsed) if parsed else None))
+                    value_json=str(parsed)))
         setattr(item, COLUMN_NAMES[binding], parsed)
 
     def label(self, item: Case, binding: str, *, language: str = "he") -> str:
         value_id = self.value_id(item, binding)
-        if not value_id:
-            return ""
-        value = self.db.get(CATALOGS[binding], value_id)
-        if not value:
-            return ""
         if binding == "case.assignee":
-            return str(value.display_name)
-        return str(getattr(value, "label_en", None) if language == "en" else getattr(value, "label_he", "")
-                   or getattr(value, "label_he", ""))
+            user = self.db.get(User, value_id) if value_id else None
+            return user.display_name if user else ("ערך לא מזוהה" if value_id else "")
+        option = self.option(binding, value_id)
+        if not option: return "ערך לא מזוהה" if value_id else ""
+        return option.label_en if language == "en" and option.label_en else option.label_he
 
     def sync_case(self, item: Case) -> list[CaseSemanticSyncConflict]:
         conflicts: list[CaseSemanticSyncConflict] = []
         for binding in BINDINGS:
             field = self.definition(binding)
-            if not field:
-                continue
-            row = self.db.get(GlobalCaseFieldValue, (item.id, field.id))
-            raw_global = row.value_json if row else None
-            optimized = getattr(item, COLUMN_NAMES[binding])
-            parsed_global: uuid.UUID | None = None
-            if raw_global not in (None, ""):
-                try:
-                    parsed_global = uuid.UUID(str(raw_global))
-                except ValueError:
-                    pass
-            valid_global = bool(parsed_global and self.db.get(CATALOGS[binding], parsed_global))
-            if raw_global not in (None, "") and not valid_global:
-                conflicts.append(self._conflict(item,binding,raw_global,optimized,"invalid_global_value"))
-            elif parsed_global and optimized and parsed_global != optimized:
-                conflicts.append(self._conflict(item,binding,raw_global,optimized,"value_mismatch"))
-            elif parsed_global and not optimized:
-                setattr(item,COLUMN_NAMES[binding],parsed_global)
-            elif optimized and (not row or row.value_json in (None, "")):
-                if row:
-                    row.value_json = str(optimized)
-                else:
-                    self.db.add(GlobalCaseFieldValue(case_id=item.id,global_field_id=field.id,
-                        value_json=str(optimized)))
+            if not field: continue
+            row = self.db.get(GlobalCaseFieldValue, (item.id, field.id)); raw = row.value_json if row else None
+            scalar = self.scalar_value(raw)
+            if isinstance(raw, list) and len(raw) == 1 and row: row.value_json = scalar
+            try: value_id = uuid.UUID(str(scalar)) if scalar not in (None, "") and not isinstance(scalar, list) else None
+            except ValueError: value_id = None
+            indexed = getattr(item, COLUMN_NAMES[binding])
+            valid = (self.db.get(User, value_id) if binding == "case.assignee" else self.option(binding, value_id)) if value_id else None
+            if scalar and not valid: conflicts.append(self._conflict(item,binding,raw,indexed,"invalid_global_option"))
+            elif value_id: setattr(item, COLUMN_NAMES[binding], value_id)
+            elif indexed: conflicts.append(self._conflict(item,binding,raw,indexed,"missing_global_value"))
         return conflicts
 
     def _conflict(self,item:Case,binding:str,global_value:Any,optimized:uuid.UUID|None,
                   reason:str)->CaseSemanticSyncConflict:
         existing = self.db.scalar(select(CaseSemanticSyncConflict).where(
-            CaseSemanticSyncConflict.case_id == item.id,
-            CaseSemanticSyncConflict.semantic_binding == binding,
-            CaseSemanticSyncConflict.reason == reason,
-            CaseSemanticSyncConflict.resolved_at.is_(None)))
-        if existing:
-            return existing
+            CaseSemanticSyncConflict.case_id == item.id, CaseSemanticSyncConflict.semantic_binding == binding,
+            CaseSemanticSyncConflict.reason == reason, CaseSemanticSyncConflict.resolved_at.is_(None)))
+        if existing: return existing
         row=CaseSemanticSyncConflict(case_id=item.id,semantic_binding=binding,
             global_value_json=global_value,optimized_value_id=optimized,reason=reason)
-        self.db.add(row)
-        return row
+        self.db.add(row); return row

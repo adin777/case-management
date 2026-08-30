@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from pwdlib.exceptions import PwdlibError
 from sqlalchemy import select
@@ -15,6 +16,8 @@ from app.modules.models import (
     FieldDefinition,
     FormDefinition,
     FormStatus,
+    GlobalCaseFieldDefinition,
+    GlobalCaseFieldOption,
     GlobalPriorityDefinition,
     GlobalStatusDefinition,
     GlobalSubPriorityDefinition,
@@ -384,6 +387,30 @@ def run(*, include_demo_data: bool = False) -> None:
                     semantic_category="closed" if status_row.is_closed else ("resolved" if status_row.is_final else "open"),
                     is_active=status_row.is_active, is_initial=not has_initial and index == 0,
                     is_final=status_row.is_final, sort_order=status_row.sort_order, color=status_row.color))
+        db.flush()
+        semantic_sources: dict[str, tuple[str, list[Any], Any]] = {
+            "case.status": ("סטטוס", list(db.scalars(select(GlobalStatusDefinition))),
+                lambda row: {"semantic_category":row.semantic_category, "is_initial":row.is_initial,
+                             "is_final":row.is_final, "color":row.color}),
+            "case.priority": ("עדיפות", list(db.scalars(select(GlobalPriorityDefinition))),
+                lambda row: {"color":row.color}),
+            "case.sub_priority": ("תת עדיפות", list(db.scalars(select(GlobalSubPriorityDefinition))),
+                lambda row: {"color":row.color}),
+        }
+        for binding, (label, source_rows, metadata) in semantic_sources.items():
+            field = db.scalar(select(GlobalCaseFieldDefinition).where(
+                GlobalCaseFieldDefinition.semantic_binding == binding))
+            if not field:
+                field = GlobalCaseFieldDefinition(key=f"semantic_{binding.replace('.', '_')}",
+                    label_he=label, label_en=binding, field_type="single_select", is_active=True,
+                    is_required=False, sort_order=0, configuration_json={}, semantic_binding=binding)
+                db.add(field); db.flush()
+            for source in source_rows:
+                if not db.get(GlobalCaseFieldOption, source.id):
+                    db.add(GlobalCaseFieldOption(id=source.id, global_field_id=field.id,
+                        label_he=source.label_he, label_en=source.label_en or "",
+                        is_active=source.is_active, sort_order=source.sort_order,
+                        metadata_json=metadata(source)))
         request_type.workflow_definition_id = workflow.id
         if not db.scalar(select(SlaPolicy).where(SlaPolicy.environment_id == env.id)):
             db.add(

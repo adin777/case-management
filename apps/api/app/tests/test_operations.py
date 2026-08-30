@@ -3,10 +3,54 @@ from sqlalchemy import select
 
 from app.database.session import SessionLocal
 from app.main import app
-from app.modules.models import Case, Environment, FormDefinition, PriorityDefinition, RequestType, User
+from app.modules.automation.service import AutomationEngine, is_field_empty
+from app.modules.models import (
+    AutomationRule,
+    Case,
+    Environment,
+    FormDefinition,
+    GlobalCaseFieldDefinition,
+    PriorityDefinition,
+    RequestType,
+    User,
+)
 from app.modules.operations.models import WorkflowDefinition, WorkflowStatus, WorkflowTransition
 
 client = TestClient(app)
+
+
+def test_automation_empty_uses_stable_field_id_and_preserves_zero_false() -> None:
+    assert is_field_empty(None) and is_field_empty("") and is_field_empty([], "multi_select")
+    assert not is_field_empty(0) and not is_field_empty(False)
+    with SessionLocal() as db:
+        environment = db.scalar(select(Environment).where(Environment.is_active.is_(True)))
+        request_type = db.scalar(select(RequestType).where(RequestType.environment_id == environment.id)) if environment else None
+        admin = db.scalar(select(User).where(User.email == "admin@example.com"))
+        assignee = db.scalar(select(User).where(User.email == "agent@example.com"))
+        field = db.scalar(select(GlobalCaseFieldDefinition).where(
+            GlobalCaseFieldDefinition.semantic_binding == "case.assignee",
+            GlobalCaseFieldDefinition.is_active.is_(True)))
+        assert environment and request_type and admin and assignee
+        if not field:
+            field = GlobalCaseFieldDefinition(key="automation_assignee", label_he="מטפל",
+                label_en="Assignee", field_type="user", is_required=False, is_active=True,
+                sort_order=0, configuration_json={}, semantic_binding="case.assignee")
+            db.add(field); db.flush()
+        item = Case(case_number="CASE-AUTOMATION-EMPTY", environment_id=environment.id,
+                    request_type_id=request_type.id, title="empty", reporter_id=admin.id,
+                    requester_id=admin.id)
+        rule = AutomationRule(system_number="AR-EMPTY", environment_id=environment.id,
+            name="assign empty", trigger_type="case_created", is_active=True, priority=0,
+            conditions_json={"logic":"AND","conditions":[{"field":str(field.id),
+                "operator":"is_empty"}]}, actions_json=[{"type":"set_field",
+                    "field_id":str(field.id),"value_id":str(assignee.id)}], created_by=admin.id)
+        db.add_all([item, rule]); db.flush()
+        AutomationEngine.run(db, item, "case_created", {})
+        assert item.assignee_id == assignee.id
+        item.assignee_id = admin.id
+        AutomationEngine.run(db, item, "case_created", {})
+        assert item.assignee_id == admin.id
+        db.rollback()
 
 
 def headers(email: str = "admin@example.com", password: str = "Admin123!") -> dict[str, str]:

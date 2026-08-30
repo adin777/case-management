@@ -13,7 +13,6 @@ from app.modules.models import (
     CaseRelation,
     CaseStatusChangePreview,
     Environment,
-    GlobalStatusDefinition,
     User,
 )
 from app.modules.operations.models import CaseStatusHistory
@@ -55,7 +54,7 @@ def relation_case(db: Session, item: Case) -> dict[str, Any]:
 def status_snapshot(db: Session, parent: Case, target_status_id: uuid.UUID, actor: User,
                     include_descendants: bool) -> CaseStatusChangePreview:
     from app.modules.api import permissions
-    target = db.get(GlobalStatusDefinition, target_status_id)
+    target = CaseSemanticFieldService(db).option("case.status", target_status_id)
     if not target or not target.is_active:
         raise HTTPException(409, {"code":"INVALID_STATUS","message":"סטטוס היעד הגלובלי אינו פעיל","details":{}})
     candidates = [parent.id] + (descendants(db, parent.id) if include_descendants else [])
@@ -77,7 +76,7 @@ def status_snapshot(db: Session, parent: Case, target_status_id: uuid.UUID, acto
 def apply_status_snapshot(db: Session, preview: CaseStatusChangePreview, actor: User) -> dict[str, Any]:
     if preview.actor_id != actor.id: raise HTTPException(403, "תצוגת השינוי שייכת למשתמש אחר")
     if preview.applied_at: raise HTTPException(409, "תצוגת השינוי כבר הוחלה")
-    target = db.get(GlobalStatusDefinition, preview.target_status_id)
+    target = CaseSemanticFieldService(db).option("case.status", preview.target_status_id)
     if not target or not target.is_active: raise HTTPException(409, "סטטוס היעד אינו פעיל עוד")
     updated: list[str] = []
     for raw_id in preview.snapshot_json.get("eligible", []):

@@ -6,11 +6,11 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 
 from app.modules.api import DB, Current, audit, require
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import (
     CaseFieldDefinition,
-    GlobalPriorityDefinition,
-    GlobalStatusDefinition,
-    GlobalSubPriorityDefinition,
+    GlobalCaseFieldDefinition,
+    GlobalCaseFieldOption,
     RequestType,
 )
 from app.modules.system_fields.registry import registry_payload
@@ -28,14 +28,21 @@ def reorder_system_field(environment_id: uuid.UUID, field_code: str, data: Reord
                          db: DB, user: Current) -> dict[str, bool]:
     permission = "workflow.manage" if field_code == "status" else "request_type.manage" if field_code == "request_type" else "environment.manage"
     require(db, user, environment_id, permission)
-    model: Any = {"request_type": RequestType, "priority": GlobalPriorityDefinition,
-                  "sub_priority": GlobalSubPriorityDefinition, "status": GlobalStatusDefinition}.get(field_code)
+    model: Any = {"request_type": RequestType}.get(field_code)
+    semantic_binding = {"status": "case.status", "priority": "case.priority",
+                        "sub_priority": "case.sub_priority"}.get(field_code)
+    if semantic_binding:
+        field = CaseSemanticFieldService(db).definition(semantic_binding)
+        if not field:
+            raise HTTPException(409, "לא הוגדר שדה גלובלי סמנטי")
+        model = GlobalCaseFieldOption
     if not model:
         raise HTTPException(404, "שדה המערכת אינו תומך בסידור")
     if field_code == "request_type":
         valid_ids = set(db.scalars(select(model.id).where(model.environment_id == environment_id)))
     else:
-        valid_ids = set(db.scalars(select(model.id)))
+        assert field is not None
+        valid_ids = set(db.scalars(select(model.id).where(model.global_field_id == field.id)))
     if set(data.ids) != valid_ids or len(data.ids) != len(valid_ids):
         raise HTTPException(422, "רשימת הסידור אינה תואמת לערכי הסביבה")
     for order, item_id in enumerate(data.ids):
@@ -58,17 +65,20 @@ def system_fields(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict
 @router.get("/automation-fields")
 def automation_fields(environment_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
     require(db, user, environment_id, "environment.rules.manage")
-    core = registry_payload()
-    dynamic = [{"code": f"dynamic:{row.id}", "label_he": row.label_he,
+    global_fields = [{"code": str(row.id), "field_id": str(row.id), "label_he": row.label_he,
+                "field_type": row.field_type, "semantic_binding": row.semantic_binding,
+                "value_source": "GlobalCaseFieldDefinition", "is_target": True}
+               for row in db.scalars(select(GlobalCaseFieldDefinition).where(
+                   GlobalCaseFieldDefinition.is_active.is_(True)).order_by(
+                       GlobalCaseFieldDefinition.sort_order))]
+    dynamic = [{"code": str(row.id), "field_id": str(row.id), "label_he": row.label_he,
                 "field_type": row.field_type, "value_source": "CaseFieldDefinition",
                 "is_target": True}
                for row in db.scalars(select(CaseFieldDefinition).where(
                    CaseFieldDefinition.environment_id == environment_id,
                    CaseFieldDefinition.is_active.is_(True)).order_by(CaseFieldDefinition.sort_order))]
-    normalized = [{"code": row["code"], "label_he": row["label_he"], "field_type": "select",
-                   "value_source": row["value_source"], "is_target": row["is_target"]} for row in core]
-    return {"trigger_fields": normalized + dynamic,
-            "target_fields": [row for row in normalized + dynamic if row["is_target"]]}
+    fields = global_fields + dynamic
+    return {"trigger_fields": fields, "target_fields": [row for row in fields if row["is_target"]]}
 
 
 @router.get("/automation-fields/{field_code}/options")

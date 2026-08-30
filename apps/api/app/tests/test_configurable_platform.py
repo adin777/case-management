@@ -329,11 +329,18 @@ def test_dynamic_global_field_crud_visibility_and_case_value_roundtrip() -> None
     assert hidden.status_code == 200
     combined = client.get(f"/api/environments/{environment['id']}/case-fields", headers=headers).json()
     assert field["id"] not in {row["id"] for row in combined["global_fields"]}
-    assert client.delete(f"/api/global-case-fields/{field['id']}", headers=headers).status_code == 409
-    disabled = client.patch(f"/api/global-case-fields/{field['id']}", headers=headers, json={
-        "label_he":"מערכת יעד","label_en":"Target system","field_type":"single_select",
-        "is_required":False,"is_active":False})
-    assert disabled.status_code == 200 and disabled.json()["is_active"] is False
+    safe_delete = client.delete(f"/api/global-case-fields/{field['id']}", headers=headers)
+    assert safe_delete.status_code == 200
+    assert safe_delete.json()["action"] == "deactivated"
+    disabled = client.get("/api/global-case-fields?include_inactive=true", headers=headers).json()
+    assert next(row for row in disabled if row["id"] == field["id"])["is_active"] is False
+
+    unused = client.post("/api/global-case-fields", headers=headers, json={
+        "label_he": "שדה למחיקה", "field_type": "text", "is_active": True,
+    }).json()
+    physical_delete = client.delete(f"/api/global-case-fields/{unused['id']}", headers=headers)
+    assert physical_delete.status_code == 200
+    assert physical_delete.json() == {"action": "deleted", "value_count": 0, "warning": None}
 
 
 def test_assignee_semantic_binding_environment_configuration_and_sync() -> None:

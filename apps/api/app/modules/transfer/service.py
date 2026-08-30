@@ -21,9 +21,6 @@ from app.modules.models import (
     EnvironmentMembership,
     FieldDefinition,
     GlobalCaseFieldValue,
-    GlobalPriorityDefinition,
-    GlobalStatusDefinition,
-    GlobalSubPriorityDefinition,
     RequestType,
     User,
 )
@@ -106,6 +103,7 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
     }
     global_count = db.scalar(select(func.count()).select_from(GlobalCaseFieldValue).where(
         GlobalCaseFieldValue.case_id == item.id)) or 0
+    semantics = CaseSemanticFieldService(db)
     return {
         "case_id": str(item.id),
         "case_number": item.case_number,
@@ -119,6 +117,13 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
         "removed_participant_ids": removed,
         "assignee_will_be_removed": bool(item.assignee_id and not _member(db, target.id, item.assignee_id)),
         "global_fields_preserved": global_count,
+        "semantic_values": {
+            binding: {
+                "option_id": str(semantics.value_id(item, binding) or ""),
+                "label": semantics.label(item, binding),
+            }
+            for binding in ("case.status", "case.priority", "case.sub_priority", "case.assignee")
+        },
         "environment_fields_removed": len(values),
         "current_fields": [
             {
@@ -139,7 +144,8 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
     fields, old_fields = _fields(db, request_type.form_version_id), _fields(db, item.form_definition_id)
     priorities = active_values(db, "priorities")
     sub_priorities = active_values(db, "sub-priorities")
-    current_status = db.get(GlobalStatusDefinition, item.workflow_status_id)
+    semantics = CaseSemanticFieldService(db)
+    current_status = semantics.option("case.status", semantics.value_id(item, "case.status"))
     assignees = list(
         db.scalars(
             select(User)
@@ -198,18 +204,18 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
         or target_type.environment_id != payload.target_environment_id
     ):
         raise HTTPException(422, "סוג הקריאה אינו פעיל בסביבת היעד")
-    priority_id = payload.priority_id or item.priority_id
-    priority = db.get(GlobalPriorityDefinition, priority_id) if priority_id else None
+    semantics = CaseSemanticFieldService(db)
+    priority_id = payload.priority_id or semantics.value_id(item, "case.priority")
+    priority = semantics.option("case.priority", priority_id)
     if payload.priority_id and (not priority or not priority.is_active):
         raise HTTPException(422, "העדיפות הגלובלית שנבחרה אינה פעילה")
     if payload.sub_priority_id:
-        sub = db.get(GlobalSubPriorityDefinition, payload.sub_priority_id)
+        sub = semantics.option("case.sub_priority", payload.sub_priority_id)
         if not sub or not sub.is_active:
             raise HTTPException(422, "תת־העדיפות הגלובלית אינה פעילה")
     if payload.assignee_id and not _member(db, payload.target_environment_id, payload.assignee_id):
         raise HTTPException(422, "המטפל אינו פעיל או משויך לסביבת היעד")
     supplied = {str(row.field_definition_id): row.value for row in payload.new_field_values}
-    semantics = CaseSemanticFieldService(db)
     conflicts = semantics.sync_case(item)
     if conflicts:
         raise HTTPException(409, "קיימת סתירה בערכים הסמנטיים של הקריאה; יש לפתור אותה לפני העברה")

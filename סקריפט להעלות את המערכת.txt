@@ -1,0 +1,2 @@
+cd C:\projects\Case_Management
+powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1

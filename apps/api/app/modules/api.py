@@ -41,8 +41,8 @@ from app.modules.models import (
     FormDefinition,
     FormStatus,
     GlobalCaseFieldDefinition,
+    GlobalCaseFieldOption,
     GlobalCaseFieldValue,
-    GlobalStatusDefinition,
     Group,
     RefreshToken,
     RequestType,
@@ -684,7 +684,15 @@ def case_creation_environment_configuration(
             "label_en": row.label_en, "field_type": row.field_type,
             "is_required": configured_required(field_configs.get(row.id)),
             "is_active": row.is_active, "sort_order": row.sort_order,
-            "configuration_json": row.configuration_json or {},
+            "configuration_json": {**(row.configuration_json or {}), "options": [
+                {"id": str(option.id), "value": str(option.id), "label_he": option.label_he,
+                 "label_en": option.label_en, "is_active": option.is_active,
+                 "sort_order": option.sort_order, "metadata": option.metadata_json or {}}
+                for option in db.scalars(select(GlobalCaseFieldOption).where(
+                    GlobalCaseFieldOption.global_field_id == row.id,
+                    GlobalCaseFieldOption.is_active.is_(True)).order_by(
+                        GlobalCaseFieldOption.sort_order, GlobalCaseFieldOption.label_he))
+            ]},
             "semantic_binding": row.semantic_binding} for row in global_fields],
         "participants": participant_rows,
         "eligible_assignees": eligible_assignee_rows(db, environment_id),
@@ -1121,9 +1129,14 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
     if "case.status" in semantic_fields and semantic_fields["case.status"].id not in provided:
         semantics.write(item,"case.status",initial_status(db).id)
     if "case.priority" in semantic_fields and semantic_fields["case.priority"].id not in provided:
-        semantics.write(item,"case.priority",data.priority_id or rt.default_priority_id)
+        priority_default = data.priority_id or rt.default_priority_id
+        priority_option = semantics.option_for_config_id("case.priority", priority_default) if priority_default else None
+        semantics.write(item,"case.priority",priority_option.id if priority_option else None)
     if "case.sub_priority" in semantic_fields and semantic_fields["case.sub_priority"].id not in provided:
-        semantics.write(item,"case.sub_priority",data.sub_priority_id or rt.default_sub_priority_id)
+        sub_priority_default = data.sub_priority_id or rt.default_sub_priority_id
+        sub_priority_option = semantics.option_for_config_id(
+            "case.sub_priority", sub_priority_default) if sub_priority_default else None
+        semantics.write(item,"case.sub_priority",sub_priority_option.id if sub_priority_option else None)
     for participant_id in set(data.participant_ids):
         participant_user = db.get(User, participant_id)
         if participant_id != user.id and participant_user:
@@ -1230,13 +1243,12 @@ def workspace_cases(
     if updated_to:
         query = query.where(Case.updated_at <= updated_to)
     if activity_state != "all":
-        inactive_statuses = select(GlobalStatusDefinition.id).where(
-            GlobalStatusDefinition.semantic_category.in_(["resolved", "closed"])
-        )
+        inactive_ids = [row.id for row in db.scalars(select(GlobalCaseFieldOption))
+                        if row.semantic_category in {"resolved", "closed"}]
         query = query.where(
-            or_(semantics.indexed_column("case.status").is_(None),semantics.indexed_column("case.status").not_in(inactive_statuses))
+            or_(semantics.indexed_column("case.status").is_(None),semantics.indexed_column("case.status").not_in(inactive_ids))
             if activity_state == "active"
-            else semantics.indexed_column("case.status").in_(inactive_statuses)
+            else semantics.indexed_column("case.status").in_(inactive_ids)
         )
     if dynamic_filters:
         try:
@@ -1288,6 +1300,9 @@ def workspace_cases(
                 "request_type": request_types_by_id.get(row.request_type_id, ""),
                 "status":semantics.label(row,"case.status"),
                 "priority":semantics.label(row,"case.priority"),
+                "status_option_id": semantics.value_id(row, "case.status"),
+                "priority_option_id": semantics.value_id(row, "case.priority"),
+                "sub_priority_option_id": semantics.value_id(row, "case.sub_priority"),
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }
@@ -1660,11 +1675,12 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     require(db, user, item.environment_id, "case.change_status")
     if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה לשינוי סטטוס")
-    target = db.get(GlobalStatusDefinition, data.workflow_status_id)
+    semantics = CaseSemanticFieldService(db)
+    target = semantics.option("case.status", data.workflow_status_id)
     if not target or not target.is_active:
         raise HTTPException(409, "סטטוס היעד הגלובלי אינו פעיל")
     before = item.workflow_status_id
-    CaseSemanticFieldService(db).write(item,"case.status",target.id)
+    semantics.write(item,"case.status",target.id)
     item.version += 1
     if target.semantic_category == "closed" or target.is_final:
         item.closed_at = datetime.now(UTC)

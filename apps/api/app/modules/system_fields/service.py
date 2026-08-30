@@ -5,11 +5,10 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import (
     CaseFieldDefinition,
-    GlobalPriorityDefinition,
-    GlobalStatusDefinition,
-    GlobalSubPriorityDefinition,
+    GlobalCaseFieldDefinition,
     Group,
     RequestType,
     User,
@@ -19,6 +18,24 @@ from app.modules.system_fields.registry import BY_CODE
 
 def options_for(db: Session, environment_id: uuid.UUID, field_code: str,
                 *, active_only: bool = True) -> list[dict[str, Any]]:
+    try:
+        stable_id = uuid.UUID(field_code)
+    except ValueError:
+        stable_id = None
+    if stable_id:
+        global_field = db.get(GlobalCaseFieldDefinition, stable_id)
+        if global_field and global_field.is_active:
+            if global_field.field_type == "user":
+                user_rows = db.scalars(select(User).where(User.is_active.is_(True)).order_by(User.display_name))
+                return [{"id": row.id, "label_he": row.display_name} for row in user_rows]
+            return [{"id": row["id"], "label_he": row["label_he"]}
+                    for row in CaseSemanticFieldService(db).options_for_field(stable_id,
+                                                                              active_only=active_only)]
+        environment_field = db.get(CaseFieldDefinition, stable_id)
+        if environment_field and environment_field.environment_id == environment_id and environment_field.is_active:
+            return [{"id": option.get("value"), "label_he": option.get("label_he") or option.get("value")}
+                    for option in (environment_field.options_json or []) if option.get("is_active", True)]
+        raise HTTPException(404, "השדה לא נמצא")
     if field_code not in BY_CODE and not field_code.startswith("dynamic:"):
         raise HTTPException(404, "שדה המערכת לא נמצא")
     if field_code == "request_type":
@@ -33,27 +50,18 @@ def options_for(db: Session, environment_id: uuid.UUID, field_code: str,
                  "default_sub_priority_id": row.default_sub_priority_id,
                  "default_assignee_user_id": row.default_assignee_user_id,
                  "default_assignee_group_id": row.default_assignee_group_id} for row in request_rows]
-    if field_code == "status":
-        status_query = select(GlobalStatusDefinition)
-        if active_only: status_query = status_query.where(GlobalStatusDefinition.is_active.is_(True))
-        status_rows = db.scalars(status_query.order_by(GlobalStatusDefinition.sort_order))
-        return [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
+    semantic_binding = {"status": "case.status", "priority": "case.priority",
+                        "sub_priority": "case.sub_priority"}.get(field_code)
+    if semantic_binding:
+        rows = CaseSemanticFieldService(db).option_rows(semantic_binding, active_only=active_only)
+        result = [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
                  "sort_order": row.sort_order, "is_active": row.is_active,
-                 "is_initial": row.is_initial, "is_final": row.is_final,
-                 "semantic_category": row.semantic_category,
-                 "workflow_id": None} for row in status_rows]
-    if field_code == "priority":
-        priority_query = select(GlobalPriorityDefinition)
-        if active_only: priority_query = priority_query.where(GlobalPriorityDefinition.is_active.is_(True))
-        priority_rows = db.scalars(priority_query.order_by(GlobalPriorityDefinition.sort_order))
-        return [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
-                 "sort_order": row.sort_order, "is_active": row.is_active} for row in priority_rows]
-    if field_code == "sub_priority":
-        sub_query = select(GlobalSubPriorityDefinition)
-        if active_only: sub_query = sub_query.where(GlobalSubPriorityDefinition.is_active.is_(True))
-        sub_rows = db.scalars(sub_query.order_by(GlobalSubPriorityDefinition.sort_order))
-        return [{"id": row.id, "code": row.code, "label_he": row.label_he, "color": row.color,
-                 "sort_order": row.sort_order, "is_active": row.is_active} for row in sub_rows]
+                 } for row in rows]
+        if field_code == "status":
+            for item, row in zip(result, rows, strict=True):
+                item.update(is_initial=row.is_initial, is_final=row.is_final,
+                            semantic_category=row.semantic_category, workflow_id=None)
+        return result
     if field_code in {"assignee", "participants"}:
         user_rows = db.scalars(select(User).where(User.is_active.is_(True)).order_by(User.display_name))
         return [{"id": row.id, "label_he": row.display_name} for row in user_rows]

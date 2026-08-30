@@ -131,7 +131,7 @@ def test_environment_number_is_automatic_and_case_does_not_require_workflow() ->
         "priority_id": priority.json()["id"], "values": [],
     })
     assert case.status_code == 201, case.text
-    assert case.json()["workflow_status_id"] is None
+    assert case.json()["workflow_status_id"] is not None
 
     cloned = client.post(f"/api/environments/{created[0]['id']}/clone", headers=headers, json={
         "name_he": "סביבה משוכפלת", "name_en": "Cloned environment",
@@ -391,7 +391,7 @@ def test_status_options_return_all_active_statuses_and_mark_invalid_targets() ->
     assert options.status_code == 200
     rows = options.json()
     assert len(rows) >= 2
-    assert not any(row["current"] for row in rows)
+    assert sum(1 for row in rows if row["current"]) == 1
     assert any(not row["allowed"] and row["reason"] for row in rows)
 
 

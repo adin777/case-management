@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.database.session import SessionLocal
 from app.main import app
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import (
     Case,
     CaseFieldValue,
@@ -16,6 +17,7 @@ from app.modules.models import (
     FormDefinition,
     FormStatus,
     GlobalCaseFieldDefinition,
+    GlobalCaseFieldOption,
     GlobalCaseFieldValue,
     GlobalSubPriorityDefinition,
     PriorityDefinition,
@@ -33,7 +35,9 @@ def headers(email: str = "admin@example.com", password: str = "Admin123!") -> di
     return {"Authorization": f"Bearer {token}"}
 
 
-def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+def transfer_fixture() -> tuple[
+    uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID
+]:
     with SessionLocal() as db:
         admin = db.scalar(select(User).where(User.email == "admin@example.com"))
         assert admin
@@ -66,6 +70,12 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
                 is_active=True,
                 sort_order=0,
             ))
+            db.flush()
+            semantic_field = CaseSemanticFieldService(db).definition("case.sub_priority")
+            assert semantic_field
+            db.add(GlobalCaseFieldOption(id=source_sub_priority.id,
+                global_field_id=semantic_field.id,label_he=source_sub_priority.label_he,
+                label_en="",is_active=True,sort_order=0,metadata_json={}))
             db.flush()
         source_status = db.scalar(
             select(WorkflowStatus)
@@ -163,6 +173,10 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
         )
         db.add(case)
         db.flush()
+        semantics = CaseSemanticFieldService(db)
+        semantics.write(case, "case.status", source_status.id)
+        semantics.write(case, "case.priority", source_priority.id)
+        semantics.write(case, "case.sub_priority", source_sub_priority.id)
         source_field = FieldDefinition(
             form_definition_id=source_type.form_version_id,
             key=f"source_only_{uuid.uuid4().hex[:6]}", label_he="שדה מקור בלבד",
@@ -196,14 +210,20 @@ def transfer_fixture() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid
             )
         )
         db.commit()
-        return case.id,target.id,request_type.id,source_priority.id,source_sub_priority.id,required.id
+        return (
+            case.id, target.id, request_type.id, source_priority.id,
+            source_sub_priority.id, required.id, global_field.id,
+        )
 
 
 def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity(
     monkeypatch:pytest.MonkeyPatch,
 ) -> None:
     auth = headers()
-    case_id,target_id,request_type_id,priority_id,sub_priority_id,_required_id=transfer_fixture()
+    (
+        case_id, target_id, request_type_id, priority_id, sub_priority_id,
+        _required_id, global_field_id,
+    ) = transfer_fixture()
     monkeypatch.setattr("app.modules.global_case_values.service.initial_status",
         lambda db: (_ for _ in ()).throw(AssertionError("transfer must not read initial status")))
     preview = client.get(
@@ -216,7 +236,7 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity(
     assert requirements.status_code == 200
     assert requirements.json()["required_fields"] == []
     assert requirements.json()["field_mappings"] == []
-    assert requirements.json()["global_fields_preserved"] == 1
+    assert requirements.json()["global_fields_preserved"] == 4
     assert requirements.json()["priorities"]
     global_priority_id = str(priority_id)
     payload: dict[str, object] = {
@@ -237,7 +257,10 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity(
         assert case.sla_policy_id is not None
         assert db.scalar(select(CaseParticipant).where(CaseParticipant.case_id == case_id)) is None
         assert db.scalar(select(CaseFieldValue).where(CaseFieldValue.case_id == case_id)) is None
-        global_value = db.scalar(select(GlobalCaseFieldValue).where(GlobalCaseFieldValue.case_id == case_id))
+        global_value = db.scalar(select(GlobalCaseFieldValue).where(
+            GlobalCaseFieldValue.case_id == case_id,
+            GlobalCaseFieldValue.global_field_id == global_field_id,
+        ))
         assert global_value and global_value.value_json == "option-stable-id"
         history = db.scalar(select(CaseTransferHistory).where(CaseTransferHistory.case_id == case_id))
         assert history and history.removed_participants and history.removed_assignee

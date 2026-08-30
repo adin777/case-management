@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from sqlalchemy import delete, func, or_, select
 
 from app.modules.api import DB, Current, audit, case_access, password_hash, require
+from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.case_visibility.service import can_manage_locked_case
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.models import (
@@ -18,8 +19,7 @@ from app.modules.models import (
     Environment,
     EnvironmentMembership,
     EnvironmentUserField,
-    GlobalPriorityDefinition,
-    GlobalSubPriorityDefinition,
+    GlobalCaseFieldOption,
     Group,
     GroupEnvironmentRole,
     GroupMember,
@@ -1087,8 +1087,9 @@ def remove_membership(environment_id: uuid.UUID, membership_id: uuid.UUID, db: D
 def list_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.read")
     result = []
-    children = list(db.scalars(select(GlobalSubPriorityDefinition).order_by(GlobalSubPriorityDefinition.sort_order)))
-    for row in db.scalars(select(GlobalPriorityDefinition).order_by(GlobalPriorityDefinition.sort_order)):
+    semantics = CaseSemanticFieldService(db)
+    children = semantics.option_rows("case.sub_priority", active_only=False)
+    for row in semantics.option_rows("case.priority", active_only=False):
         result.append(
             {
                 "id": row.id,
@@ -1126,9 +1127,10 @@ def create_priority(environment_id: uuid.UUID, data: PriorityIn, db: DB, user: C
     )
     db.add(item)
     db.flush()
-    db.add(GlobalPriorityDefinition(id=item.id, code=f"{data.code}_{str(item.id).replace('-', '')[:8]}",
-        label_he=data.label_he, label_en=data.label_en, is_active=data.is_active,
-        sort_order=data.sort_order, color=data.color))
+    field = CaseSemanticFieldService(db).definition("case.priority")
+    if field: db.add(GlobalCaseFieldOption(id=item.id, global_field_id=field.id,
+        label_he=data.label_he, label_en=data.label_en or "", is_active=data.is_active,
+        sort_order=data.sort_order, metadata_json={"code":data.code,"color":data.color}))
     db.commit()
     return item
 
@@ -1205,9 +1207,10 @@ def create_sub_priority(
     )
     db.add(item)
     db.flush()
-    db.add(GlobalSubPriorityDefinition(id=item.id, code=f"{data.code}_{str(item.id).replace('-', '')[:8]}",
-        label_he=data.label_he, label_en=data.label_en, is_active=data.is_active,
-        sort_order=data.sort_order, color=data.color))
+    field = CaseSemanticFieldService(db).definition("case.sub_priority")
+    if field: db.add(GlobalCaseFieldOption(id=item.id, global_field_id=field.id,
+        label_he=data.label_he, label_en=data.label_en or "", is_active=data.is_active,
+        sort_order=data.sort_order, metadata_json={"code":data.code,"color":data.color}))
     db.commit()
     return item
 
@@ -1260,8 +1263,7 @@ def delete_sub_priority(sub_priority_id: uuid.UUID, db: DB, user: Current) -> No
 @router.get("/environments/{environment_id}/sub-priorities")
 def list_environment_sub_priorities(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
     require(db, user, environment_id, "environment.read")
-    rows = db.scalars(select(GlobalSubPriorityDefinition).order_by(GlobalSubPriorityDefinition.sort_order))
-    return [{column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows]
+    return CaseSemanticFieldService(db).options("case.sub_priority")
 
 
 @router.post("/environments/{environment_id}/sub-priorities", status_code=201)
@@ -1271,9 +1273,10 @@ def create_environment_sub_priority(environment_id: uuid.UUID, data: SubPriority
     item = SubPriorityDefinition(system_number=NumberingService.next(db, "sub_priority", environment_id),
                                  environment_id=environment_id, priority_id=None, **data.model_dump())
     db.add(item); db.flush()
-    db.add(GlobalSubPriorityDefinition(id=item.id, code=f"{data.code}_{str(item.id).replace('-', '')[:8]}",
-        label_he=data.label_he, label_en=data.label_en, is_active=data.is_active,
-        sort_order=data.sort_order, color=data.color))
+    field = CaseSemanticFieldService(db).definition("case.sub_priority")
+    if field: db.add(GlobalCaseFieldOption(id=item.id, global_field_id=field.id,
+        label_he=data.label_he, label_en=data.label_en or "", is_active=data.is_active,
+        sort_order=data.sort_order, metadata_json={"code":data.code,"color":data.color}))
     audit(db, user, "sub_priority", item.id, "created")
     db.commit()
     return {column.name: getattr(item, column.name) for column in item.__table__.columns}

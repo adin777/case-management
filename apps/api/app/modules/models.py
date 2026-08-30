@@ -283,8 +283,8 @@ class Case(TimestampMixin, Base):
         Enum(CaseStatus, native_enum=False), default=CaseStatus.submitted
     )
     priority: Mapped[str] = mapped_column(String(30), default="normal")
-    priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("global_priority_definitions.id"))
-    sub_priority_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("global_sub_priority_definitions.id"))
+    priority_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    sub_priority_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
@@ -546,6 +546,39 @@ class GlobalCaseFieldDefinition(TimestampMixin, Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
     semantic_binding: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+
+
+class GlobalCaseFieldOption(TimestampMixin, Base):
+    __tablename__ = "global_case_field_options"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    global_field_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("global_case_field_definitions.id", ondelete="CASCADE"), index=True)
+    label_he: Mapped[str] = mapped_column(String(200))
+    label_en: Mapped[str] = mapped_column(String(200), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    @property
+    def semantic_category(self) -> str:
+        return str((self.metadata_json or {}).get("semantic_category", "open"))
+
+    @property
+    def is_initial(self) -> bool:
+        return bool((self.metadata_json or {}).get("is_initial", False))
+
+    @property
+    def is_final(self) -> bool:
+        return bool((self.metadata_json or {}).get("is_final", False))
+
+    @property
+    def code(self) -> str:
+        return str((self.metadata_json or {}).get("code", self.id))
+
+    @property
+    def color(self) -> str | None:
+        value = (self.metadata_json or {}).get("color")
+        return str(value) if value else None
 
 
 class EnvironmentGlobalCaseField(Base):

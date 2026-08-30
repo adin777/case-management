@@ -312,16 +312,22 @@ Database חדש מתחיל ללא הגדרות שדות גלובליים. `GET/P
 `PATCH/DELETE /api/global-case-fields/{id}` ו־`PUT /api/global-case-fields/order` מנהלים
 Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number`, `date`, `datetime`,
 `boolean`, `single_select`, `multi_select`, `user`, `email`, `url`; ה־key וה־IDs נוצרים
-בשרת. מחיקה של שדה בשימוש מחזירה `409`, והשבתה שומרת ערכים היסטוריים.
+בשרת. `DELETE` מבצע dependency analysis: שדה שלא היה בשימוש נמחק פיזית, ואילו שדה
+עם ערכים מושבת ומחזיר `action=deactivated` תוך שמירת הערכים ההיסטוריים. עבור שדה
+עם `semantic_binding` מוחזרת גם אזהרה על השבתת צרכני המשמעות העסקית.
 
 לשדות בחירה קיימים `POST/PATCH/DELETE /api/global-case-fields/{field_id}/options[/{option_id}]`
-ו־`PUT /api/global-case-fields/{field_id}/options/order`. ערך בשימוש אינו נמחק פיזית.
+ו־`PUT /api/global-case-fields/{field_id}/options/order`. ערך בשימוש מושבת ואינו נמחק פיזית.
 `PUT /api/environments/{environment_id}/global-case-fields/{field_id}/visibility?is_visible=`
 שומר חריגת נראות; בהיעדר row ברירת המחדל היא מוצג. שדה לא פעיל לעולם אינו מוחזר כגלוי.
 
-`GET /api/environments/{environment_id}/case-fields?request_type_id=` הוא מקור האמת המאוחד
+`GET /api/environments/{environment_id}/case-fields?request_type_id=&context=create|edit` הוא מקור האמת המאוחד
 ומחזיר `{global_fields, environment_fields}` לפי פעילות, נראות, סדר והרשאה. הוא משמש
-לפתיחה, פרטי קריאה, העברה ודוחות. `GET/PUT /api/cases/{case_id}/global-field-values`
+גם לנרמול ברירות מחדל ישנות של סוג קריאה אל Option ID קנוני לפני יצירת קריאה;
+מזהה legacy לעולם אינו נשמר כערך Global Field פעיל.
+לפתיחה ולעריכה; כל שדה בחירה כולל את ה־options הפעילים שלו מאותה Definition, ללא lookup
+נוסף בלקוח. `DELETE /api/environments/{environment_id}/case-fields/{field_id}` מוחק שדה
+ללא ערכים, או משבית שדה בעל ערכים תוך שמירת ההיסטוריה. `GET/PUT /api/cases/{case_id}/global-field-values`
 קורא ושומר ערכים; עדכון דורש `case.update`, מכבד נעילה ומאמת שהשדה פעיל וגלוי בסביבה.
 
 ### Subject access matrix
@@ -345,6 +351,11 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 
 ### Semantic global fields and import snapshots
 
+אפשרויות שדה גלובלי נשמרות באופן מנורמל ב־`global_case_field_options`; ה־Option ID הוא המזהה
+העסקי הקנוני. `configuration_json` אינו מכיל catalog נוסף. עבור `single_select`, ערך Case הוא
+scalar Option ID יחיד; מערך מותר רק ל־`multi_select`. טבלאות Status/Priority/SubPriority הישנות
+הן read-only migration sources ואינן משתתפות ב־runtime resolution, validation, display או filtering.
+
 החיבורים הנתמכים הם `case.status`, ‏`case.priority`, ‏`case.sub_priority` ו־`case.assignee`.
 רק Global Field פעיל יחיד יכול להיות מחובר לכל semantic. שדות Status/Priority/SubPriority הם
 `single_select`; שדה Assignee הוא `user`. כאשר קיים binding, ‏`GlobalCaseFieldValue` הוא הערך
@@ -365,6 +376,15 @@ Workspace, רשימות, Details, דוח הקריאות, מסננים, מיון,
 חוסם יצירה. `GET /api/environments/{id}/case-fields` תומך `presentation=create|edit`,
 ו־`GET/PUT /api/environments/{id}/global-case-fields/configuration[/{field_id}]` מנהלים
 את התצורה.
+
+Workspace ודוח הקריאות מחזירים לצד התוויות גם `status_option_id`, `priority_option_id`
+ו־`sub_priority_option_id`. Transfer preview מחזיר אותם ואת התוויות תחת `semantic_values`,
+ו־Export כולל מזהי Status/Priority קנוניים לצד התוויות. מזהה אינו ממופה מחדש בין Consumers.
+
+תנאי Automation מפנים לשדה באמצעות ID יציב. האופרטורים `equals`, `not_equals`, `is_empty`
+ו־`is_not_empty` נתמכים; שני אופרטורי הריקות אינם מקבלים `value`. ריקות כוללת null, ערך חסר,
+מחרוזת ריקה ורשימה ריקה בשדה multi-select, אך אינה כוללת `0` או `false`. אפשרויות Select
+ומשתמשים נטענים מאותו שדה שמוצג ב־Create/Edit.
 
 `POST /api/users/import/preview` מחזיר `import_session_id` ושומר snapshot מאושר.
 `POST /api/users/import/apply` מקבל את המזהה ומחיל פעם אחת בלבד את אותו snapshot,

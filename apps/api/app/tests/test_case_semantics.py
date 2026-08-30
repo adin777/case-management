@@ -11,10 +11,8 @@ from app.modules.models import (
     CaseSemanticSyncConflict,
     Environment,
     GlobalCaseFieldDefinition,
+    GlobalCaseFieldOption,
     GlobalCaseFieldValue,
-    GlobalPriorityDefinition,
-    GlobalStatusDefinition,
-    GlobalSubPriorityDefinition,
     RequestType,
     User,
 )
@@ -32,12 +30,15 @@ def test_semantic_global_fields_sync_and_all_read_consumers_agree()->None:
         admin=db.scalar(select(User).where(User.email=="admin@example.com"));assert admin
         environment=db.scalar(select(Environment).where(Environment.is_active.is_(True)));assert environment
         request_type=db.scalar(select(RequestType).where(RequestType.environment_id==environment.id));assert request_type
-        status=db.scalar(select(GlobalStatusDefinition).where(GlobalStatusDefinition.is_active.is_(True)));assert status
-        priority=db.scalar(select(GlobalPriorityDefinition).where(GlobalPriorityDefinition.is_active.is_(True)));assert priority
-        sub=db.scalar(select(GlobalSubPriorityDefinition).where(GlobalSubPriorityDefinition.is_active.is_(True)))
+        semantics=CaseSemanticFieldService(db)
+        status_field=semantics.definition("case.status");priority_field=semantics.definition("case.priority")
+        sub_field=semantics.definition("case.sub_priority");assert status_field and priority_field and sub_field
+        status=db.scalar(select(GlobalCaseFieldOption).where(GlobalCaseFieldOption.global_field_id==status_field.id));assert status
+        priority=db.scalar(select(GlobalCaseFieldOption).where(GlobalCaseFieldOption.global_field_id==priority_field.id));assert priority
+        sub=db.scalar(select(GlobalCaseFieldOption).where(GlobalCaseFieldOption.global_field_id==sub_field.id))
         if not sub:
-            sub=GlobalSubPriorityDefinition(code=f"semantic_{uuid.uuid4().hex}",label_he="משני",
-                label_en="Secondary",is_active=True,sort_order=0)
+            sub=GlobalCaseFieldOption(id=uuid.uuid4(),global_field_id=sub_field.id,label_he="משני",
+                label_en="Secondary",is_active=True,sort_order=0,metadata_json={})
             db.add(sub);db.flush()
         definitions={}
         for binding in ("case.status","case.priority","case.sub_priority"):
@@ -65,6 +66,12 @@ def test_semantic_global_fields_sync_and_all_read_consumers_agree()->None:
         assert item.workflow_status_id==status.id and item.priority_id==priority.id and item.sub_priority_id==sub.id
         case_id,item_number=item.id,item.case_number
         status_label,priority_label=status.label_he,priority.label_he
+        status_id,priority_id,sub_id=str(status.id),str(priority.id),str(sub.id)
+        target_environment=db.scalar(select(Environment).where(Environment.id!=environment.id))
+        if not target_environment:
+            target_environment=Environment(code=f"T-{uuid.uuid4().hex[:6]}",name_he="סביבת יעד",
+                name_en="Target",description=None,is_active=True)
+            db.add(target_environment);db.flush()
         db.commit()
 
     auth=headers()
@@ -75,6 +82,13 @@ def test_semantic_global_fields_sync_and_all_read_consumers_agree()->None:
     current=next(row for row in status_options if row["current"])
     assert workspace_row["status"]==report["status"]==current["label_he"]==status_label
     assert workspace_row["priority"]==report["priority"]==priority_label
+    details=client.get(f"/api/cases/{case_id}",headers=auth).json()
+    preview=client.get(f"/api/cases/{case_id}/transfer-preview?target_environment_id={target_environment.id}",headers=auth).json()
+    assert str(details["workflow_status_id"])==workspace_row["status_option_id"]==report["status_option_id"]==current["id"]==status_id
+    assert str(details["priority_id"])==workspace_row["priority_option_id"]==report["priority_option_id"]==priority_id
+    assert str(details["sub_priority_id"])==workspace_row["sub_priority_option_id"]==report["sub_priority_option_id"]==sub_id
+    assert preview["semantic_values"]["case.status"]=={"option_id":status_id,"label":status_label}
+    assert preview["semantic_values"]["case.priority"]=={"option_id":priority_id,"label":priority_label}
 
 
 def test_semantic_sync_backfills_missing_global_value_and_reports_conflict()->None:
@@ -82,11 +96,12 @@ def test_semantic_sync_backfills_missing_global_value_and_reports_conflict()->No
         admin=db.scalar(select(User).where(User.email=="admin@example.com"));assert admin
         environment=db.scalar(select(Environment).where(Environment.is_active.is_(True)));assert environment
         request_type=db.scalar(select(RequestType).where(RequestType.environment_id==environment.id));assert request_type
-        status_rows=list(db.scalars(select(GlobalStatusDefinition).where(
-            GlobalStatusDefinition.is_active.is_(True)).limit(2)));assert len(status_rows)==2
         field=db.scalar(select(GlobalCaseFieldDefinition).where(
             GlobalCaseFieldDefinition.semantic_binding=="case.status",
             GlobalCaseFieldDefinition.is_active.is_(True)));assert field
+        status_rows=list(db.scalars(select(GlobalCaseFieldOption).where(
+            GlobalCaseFieldOption.global_field_id==field.id,
+            GlobalCaseFieldOption.is_active.is_(True)).limit(2)));assert len(status_rows)==2
         legacy=Case(case_number=f"CASE-SEM-{uuid.uuid4().hex[:8]}",environment_id=environment.id,
             request_type_id=request_type.id,title="Legacy backfill",reporter_id=admin.id,
             requester_id=admin.id,workflow_status_id=status_rows[0].id)
@@ -97,13 +112,44 @@ def test_semantic_sync_backfills_missing_global_value_and_reports_conflict()->No
         db.add(GlobalCaseFieldValue(case_id=conflict.id,global_field_id=field.id,
             value_json=str(status_rows[1].id)));db.flush()
         service=CaseSemanticFieldService(db)
-        assert service.sync_case(legacy)==[]
+        missing=service.sync_case(legacy)
+        assert len(missing)==1 and missing[0].reason=="missing_global_value"
         stored = db.get(GlobalCaseFieldValue, (legacy.id, field.id))
-        assert stored is not None
-        assert stored.value_json == str(status_rows[0].id)
+        assert stored is None
         found=service.sync_case(conflict)
-        assert len(found)==1 and found[0].reason=="value_mismatch"
-        assert conflict.workflow_status_id==status_rows[0].id
+        assert found==[]
+        assert conflict.workflow_status_id==status_rows[1].id
         db.flush()
         assert db.scalar(select(CaseSemanticSyncConflict).where(
-            CaseSemanticSyncConflict.case_id==conflict.id)) is not None
+            CaseSemanticSyncConflict.case_id==legacy.id)) is not None
+
+
+def test_every_select_value_references_an_option_of_its_field_with_canonical_shape()->None:
+    with SessionLocal() as db:
+        fields={row.id:row for row in db.scalars(select(GlobalCaseFieldDefinition))}
+        options={row.id:row for row in db.scalars(select(GlobalCaseFieldOption))}
+        for value in db.scalars(select(GlobalCaseFieldValue)):
+            field=fields.get(value.global_field_id);assert field
+            if field.field_type not in {"single_select","multi_select"}: continue
+            raw=value.value_json
+            ids=raw if isinstance(raw,list) else [raw]
+            assert (field.field_type=="multi_select") == isinstance(raw,list)
+            for raw_id in ids:
+                option=options.get(uuid.UUID(str(raw_id)))
+                assert option and option.global_field_id==field.id
+
+
+def test_legacy_request_type_defaults_resolve_to_canonical_global_options()->None:
+    with SessionLocal() as db:
+        service=CaseSemanticFieldService(db)
+        request_type=db.scalar(select(RequestType));assert request_type
+        priority_field=service.definition("case.priority");assert priority_field
+        priority_option=db.scalar(select(GlobalCaseFieldOption).where(
+            GlobalCaseFieldOption.global_field_id==priority_field.id));assert priority_option
+        legacy_priority_id=uuid.uuid4()
+        priority_option.metadata_json={**(priority_option.metadata_json or {}),
+                                       "legacy_id":str(legacy_priority_id)}
+        request_type.default_priority_id=legacy_priority_id
+        db.flush()
+        priority=service.option_for_config_id("case.priority",request_type.default_priority_id)
+        assert priority and priority_field and priority.global_field_id==priority_field.id

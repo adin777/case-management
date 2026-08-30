@@ -5,7 +5,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.case_semantics.service import CaseSemanticFieldService
-from app.modules.models import AutomationExecutionLog, AutomationRule, Case
+from app.modules.models import (
+    AutomationExecutionLog,
+    AutomationRule,
+    Case,
+    CaseFieldDefinition,
+    CaseFieldValue,
+    GlobalCaseFieldDefinition,
+    GlobalCaseFieldValue,
+)
+
+
+def is_field_empty(value: Any, field_type: str | None = None) -> bool:
+    """Business emptiness preserves valid numeric zero and boolean false values."""
+    if value is None or value == "":
+        return True
+    return field_type == "multi_select" and isinstance(value, list) and len(value) == 0
 
 
 class AutomationEngine:
@@ -22,7 +37,7 @@ class AutomationEngine:
         for rule in rules:
             executed: list[dict[str, Any]] = []
             error = None
-            matched = cls._matches(rule.conditions_json or {}, context)
+            matched = cls._matches(db, item, rule.conditions_json or {}, context)
             try:
                 if matched:
                     for action in rule.actions_json or []:
@@ -37,30 +52,72 @@ class AutomationEngine:
                                           trigger_type=trigger_type, matched=matched,
                                           actions_executed=executed, error=error))
 
-    @staticmethod
-    def _matches(conditions: dict[str, Any], context: dict[str, Any]) -> bool:
+    @classmethod
+    def _matches(cls, db: Session, item: Case, conditions: dict[str, Any],
+                 context: dict[str, Any]) -> bool:
         rows = conditions.get("conditions", [])
         if not rows:
             return True
         results = []
         for row in rows:
-            actual, expected, operator = context.get(row.get("field")), row.get("value"), row.get("operator")
-            results.append({"equals": actual == expected, "not_equals": actual != expected,
-                            "contains": expected in actual if isinstance(actual, (str, list)) else False,
-                            "not_contains": expected not in actual if isinstance(actual, (str, list)) else True,
-                            "in": actual in expected if isinstance(expected, list) else False,
-                            "not_in": actual not in expected if isinstance(expected, list) else True,
-                            "is_empty": actual in (None, "", []), "is_not_empty": actual not in (None, "", []),
-                            "greater_than": actual is not None and actual > expected,
-                            "less_than": actual is not None and actual < expected}.get(operator, False))
+            field_ref = row.get("field_id") or row.get("field")
+            actual, field_type = cls._field_value(db, item, field_ref, context)
+            expected, operator = row.get("value"), row.get("operator")
+            if operator == "equals": matched = actual == expected
+            elif operator == "not_equals": matched = actual != expected
+            elif operator == "contains": matched = expected in actual if isinstance(actual, (str, list)) else False
+            elif operator == "not_contains": matched = expected not in actual if isinstance(actual, (str, list)) else True
+            elif operator == "in": matched = actual in expected if isinstance(expected, list) else False
+            elif operator == "not_in": matched = actual not in expected if isinstance(expected, list) else True
+            elif operator == "is_empty": matched = is_field_empty(actual, field_type)
+            elif operator == "is_not_empty": matched = not is_field_empty(actual, field_type)
+            elif operator == "greater_than": matched = actual is not None and expected is not None and actual > expected
+            elif operator == "less_than": matched = actual is not None and expected is not None and actual < expected
+            else: matched = False
+            results.append(matched)
         return all(results) if conditions.get("logic", "AND") == "AND" else any(results)
+
+    @staticmethod
+    def _field_value(db: Session, item: Case, field_ref: Any,
+                     context: dict[str, Any]) -> tuple[Any, str | None]:
+        try:
+            field_id = UUID(str(field_ref))
+        except (ValueError, TypeError):
+            return context.get(field_ref), None
+        global_field = db.get(GlobalCaseFieldDefinition, field_id)
+        if global_field:
+            if global_field.semantic_binding:
+                return CaseSemanticFieldService(db).value_id(item, global_field.semantic_binding), global_field.field_type
+            global_value = db.get(GlobalCaseFieldValue, (item.id, field_id))
+            return (global_value.value_json if global_value else None), global_field.field_type
+        environment_field = db.get(CaseFieldDefinition, field_id)
+        environment_value = db.scalar(select(CaseFieldValue).where(
+            CaseFieldValue.case_id == item.id,
+            CaseFieldValue.field_definition_id == field_id)) if environment_field else None
+        if not environment_value:
+            return None, environment_field.field_type if environment_field else None
+        assert environment_field is not None
+        for name in ("value_text", "value_number", "value_boolean", "value_date", "value_datetime",
+                     "value_json", "value_user_id"):
+            candidate = getattr(environment_value, name)
+            if candidate is not None:
+                return candidate, environment_field.field_type
+        return None, environment_field.field_type
 
     @staticmethod
     def _apply(db:Session,item:Case,action:dict[str,Any])->None:
         action_type, value = action.get("type"), action.get("value")
         if action_type == "set_field":
-            field_code = action.get("field_code")
+            field_code = action.get("field_id") or action.get("field_code")
             value = action.get("value_id", action.get("value"))
+            try:
+                target_id = UUID(str(field_code))
+            except (ValueError, TypeError):
+                target_id = None
+            target = db.get(GlobalCaseFieldDefinition, target_id) if target_id else None
+            if target and target.semantic_binding:
+                CaseSemanticFieldService(db).write(item, target.semantic_binding, UUID(str(value)))
+                return
             binding={"status":"case.status","priority":"case.priority",
                      "sub_priority":"case.sub_priority","assignee":"case.assignee"}.get(
                          field_code if isinstance(field_code, str) else ""
