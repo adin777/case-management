@@ -111,6 +111,12 @@ Permission to perform a business action includes read access to the configuratio
 
 משימת UI אינה גמורה כאשר הפריסה שטוחה או מבלבלת, הפעולה הראשית אינה ברורה, ההתנהגות הרספונסיבית שבורה, הריווח או הטיפוגרפיה אינם עקביים, השדות נראים כברירות מחדל גולמיות של framework, או שהמשתמש צריך לנחש מה לעשות.
 
+Filters must be visually clear and labeled explicitly. Tables must remain readable and scannable
+in RTL. The same business entity must have a consistent visual representation across all screens.
+Ticket numbers are displayed as numeric identifiers only, without a technical prefix. Replaced UI
+must remove the legacy version completely. Dropdowns close immediately after selection. Report and
+Dashboard screens must share a consistent design system.
+
 ## מטרת הפרויקט
 
 זהו מוצר Case Management גנרי לניהול קריאות שירות ותהליכים עסקיים בתחומים שונים.

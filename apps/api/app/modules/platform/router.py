@@ -568,7 +568,7 @@ def report_query(db: DB, user: Current, environment_id: uuid.UUID | None, reques
 def report_row(row:Any,semantics:CaseSemanticFieldService)->dict[str,Any]:
     item, env, request_type, requester = row[:4]
     assignee = row[4] if len(row) > 4 else None
-    return {"case_number": item.case_number, "environment": env.name_he,
+    return {"id": str(item.id), "case_number": item.case_number, "environment": env.name_he,
             "request_type": request_type.name_he, "title": item.title,
             "description":item.description or "","status":semantics.label(item,"case.status"),
             "status_option_id":str(semantics.value_id(item,"case.status") or ""),

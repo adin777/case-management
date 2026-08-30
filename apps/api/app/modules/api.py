@@ -1202,6 +1202,7 @@ def workspace_cases(
     activity_state: str = Query("active", pattern="^(active|inactive|all)$"),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
+    search: str = "",
     title: str = "",
     updated_from: datetime | None = None,
     updated_to: datetime | None = None,
@@ -1233,6 +1234,9 @@ def workspace_cases(
         query = query.where(semantics.indexed_column("case.assignee") == user.id)
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
+    if search.strip():
+        term = f"%{search.strip()}%"
+        query = query.where(or_(Case.case_number.ilike(term), Case.title.ilike(term)))
     if title.strip():
         query = query.where(Case.title.ilike(f"%{title.strip()}%"))
     if created_from:

@@ -63,6 +63,15 @@ def test_workspace_query_and_environment_membership_copy() -> None:
     all_cases = {row["case_number"] for row in client.get("/api/cases?limit=200", headers=headers).json()}
     workspace_cases = {row["case_number"] for row in workspace.json()["items"]}
     assert all_cases <= workspace_cases
+    first = workspace.json()["items"][0]
+    by_number = client.get(
+        f"/api/cases/workspace/query?activity_state=all&search={first['case_number']}", headers=headers
+    ).json()["items"]
+    by_title = client.get(
+        f"/api/cases/workspace/query?activity_state=all&search={first['title']}", headers=headers
+    ).json()["items"]
+    assert first["case_number"] in {row["case_number"] for row in by_number}
+    assert first["case_number"] in {row["case_number"] for row in by_title}
     assert environment["id"] in {row["environment_id"] for row in source["memberships"]}
 
 
