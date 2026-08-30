@@ -25,6 +25,7 @@ from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.case_visibility.service import CaseVisibilityService, can_manage_locked_case
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_clone.service import clone_configuration
+from app.modules.environment_manager.service import EnvironmentManagerService
 from app.modules.global_case_values.service import active_values, initial_status
 from app.modules.localization.service import LocalizationService
 from app.modules.models import (
@@ -1343,7 +1344,7 @@ def get_case(case_id: uuid.UUID, db: DB, user: Current) -> CaseOut:
             "assignee_label":semantics.label(item,"case.assignee") or None,
             "comments": [CommentOut.model_validate(c) for c in visible_comments],
             "permissions": {
-                "can_edit": "case.update" in granted and (not item.is_locked or can_override_lock),
+                "can_edit": can_override_lock or ("case.update" in granted and not item.is_locked),
                 "can_lock": can_override_lock,
                 "can_assign": "case.assign" in granted and (not item.is_locked or can_override_lock),
                 "can_change_status": ("case.change_status" in granted or "case.update" in granted) and (not item.is_locked or can_override_lock),
@@ -1374,7 +1375,9 @@ def update_global_field_values(
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    require(db, user, item.environment_id, "case.update")
+    is_manager = EnvironmentManagerService(db).is_environment_manager(user, item.environment_id)
+    if not is_manager:
+        require(db, user, item.environment_id, "case.update")
     if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לערוך אותה")
     configurations = {row.global_field_id: row for row in db.scalars(select(EnvironmentGlobalCaseField).where(
@@ -1415,7 +1418,9 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
     if not item:
         raise HTTPException(404, "Case not found")
     case_access(db, user, item)
-    require(db, user, item.environment_id, "case.update")
+    is_manager = EnvironmentManagerService(db).is_environment_manager(user, item.environment_id)
+    if not is_manager:
+        require(db, user, item.environment_id, "case.update")
     if item.is_locked and not can_manage_locked_case(db, user, item.environment_id):
         raise HTTPException(403, "הקריאה נעולה; רק מנהל מערכת או מנהל הסביבה רשאי לערוך אותה")
     if item.version != data.version:

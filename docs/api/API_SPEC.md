@@ -270,6 +270,10 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 מסנן הסביבה בדוח הקריאות אופציונלי. ללא סביבה הדוח והייצוא מחזירים את איחוד השורות
 הנראות למשתמש לפי `CaseVisibilityService`; אותו שירות נאכף גם ב־`GET /api/cases` ובגישה ישירה.
 נראות מתקבלת ליוצר, למבקש, למטפל, למשתתף או לבעל `case.read`/`case.read_environment` בסביבה.
+Environment Manager פעיל רואה תמיד את כל הקריאות בסביבה שהוא מנהל, כולל קריאות נעולות,
+גם ללא קשר יוצר/מבקש/מטפל/משתתף וללא הענקת Row permission נפרדת. הרשאת `report.cases`
+קובעת אם ניתן לפתוח ולהריץ את הדוח בלבד; לאחר מכן כל שורות Dashboard, רשימות, חיפוש,
+דוחות, Export וגישה ישירה מסוננות באופן אחיד באמצעות `CaseVisibilityService`.
 `GET /api/cases/workspace/query` משתמש אף הוא ב־`CaseVisibilityService`. System Admin מקבל את
 כל הקריאות; Reporter, Requester ו־Assignee מוצגים תמיד, בעוד `include_participating` קובע רק
 אם להוסיף קריאות שבהן המשתמש הוא Participant בלבד. קריאה פעילה ללא `workflow_status_id`

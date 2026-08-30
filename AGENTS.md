@@ -61,6 +61,14 @@ the same source-of-truth options as Case Create and Edit.
 
 ## SIMPLE FIRST
 
+## CASE VISIBILITY RULE
+
+Environment Manager has full row visibility for every case in the environments they manage.
+Case visibility is independent from report feature permission. Report permissions determine
+access and actions on the report; `CaseVisibilityService` determines which case rows are visible.
+Every case-listing consumer must use the same `CaseVisibilityService`: Dashboard, Reports, Export,
+Search and Direct API access. No endpoint may implement separate case visibility logic.
+
 כאשר פעולה יכולה להתבצע באופן ישיר וברור במסך, אין להוסיף שלב, Dialog, מצב עריכה או כפתור נוסף ללא צורך ממשי. שדה פשוט שניתן לעריכה יוצג כ־inline editable; אין להסתיר ערכים רלוונטיים או להוסיף ניווט כאשר הפעולה יכולה להתבצע במקום. לפני השלמת UI יש לשאול האם אפשר לבצע את אותה פעולה בפחות צעדים ולבחור בפתרון הפשוט יותר.
 
 ## NO HARDCODED CONFIGURATION
