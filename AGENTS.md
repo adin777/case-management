@@ -53,6 +53,13 @@ UI, service, endpoint, route, and consumer must be audited and either removed or
 as read-only historical compatibility. Duplicate active business concepts are prohibited: each
 business value has one active source of truth and one editing surface.
 
+Redesign may change presentation, but it must never silently remove a working business action.
+A Select field is incomplete without visible option management for stable IDs, localized labels,
+activation, safe deletion and drag-and-drop ordering. A dropdown with no options when valid options
+exist is a regression. Permission UI must display and persist the real direct and effective state,
+and success may be shown only after a fresh matrix read confirms the saved value. Every user-facing
+string must use localization, and a single-select must close immediately after selection.
+
 ## CANONICAL REGRESSION AND GIT RULE
 
 All regression validation runs through the deterministic canonical command

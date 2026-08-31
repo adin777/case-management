@@ -7,6 +7,10 @@ describe('global fields administration experience', () => {
     expect(pageSource).toContain("'/global-case-fields?include_inactive=true'");
     expect(pageSource).toContain("method:'DELETE'");
     expect(pageSource).toContain('<GlobalOptionsDialog');
+    expect(pageSource).toContain('ניהול ערכים ({row.options.length})');
+    expect(optionsSource).toContain('שם בעברית');
+    expect(optionsSource).toContain('תרגום באנגלית');
+    expect(optionsSource).toContain("'aria-label':'פעיל'");
   });
   it('uses drag and drop endpoints instead of manual order inputs', () => {
     expect(pageSource).toContain("'/global-case-fields/order'");

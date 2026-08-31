@@ -16,5 +16,7 @@ describe('permission management experience', () => {
     expect(pageSource).toContain("text:'השינויים נשמרו בהצלחה'");
     expect(pageSource).toContain("text:'שמירת ההרשאות נכשלה'");
     expect(pageSource).toContain('/access/assignments?subject_type=');
+    expect(pageSource).toContain("client.setQueryData(['access-matrix'");
+    expect(pageSource).toContain("fresh.find(row=>row.domain_code===code)?.direct_level");
   });
 });
