@@ -18,6 +18,9 @@ def admin_headers() -> dict[str, str]:
 
 def test_access_levels_and_copy_modes() -> None:
     headers = admin_headers()
+    overview = client.get("/api/environments", headers=headers)
+    assert overview.status_code == 200
+    assert {"case_count", "user_count", "group_count", "manager_names"} <= overview.json()[0].keys()
     with SessionLocal() as db:
         environment = db.scalar(select(Environment).where(Environment.code == "IT"))
         assert environment is not None

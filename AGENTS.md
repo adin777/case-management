@@ -124,6 +124,13 @@ the selected user or group. The Admin group always has full permissions by defau
 added permissions. Every configurable value shown in UI must come from the database, never from
 hardcoded fallback lists.
 
+Permission editing must provide immediate visual feedback and persist after save. Effective
+permission must clearly show its source, including group inheritance, direct override and
+environment override. The Admin group always has full permissions by default. Impersonation must
+be clearly indicated in the UI at all times, including both the original and effective user.
+Ending impersonation must return to the original identity without logout. Replaced permission and
+impersonation UI must remove the legacy version completely.
+
 ## מטרת הפרויקט
 
 זהו מוצר Case Management גנרי לניהול קריאות שירות ותהליכים עסקיים בתחומים שונים.

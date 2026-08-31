@@ -403,7 +403,9 @@ def test_impersonation_uses_target_permissions_and_can_be_stopped() -> None:
     assert started.status_code == 200
     impersonated = {"Authorization": f"Bearer {started.json()['access_token']}"}
     assert client.get("/api/auth/me", headers=impersonated).json()["id"] == requester["id"]
-    assert client.get("/api/impersonation/status", headers=impersonated).json()["active"] is True
+    active_status = client.get("/api/impersonation/status", headers=impersonated).json()
+    assert active_status["active"] is True
+    assert active_status["real_actor_name"] and active_status["impersonated_user_name"] == requester["display_name"]
     assert client.post("/api/impersonation/start", headers=impersonated,
                        json={"user_id": requester["id"]}).status_code == 409
     with SessionLocal() as db:

@@ -367,6 +367,21 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 או עתידי, עם מקור „קבוצת Admin”, ללא Assignment rows וללא אפשרות Override בקבוצה זו.
 `POST /api/access/bulk` דוחה ב־`422` כל ניסיון ליצור override לקבוצת Admin, והמטריצה
 מחזירה עבורה תמיד `direct_level=inherit`, ‏`effective_level=edit` ו־`can_override=false`.
+ב־scope סביבתי הלקוח שולח רק Domains מסוג `environment` או `both`; Domains גלובליים אינם
+נכללים ב־payload. שמירה נחשבת הצלחה רק לאחר `GET /api/access/assignments` חדש שמחזיר את
+כל הערכים שנשלחו. Rows ישנים של override לקבוצת Admin אינם משפיעים על ההרשאה האפקטיבית.
+
+`GET /api/environments` מחזיר לצד פרטי הסביבה גם `case_count`, ‏`user_count`,
+‏`group_count` ו־`manager_names` עבור מסך הניהול. המספר העסקי נשמר בחוזה כפי שהוא,
+וה־UI מציג רק את החלק המספרי ללא קידומת טכנית.
+
+`GET /api/approvals/pending-for-me` מחזיר לכל משימה גם `approver_name` ו־`priority`, כאשר
+העדיפות נפתרת דרך `CaseSemanticFieldService`. אותו endpoint מזין את טבלת האישורים ואת
+חלונית הפרטים, והחלטה ממשיכה לעבור ב־`POST /api/approval-tasks/{id}/decision`.
+
+`GET /api/impersonation/status` מחזיר בזמן התחזות את `real_actor_name` ואת
+`impersonated_user_name`. ה־UI מציג banner יחיד וקבוע ומסיים התחזות דרך
+`POST /api/impersonation/stop`; הטוקן מוחלף וכל cache תלוי־זהות נמחק ללא logout.
 
 ### Operational reports
 

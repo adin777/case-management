@@ -12,5 +12,9 @@ describe('permission management experience', () => {
     expect(pageSource).toContain("'/access/bulk'");
     expect(pageSource).toContain('Boolean(isAdmin)');
     expect(cardsSource).toContain('can_override===false');
+    expect(pageSource).toContain("domain.scope==='environment'||domain.scope==='both'");
+    expect(pageSource).toContain("text:'השינויים נשמרו בהצלחה'");
+    expect(pageSource).toContain("text:'שמירת ההרשאות נכשלה'");
+    expect(pageSource).toContain('/access/assignments?subject_type=');
   });
 });

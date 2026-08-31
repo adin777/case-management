@@ -135,6 +135,10 @@ class EnvironmentOut(EnvironmentIn):
     code: str
     is_active: bool
     localized_name: str | None = None
+    case_count: int | None = None
+    user_count: int | None = None
+    group_count: int | None = None
+    manager_names: list[str] = Field(default_factory=list)
     model_config = {"from_attributes": True}
 
 
@@ -607,6 +611,25 @@ def localized_environment(row: Environment, localizer: LocalizationService) -> d
     return payload
 
 
+def environment_overview(db: Session, row: Environment, localizer: LocalizationService) -> dict[str, Any]:
+    payload = localized_environment(row, localizer)
+    payload.update({
+        "case_count": db.scalar(select(func.count()).select_from(Case).where(Case.environment_id == row.id)) or 0,
+        "user_count": db.scalar(select(func.count()).select_from(EnvironmentMembership).where(
+            EnvironmentMembership.environment_id == row.id, EnvironmentMembership.user_id.is_not(None),
+            EnvironmentMembership.is_active.is_(True))) or 0,
+        "group_count": db.scalar(select(func.count()).select_from(EnvironmentMembership).where(
+            EnvironmentMembership.environment_id == row.id, EnvironmentMembership.group_id.is_not(None),
+            EnvironmentMembership.is_active.is_(True))) or 0,
+        "manager_names": list(db.scalars(select(User.display_name).join(
+            EnvironmentMembership, EnvironmentMembership.user_id == User.id).where(
+                EnvironmentMembership.environment_id == row.id,
+                EnvironmentMembership.is_environment_manager.is_(True),
+                EnvironmentMembership.is_active.is_(True)).order_by(User.display_name))),
+    })
+    return payload
+
+
 @router.get("/environments", response_model=list[EnvironmentOut])
 def environments(db: DB, user: Current, accept_language: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
     query = select(Environment).order_by(Environment.name_he)
@@ -621,7 +644,7 @@ def environments(db: DB, user: Current, accept_language: Annotated[str | None, H
     if changed:
         db.commit()
     localizer = LocalizationService(db, accept_language)
-    return [localized_environment(row, localizer) for row in rows]
+    return [environment_overview(db, row, localizer) for row in rows]
 
 
 @router.get("/case-creation/environments", response_model=list[EnvironmentOut])

@@ -149,6 +149,8 @@ def test_two_step_approval_flow() -> None:
     pending = client.get("/api/approvals/pending-for-me", headers=agent_headers)
     assert pending.status_code == 200
     assert any(row["case_id"] == item["id"] and row["step_name"] == "אישור מטפל" for row in pending.json())
+    pending_row = next(row for row in pending.json() if row["case_id"] == item["id"])
+    assert pending_row["approver_name"] and "priority" in pending_row
     options = client.get("/api/reports/filter-options", headers=agent_headers)
     assert options.status_code == 200
     required_option_keys = ("environments", "request_types", "users", "groups", "departments",

@@ -440,10 +440,13 @@ def pending_approvals_for_me(db: DB, user: Current) -> list[dict[str, Any]]:
         )
         .order_by(ApprovalInstance.started_at)
     ).all()
+    semantics = CaseSemanticFieldService(db)
     return [{
         "task_id": task.id, "case_id": case_item.id, "case_number": case_item.case_number,
         "title": case_item.title, "description": case_item.description or "", "environment": environment.name_he,
         "request_type": request_type.name_he, "step_name": step.name,
+        "approver_name": task.approver_name_snapshot or user.display_name,
+        "priority": semantics.label(case_item, "case.priority"),
         "requested_at": instance.started_at, "status": task.status,
     } for task, instance, step, case_item, environment, request_type in rows]
 

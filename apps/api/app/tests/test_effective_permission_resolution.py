@@ -78,6 +78,9 @@ def test_copy_groups_preview_and_report_permission_403() -> None:
 
 def test_system_admin_automatically_receives_new_domain_and_bulk_loads_existing() -> None:
     headers = admin_headers()
+    domains = client.get("/api/access/domains", headers=headers).json()
+    assert any(row["code"] == "impersonation" and "system.impersonate_users" in row["edit_permissions"]
+               for row in domains)
     with SessionLocal() as db:
         admin = db.scalar(select(User).where(User.is_system_admin.is_(True)))
         assert admin
@@ -111,6 +114,12 @@ def test_admin_group_member_automatically_receives_future_domain_without_assignm
         db.add(GroupMember(group_id=group.id, user_id=member.id, added_by=admin.id)); db.commit()
         assert db.scalar(select(AccessLevelAssignment).where(AccessLevelAssignment.group_id == group.id,
             AccessLevelAssignment.domain_code == domain.code)) is None
+        resolved = EffectivePermissionService(db).resolve(member, domain, None)
+        assert resolved["effective_level"] == "edit" and resolved["source_name"] == "קבוצת Admin"
+
+        # Historical rows from the legacy override flow must never weaken Admin members.
+        db.add(AccessLevelAssignment(domain_code=domain.code, group_id=group.id, user_id=None,
+            environment_id=None, access_level="none", created_by=admin.id)); db.commit()
         resolved = EffectivePermissionService(db).resolve(member, domain, None)
         assert resolved["effective_level"] == "edit" and resolved["source_name"] == "קבוצת Admin"
 

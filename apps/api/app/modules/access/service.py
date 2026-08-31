@@ -42,23 +42,6 @@ class EffectivePermissionService:
         admin_group = self.db.scalar(select(Group).join(GroupMember).where(
             GroupMember.user_id == user.id, Group.is_active.is_(True), Group.is_system_admin_group.is_(True)))
         if admin_group:
-            override = None
-            if environment_id:
-                override = self.db.scalar(select(AccessLevelAssignment).where(
-                    AccessLevelAssignment.group_id == admin_group.id,
-                    AccessLevelAssignment.domain_code == domain.code,
-                    AccessLevelAssignment.environment_id == environment_id))
-            if not override:
-                override = self.db.scalar(select(AccessLevelAssignment).where(
-                    AccessLevelAssignment.group_id == admin_group.id,
-                    AccessLevelAssignment.domain_code == domain.code,
-                    AccessLevelAssignment.environment_id.is_(None)))
-            if override:
-                return {"domain": domain.code, "domain_name": domain.name_he,
-                        "effective_level": override.access_level,
-                        "source_type": "admin_group_override", "source_id": str(admin_group.id),
-                        "source_name": "קבוצת Admin", "scope": "environment" if override.environment_id else "global",
-                        "resolution_steps": [{"level": override.access_level, "source": "קבוצת Admin"}]}
             return {"domain": domain.code, "domain_name": domain.name_he, "effective_level": "edit",
                     "source_type": "system_admin_group", "source_id": str(admin_group.id),
                     "source_name": "קבוצת Admin", "scope": "global",

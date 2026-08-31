@@ -1,18 +1,14 @@
-import { Add, Settings } from '@mui/icons-material';
-import { Box, Button, Card, CardContent, Chip, FormControlLabel, Grid, Stack, Switch, Typography } from '@mui/material';
+import { Add, GroupsOutlined, SearchOutlined, SettingsOutlined } from '@mui/icons-material';
+import { useMemo, useState } from 'react';
+import { AvatarGroup, Box, Button, Chip, InputAdornment, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material';
+import { ScreenHeader } from '../../../components/ScreenHeader';
 import type { Environment } from '../../../types';
 
-type Props = { environments: Environment[]; selected?: Environment; activeOnly: boolean; onActiveOnlyChange: (value: boolean) => void; onSelect: (item: Environment) => void; onCreate: () => void };
+type Props={environments:Environment[];selected?:Environment;activeOnly:boolean;onActiveOnlyChange:(value:boolean)=>void;onSelect:(item:Environment)=>void;onCreate:()=>void};
+const numericId=(value:string)=>value.replace(/\D/g,'').padStart(6,'0');
 
-export function EnvironmentList({ environments, selected, activeOnly, onActiveOnlyChange, onSelect, onCreate }: Props) {
-  return <Stack spacing={2}>
-    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2}>
-      <Box><Typography variant="h4" fontWeight={800}>סביבות עבודה</Typography><Typography color="text.secondary">הגדרת תהליכים, שדות, הרשאות ואוטומציות</Typography></Box>
-      <Button variant="contained" startIcon={<Add/>} onClick={onCreate}>סביבה חדשה</Button>
-    </Stack>
-    <FormControlLabel control={<Switch checked={activeOnly} onChange={(event) => onActiveOnlyChange(event.target.checked)}/>} label="הצג סביבות פעילות בלבד"/>
-    <Grid container spacing={2}>{environments.map((item) => <Grid size={{ xs: 12, md: 4 }} key={item.id}>
-      <Card onClick={() => onSelect(item)} sx={{ cursor: 'pointer', border: selected?.id === item.id ? '2px solid' : undefined, borderColor: 'primary.main' }}><CardContent><Stack direction="row" spacing={1.5}><Settings color="primary"/><Box><Typography variant="h6">{item.name_he}</Typography><Typography color="text.secondary">{item.name_en} · {item.system_number}</Typography><Chip size="small" color={item.is_active ? 'success' : 'default'} label={item.is_active ? 'פעילה' : 'לא פעילה'}/></Box></Stack></CardContent></Card>
-    </Grid>)}</Grid>
-  </Stack>;
+export function EnvironmentList({environments,selected,activeOnly,onActiveOnlyChange,onSelect,onCreate}:Props){
+  const[search,setSearch]=useState('');
+  const visible=useMemo(()=>environments.filter(item=>`${item.name_he} ${item.name_en} ${item.system_number}`.toLowerCase().includes(search.toLowerCase())),[environments,search]);
+  return <Stack spacing={2.5}><ScreenHeader title="סביבות" subtitle="ניהול סביבת העבודה, המשתמשים והתצורה העסקית" action={<Button variant="contained" startIcon={<Add/>} onClick={onCreate}>סביבה חדשה</Button>}/><Paper className="filter-panel" variant="outlined"><Stack direction={{xs:'column',md:'row'}} gap={1.5}><TextField fullWidth label="חיפוש סביבה" value={search} onChange={event=>setSearch(event.target.value)} slotProps={{input:{startAdornment:<InputAdornment position="start"><SearchOutlined/></InputAdornment>}}}/><TextField select label="סטטוס" value={activeOnly?'active':'all'} onChange={event=>onActiveOnlyChange(event.target.value==='active')} sx={{minWidth:190}}><MenuItem value="active">פעילות</MenuItem><MenuItem value="all">הכול</MenuItem></TextField></Stack></Paper><TableContainer component={Paper} variant="outlined"><Table><TableHead><TableRow><TableCell>מספר</TableCell><TableCell>שם הסביבה</TableCell><TableCell>סטטוס</TableCell><TableCell>מנהלי סביבה</TableCell><TableCell>קריאות</TableCell><TableCell>משתמשים / קבוצות</TableCell><TableCell>פעולות</TableCell></TableRow></TableHead><TableBody>{visible.map(item=><TableRow hover selected={selected?.id===item.id} key={item.id} onClick={()=>onSelect(item)} sx={{cursor:'pointer'}}><TableCell><Typography fontWeight={800} color="primary">{numericId(item.system_number)}</Typography></TableCell><TableCell><Typography fontWeight={800}>{item.name_he}</Typography><Typography variant="caption" color="text.secondary">{item.description||item.name_en}</Typography></TableCell><TableCell><Chip size="small" color={item.is_active?'success':'default'} label={item.is_active?'פעילה':'בארכיון'}/></TableCell><TableCell>{item.manager_names?.length?<AvatarGroup max={3} sx={{justifyContent:'flex-end'}}>{item.manager_names.map(name=><Tooltip title={name} key={name}><Box className="environment-manager-avatar">{name[0]}</Box></Tooltip>)}</AvatarGroup>:<Typography color="text.secondary">לא הוגדרו</Typography>}</TableCell><TableCell>{item.case_count??0}</TableCell><TableCell><Stack direction="row" gap={.5} alignItems="center"><GroupsOutlined fontSize="small" color="action"/><Typography>{item.user_count??0} / {item.group_count??0}</Typography></Stack></TableCell><TableCell><Button size="small" startIcon={<SettingsOutlined/>} onClick={event=>{event.stopPropagation();onSelect(item)}}>ניהול</Button></TableCell></TableRow>)}</TableBody></Table>{!visible.length&&<Box className="empty-state"><Typography>לא נמצאו סביבות התואמות לסינון</Typography></Box>}</TableContainer></Stack>;
 }
