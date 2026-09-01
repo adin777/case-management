@@ -87,6 +87,7 @@ ALL_PERMISSIONS = [
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
     "report.cases", "report.approvals", "report.users", "report.audit", "report.sla",
+    "implementer.configuration.read", "implementer.configuration.manage",
 ]
 
 
@@ -120,6 +121,7 @@ class UserOut(BaseModel):
     email: str
     display_name: str
     is_system_admin: bool
+    can_implement: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -395,7 +397,13 @@ Current = Annotated[User, Depends(current_user)]
 def permissions(db: Session, user: User, environment_id: uuid.UUID) -> set[str]:
     if user.is_system_admin:
         return set(ALL_PERMISSIONS)
-    return domain_permissions(db, user.id, environment_id)
+    resolved = domain_permissions(db, user.id, environment_id)
+    if "implementer.configuration.manage" in resolved:
+        resolved.update({"system.fields.read", "system.fields.manage", "system.environments.create",
+                         "system.environments.manage", "environment.read", "environment.manage",
+                         "environment.fields.manage", "environment.request_types.manage",
+                         "environment.forms.manage", "environment.rules.manage", "knowledge.manage"})
+    return resolved
 
 
 def require(db: Session, user: User, env: uuid.UUID, permission: str) -> None:
@@ -537,8 +545,15 @@ def logout(data: RefreshIn, db: DB) -> None:
 
 
 @router.get("/auth/me", response_model=UserOut)
-def me(user: Current) -> User:
-    return user
+def me(db: DB, user: Current) -> dict[str, Any]:
+    environments = db.scalars(select(Environment.id)).all()
+    can_implement = user.is_system_admin or any(
+        bool({"implementer.configuration.read", "implementer.configuration.manage"}
+             & permissions(db, user, environment_id))
+        for environment_id in environments
+    )
+    return {"id": user.id, "email": user.email, "display_name": user.display_name,
+            "is_system_admin": user.is_system_admin, "can_implement": can_implement}
 
 
 @router.post("/impersonation/start")

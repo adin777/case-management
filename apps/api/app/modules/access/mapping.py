@@ -1,4 +1,5 @@
 DOMAIN_DEFINITIONS = [
+    ("implementer_studio", "סטודיו להגדרת מערכת", "צפייה ועריכת תצורה עסקית מבוקרת", "יישום מערכת", "global", "implementer.configuration.read", "implementer.configuration.manage"),
     ("users_manage", "ניהול משתמשים", "ניהול זהויות, מצב משתמש וסיסמאות", "משתמשים והרשאות", "global", "system.users.read", "system.users.create,system.users.update,system.users.disable,system.users.reset_password"),
     ("groups_manage", "ניהול קבוצות משתמשים", "ניהול קבוצות וחברויות", "משתמשים והרשאות", "global", "system.groups.read", "system.groups.manage"),
     ("access_manage", "ניהול הרשאות", "ניהול רמות גישה והעתקת הרשאות", "משתמשים והרשאות", "global", "system.roles.read", "system.roles.manage"),

@@ -79,6 +79,11 @@ def test_copy_groups_preview_and_report_permission_403() -> None:
 def test_system_admin_automatically_receives_new_domain_and_bulk_loads_existing() -> None:
     headers = admin_headers()
     domains = client.get("/api/access/domains", headers=headers).json()
+    me = client.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200 and me.json()["can_implement"] is True
+    assert any(row["code"] == "implementer_studio" and
+               row["view_permissions"] == "implementer.configuration.read" and
+               row["edit_permissions"] == "implementer.configuration.manage" for row in domains)
     assert any(row["code"] == "impersonation" and "system.impersonate_users" in row["edit_permissions"]
                for row in domains)
     with SessionLocal() as db:

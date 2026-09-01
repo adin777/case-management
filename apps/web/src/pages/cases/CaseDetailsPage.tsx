@@ -48,7 +48,7 @@ export function CaseDetailsPage() {
 
   return <Box className="case-details-page"><Container maxWidth="xl"><Stack spacing={2.5}>
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}{success && <Alert severity="success" onClose={() => setSuccess('')}>{success}</Alert>}
-    <CaseDetailsHeader item={item} status={item.status_label || 'ללא סטטוס'} onEdit={() => detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} onLock={() => setLockOpen(true)} onTransfer={() => setTransferOpen(true)}/>
+    <CaseDetailsHeader item={item} status={item.status_label || 'ללא סטטוס'} priority={item.priority_label} onEdit={() => detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} onLock={() => setLockOpen(true)} onTransfer={() => setTransferOpen(true)}/>
     {item.is_locked && <Alert severity="warning" variant="filled">הקריאה נעולה לשינויים{item.lock_reason ? `: ${item.lock_reason}` : ''}. משתמש רגיל יכול להמשיך להגיב בלבד.</Alert>}
     <Grid container spacing={2.5} alignItems="flex-start">
       <Grid size={{ xs: 12, lg: 8 }}><Stack spacing={2.5}>

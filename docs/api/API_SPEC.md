@@ -355,6 +355,11 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 
 ### Subject access matrix
 
+`GET /api/auth/me` מחזיר גם `can_implement`. הערך נקבע בשרת לפי System Admin או הרשאת
+`implementer.configuration.read/manage` האפקטיבית, ומשמש להצגת סטודיו המיישם. תחום ההרשאה
+`implementer_studio` תומך ברמות `view` ו־`edit`; ברמת edit השרת מעניק את יכולות התצורה
+הקיימות בלי ליצור מודל תצורה מקביל.
+
 `GET /api/access/subjects/{user|group}/{id}/matrix?environment_id=` מחזיר View Model
 אחיד לכל Permission Domain: `domain_code`, `domain_name`, `direct_level`,
 `effective_level`, `source`, `scope`, `description`, `can_override`. עבור System Admin כל תחום מוחזר

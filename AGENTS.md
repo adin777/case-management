@@ -84,6 +84,19 @@ the same source-of-truth options as Case Create and Edit.
 
 ## SIMPLE FIRST
 
+## MOBILE AND IMPLEMENTER MATURITY
+
+Responsive does not mean merely shrinking desktop UI. Data tables require intentional mobile
+representations, primary Case actions remain reachable at 360px width, and normal business flows
+must not require horizontal scrolling. Shared responsive primitives are preferred over page-local
+breakpoint patches.
+
+Business configuration must be manageable without code changes. Configuration changes support
+draft, validation, preview and publish; published configuration remains stable while a draft is
+prepared. Destructive configuration changes require dependency and impact analysis. Publishing is
+versioned and auditable. Implementer UI uses business language rather than internal IDs or JSON,
+and every configuration feature provides validation before publish.
+
 ## CASE VISIBILITY RULE
 
 Environment Manager has full row visibility for every case in the environments they manage.
