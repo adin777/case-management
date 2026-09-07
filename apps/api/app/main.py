@@ -22,8 +22,10 @@ from app.modules.operations.router import router as operations_router
 from app.modules.permissions.router import router as permissions_router
 from app.modules.platform.router import router as platform_router
 from app.modules.reports.router import router as reports_router
+from app.modules.sla.router import router as sla_router
 from app.modules.system_fields.router import router as system_fields_router
 from app.modules.transfer.router import router as transfer_router
+from app.modules.workspace.router import router as workspace_router
 
 app = FastAPI(title="Case Management API", version="0.1.0")
 logger = logging.getLogger(__name__)
@@ -50,6 +52,8 @@ app.include_router(knowledge_router)
 app.include_router(localization_router)
 app.include_router(global_case_values_router)
 app.include_router(global_case_fields_router)
+app.include_router(workspace_router)
+app.include_router(sla_router)
 app.include_router(router)
 
 

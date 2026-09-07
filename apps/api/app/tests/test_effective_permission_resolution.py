@@ -81,6 +81,7 @@ def test_system_admin_automatically_receives_new_domain_and_bulk_loads_existing(
     domains = client.get("/api/access/domains", headers=headers).json()
     me = client.get("/api/auth/me", headers=headers)
     assert me.status_code == 200 and me.json()["can_implement"] is True
+    assert me.json()["can_use_agent_workspace"] is True
     assert any(row["code"] == "implementer_studio" and
                row["view_permissions"] == "implementer.configuration.read" and
                row["edit_permissions"] == "implementer.configuration.manage" for row in domains)

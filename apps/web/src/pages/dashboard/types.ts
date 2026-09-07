@@ -1,6 +1,6 @@
 export type WorkspaceCase = {
   id: string; case_number: string; title: string; environment: string; request_type: string;
-  status: string; priority: string; created_at: string; updated_at: string;
+  status: string; priority: string; created_at: string; updated_at: string; sla_state?:string;sla_due_at?:string;
 };
 
 export type WorkspaceResponse = {

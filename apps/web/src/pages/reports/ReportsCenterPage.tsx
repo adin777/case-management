@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ArrowBack, Assessment, FactCheck, Groups, History } from '@mui/icons-material';
+import { ArrowBack, Assessment, FactCheck, Groups, History, Timer } from '@mui/icons-material';
 import { Box, Card, CardActionArea, CardContent, CircularProgress, Container, Grid, Stack, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -11,6 +11,7 @@ const meta: Record<string, { description: string; icon: ReactNode; color: string
   approvals: { description: 'משימות אישור, החלטות והערות', icon: <FactCheck/>, color: '#0f766e' },
   users: { description: 'משתמשים, שיוכים והרשאות אפקטיביות', icon: <Groups/>, color: '#7c3aed' },
   audit: { description: 'אירועי פעילות וביקורת מערכת', icon: <History/>, color: '#c2410c' },
+  sla: { description: 'עמידה ביעדי תגובה ופתרון, סיכונים וחריגות', icon: <Timer/>, color: '#be123c' },
 };
 
 export function ReportsCenterPage() {

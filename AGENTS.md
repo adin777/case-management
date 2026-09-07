@@ -109,6 +109,19 @@ Search and Direct API access. No endpoint may implement separate case visibility
 
 ## NO HARDCODED CONFIGURATION
 
+## END-TO-END FEATURE COMPLETION AND SLA RULE
+
+- A feature is not complete until DB, backend, API, frontend, permissions, audit and automated tests are aligned.
+- UI redesign must not remove an existing business action.
+- Bulk operations must execute the same domain rules as single-record operations.
+- SLA calculations must never depend on opening the UI.
+- SLA warnings and breaches must be idempotent.
+- SLA uses semantic configuration, never translated labels.
+- Pauses and resumes preserve full history.
+- Transfers never erase SLA history.
+- SLA policy conflicts must be detected before publish.
+- Every user-reported regression receives a permanent automated test.
+
 - אין להגדיר בקוד שדה עסקי גלובלי או סביבתי, אפשרות/ערך שדה, Status, Priority, SubPriority, Request Type, Department, Job Title, ערך אישור או תצורה עסקית אחרת.
 - הקוד רשאי להגדיר רק סוגי שדות, metadata סמנטי ויכולות טכניות. כל Definition וכל Value עסקי מגיעים מה־Database ומנוהלים דרך UI/API.
 - Database חדש וריק עולה עם אפס הגדרות שדות עסקיים וללא Seed עסקי.

@@ -478,6 +478,8 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
             other.status = "cancelled"
     if data.decision in {"rejected", "returned"}:
         instance.status = data.decision; instance.completed_at = datetime.now(UTC)
+        from app.modules.sla.service import SlaEngine
+        SlaEngine(db).approval_changed(case_item,False,user.id)
         case_item.approval_status = data.decision; case_item.is_approved = False
         db.add(Notification(user_id=case_item.requester_id, notification_type=f"approval_{data.decision}",
                             title_he="התקבלה החלטה בסבב האישורים",
@@ -504,6 +506,8 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
                 create_step_tasks(db, instance, next_step.step_order)
             else:
                 instance.status = "approved"; instance.completed_at = datetime.now(UTC)
+                from app.modules.sla.service import SlaEngine
+                SlaEngine(db).approval_changed(case_item,False,user.id)
                 case_item.approval_status = "approved"; case_item.is_approved = True
                 case_item.approved_at = datetime.now(UTC)
                 case_item.approved_by_summary = f"{instance.system_number}: {approved} מאשרים"

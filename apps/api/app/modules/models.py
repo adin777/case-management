@@ -335,6 +335,31 @@ class CaseParticipant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SavedCaseView(TimestampMixin, Base):
+    __tablename__ = "saved_case_views"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    filters_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    sort: Mapped[str] = mapped_column(String(80), default="updated_at:desc")
+    visible_columns_json: Mapped[list] = mapped_column(JSON, default=list)
+    page_size: Mapped[int] = mapped_column(Integer, default=25)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
+
+
+class BulkCaseActionPreview(Base):
+    __tablename__ = "bulk_case_action_previews"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    target_value_json: Mapped[dict] = mapped_column(JSON)
+    snapshot_json: Mapped[list] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Comment(TimestampMixin, Base):
     __tablename__ = "comments"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

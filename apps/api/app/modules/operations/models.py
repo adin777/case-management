@@ -94,9 +94,71 @@ class SlaPolicy(Base):
     resolution_minutes: Mapped[int] = mapped_column(Integer)
     warning_threshold_percent: Mapped[int] = mapped_column(Integer, default=80)
     business_calendar_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    priority_option_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    conditions_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    pause_rules_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    notification_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    precedence: Mapped[int] = mapped_column(Integer, default=0)
+    recalculate_on_change: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class BusinessCalendar(Base):
+    __tablename__ = "business_calendars"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    timezone: Mapped[str] = mapped_column(String(80), default="Asia/Jerusalem")
+    schedule_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    holidays_json: Mapped[list] = mapped_column(JSON, default=list)
+    exceptions_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SlaInstance(Base):
+    __tablename__ = "sla_instances"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sla_policies.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_warning_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_warning_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_status: Mapped[str] = mapped_column(String(30), default="running")
+    resolution_status: Mapped[str] = mapped_column(String(30), default="running")
+    accumulated_pause_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    active_pause_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SlaPause(Base):
+    __tablename__ = "sla_pauses"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instance_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sla_instances.id", ondelete="CASCADE"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str] = mapped_column(String(120))
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+
+
+class SlaEvent(Base):
+    __tablename__ = "sla_events"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instance_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sla_instances.id", ondelete="CASCADE"), index=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    target: Mapped[str] = mapped_column(String(30))
+    event_type: Mapped[str] = mapped_column(String(40))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    details_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Attachment(Base):

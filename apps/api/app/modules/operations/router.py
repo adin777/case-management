@@ -13,6 +13,7 @@ from app.modules.models import Case
 from app.modules.operations.models import (
     CaseStatusHistory,
     Notification,
+    SlaInstance,
     SlaPolicy,
     WorkflowDefinition,
     WorkflowStatus,
@@ -70,7 +71,27 @@ class SlaIn(BaseModel):
     resolution_minutes: int = Field(gt=0)
     warning_threshold_percent: int = Field(80, ge=1, le=100)
     business_calendar_id: uuid.UUID | None = None
+    priority_option_id: uuid.UUID | None = None
+    conditions_json: dict[str, Any] = Field(default_factory=dict)
+    pause_rules_json: dict[str, Any] = Field(default_factory=dict)
+    notification_json: dict[str, Any] = Field(default_factory=dict)
+    precedence: int = Field(default=0, ge=0)
+    recalculate_on_change: bool = False
     is_active: bool = True
+
+
+def validate_sla_policy(db: DB, environment_id: uuid.UUID, data: SlaIn,
+                        exclude_id: uuid.UUID | None = None) -> None:
+    if data.business_calendar_id:
+        from app.modules.operations.models import BusinessCalendar
+        calendar=db.get(BusinessCalendar,data.business_calendar_id)
+        if not calendar or calendar.environment_id!=environment_id or not calendar.is_active:
+            raise HTTPException(422,"לוח העבודה אינו פעיל או אינו שייך לסביבה")
+    duplicates=db.scalars(select(SlaPolicy).where(SlaPolicy.environment_id==environment_id,SlaPolicy.is_active.is_(True)))
+    for existing in duplicates:
+        if existing.id==exclude_id:continue
+        if existing.precedence==data.precedence and existing.request_type_id==data.request_type_id and existing.priority_id==data.priority_id and existing.priority_option_id==data.priority_option_id and (existing.conditions_json or {})==data.conditions_json and data.is_active:
+            raise HTTPException(409,"קיימת מדיניות SLA חופפת באותה קדימות")
 
 
 def row(item: Any) -> dict[str, Any]:
@@ -297,6 +318,7 @@ def sla_policies(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[
 @router.post("/environments/{environment_id}/sla-policies", status_code=201)
 def create_sla(environment_id: uuid.UUID, data: SlaIn, db: DB, user: Current) -> dict[str, Any]:
     require(db, user, environment_id, "sla.manage")
+    validate_sla_policy(db,environment_id,data)
     item = SlaPolicy(id=uuid.uuid4(), system_number=f"SLA-{uuid.uuid4().hex[:8].upper()}", environment_id=environment_id, **data.model_dump())
     db.add(item)
     audit(db, user, "sla_policy", item.id, "created", after=data.model_dump(mode="json"))
@@ -310,12 +332,25 @@ def update_sla(policy_id: uuid.UUID, data: SlaIn, db: DB, user: Current) -> dict
     if not item:
         raise HTTPException(404, "SLA policy not found")
     require(db, user, item.environment_id, "sla.manage")
+    validate_sla_policy(db,item.environment_id,data,item.id)
     before = jsonable_encoder(row(item))
     for key, value in data.model_dump().items():
         setattr(item, key, value)
     audit(db, user, "sla_policy", item.id, "updated", before=before, after=data.model_dump(mode="json"))
     db.commit()
     return row(item)
+
+
+@router.delete("/sla-policies/{policy_id}", status_code=204)
+def delete_sla(policy_id: uuid.UUID, db: DB, user: Current) -> None:
+    item=db.get(SlaPolicy,policy_id)
+    if not item:raise HTTPException(404,"מדיניות SLA לא נמצאה")
+    require(db,user,item.environment_id,"sla.manage")
+    if db.scalar(select(SlaInstance.id).where(SlaInstance.policy_id==item.id)):
+        item.is_active=False;audit(db,user,"sla_policy",item.id,"deactivated_used")
+    else:
+        audit(db,user,"sla_policy",item.id,"deleted",before=jsonable_encoder(row(item)));db.delete(item)
+    db.commit()
 
 
 @router.get("/notifications")

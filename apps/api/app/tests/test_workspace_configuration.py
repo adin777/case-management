@@ -56,7 +56,7 @@ def test_workspace_query_and_environment_membership_copy() -> None:
     refreshed = client.get(f"/api/users/{target['id']}", headers=headers).json()
     assert {row["environment_id"] for row in refreshed["memberships"]} == {row["environment_id"] for row in source["memberships"]}
     assert client.put(f"/api/users/{target['id']}/environment-memberships", headers=headers, json=original_target).status_code == 200
-    workspace = client.get("/api/cases/workspace/query?view=my&activity_state=all", headers=headers)
+    workspace = client.get("/api/cases/workspace/query?view=my&activity_state=all&page_size=100", headers=headers)
     assert workspace.status_code == 200
     assert workspace.json()["can_view_assigned_cases"] is True
     assert all("updated_at" in row for row in workspace.json()["items"])

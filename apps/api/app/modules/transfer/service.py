@@ -24,7 +24,7 @@ from app.modules.models import (
     RequestType,
     User,
 )
-from app.modules.operations.service import initialize_sla
+from app.modules.sla.service import SlaEngine
 
 VALUE_COLUMNS = (
     "value_text",
@@ -308,7 +308,6 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.approval_status = "not_started"
     item.is_approved = False
     item.version += 1
-    initialize_sla(db,item)
     started = start_matching_approvals(db, item)
     AutomationEngine.run(
         db,
@@ -322,6 +321,7 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     )
     for binding, value_id in preserved_semantics.items():
         semantics.write(item, binding, value_id, require_active=False)
+    SlaEngine(db).start(item,supersede=True)
     history = CaseTransferHistory(
         case_id=item.id,
         from_environment_id=old_env,

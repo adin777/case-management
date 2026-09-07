@@ -53,7 +53,9 @@ from app.modules.models import (
 from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import (
     CaseStatusHistory,
+    SlaInstance,
 )
+from app.modules.sla.service import SlaEngine
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -122,6 +124,7 @@ class UserOut(BaseModel):
     display_name: str
     is_system_admin: bool
     can_implement: bool = False
+    can_use_agent_workspace: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -547,13 +550,19 @@ def logout(data: RefreshIn, db: DB) -> None:
 @router.get("/auth/me", response_model=UserOut)
 def me(db: DB, user: Current) -> dict[str, Any]:
     environments = db.scalars(select(Environment.id)).all()
+    granted_by_environment = [permissions(db, user, environment_id) for environment_id in environments]
     can_implement = user.is_system_admin or any(
         bool({"implementer.configuration.read", "implementer.configuration.manage"}
-             & permissions(db, user, environment_id))
-        for environment_id in environments
+             & granted)
+        for granted in granted_by_environment
+    )
+    can_use_agent_workspace = user.is_system_admin or any(
+        bool({"case.read_environment", "case.update", "case.assign", "case.change_status"} & granted)
+        for granted in granted_by_environment
     )
     return {"id": user.id, "email": user.email, "display_name": user.display_name,
-            "is_system_admin": user.is_system_admin, "can_implement": can_implement}
+            "is_system_admin": user.is_system_admin, "can_implement": can_implement,
+            "can_use_agent_workspace": can_use_agent_workspace}
 
 
 @router.post("/impersonation/start")
@@ -1193,6 +1202,7 @@ def create_case(data: CaseIn, db: DB, user: Current) -> Case:
                          {"request_type": str(item.request_type_id), "request_type_id": str(item.request_type_id)})
     AutomationEngine.run(db, item, "case_created", {"request_type": str(item.request_type_id)})
     start_matching_approvals(db, item)
+    SlaEngine(db).start(item)
     if parent:
         from app.modules.case_relations.service import create_relation
         create_relation(db, parent, item, user)
@@ -1237,6 +1247,7 @@ def workspace_cases(
     db: DB,
     user: Current,
     view: str = Query("my", pattern="^(my|assigned)$"),
+    queue: str | None = Query(None, pattern="^(unassigned|waiting_agent|waiting_requester|recent|sla_warning|sla_breached)$"),
     activity_state: str = Query("active", pattern="^(active|inactive|all)$"),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
@@ -1270,6 +1281,12 @@ def workspace_cases(
     )
     if view == "assigned":
         query = query.where(semantics.indexed_column("case.assignee") == user.id)
+    if queue == "unassigned": query=query.where(semantics.indexed_column("case.assignee").is_(None))
+    elif queue in {"waiting_agent","waiting_requester"}:
+        waiting_ids=[row.id for row in db.scalars(select(GlobalCaseFieldOption).where(GlobalCaseFieldOption.is_active.is_(True))) if queue in set((row.metadata_json or {}).get("workspace_queues",[]))]
+        query=query.where(semantics.indexed_column("case.status").in_(waiting_ids))
+    elif queue in {"sla_warning","sla_breached"}:
+        state=queue.removeprefix("sla_");query=query.where(Case.id.in_(select(SlaInstance.case_id).where(SlaInstance.superseded_at.is_(None),or_(SlaInstance.response_status==state,SlaInstance.resolution_status==state))))
     if environment_id:
         query = query.where(Case.environment_id == environment_id)
     if search.strip():
@@ -1348,6 +1365,8 @@ def workspace_cases(
                 "sub_priority_option_id": semantics.value_id(row, "case.sub_priority"),
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
+                "sla_state": ("breached" if "breached" in {row.sla_response_status,row.sla_resolution_status} else "warning" if "warning" in {row.sla_response_status,row.sla_resolution_status} else "paused" if "paused" in {row.sla_response_status,row.sla_resolution_status} else "running" if row.sla_policy_id else "not_started"),
+                "sla_due_at": min([value for value in (row.response_due_at,row.resolution_due_at) if value],default=None),
             }
             for row in rows
         ],
@@ -1624,6 +1643,8 @@ def add_comment(case_id: uuid.UUID, data: CommentIn, db: DB, user: Current) -> C
     comment = Comment(case_id=item.id, author_id=user.id, **data.model_dump())
     db.add(comment)
     db.flush()
+    if data.visibility == Visibility.public:
+        SlaEngine(db).first_response(item)
     audit(db, user, "case", item.id, "commented", after={"visibility": data.visibility.value})
     db.commit()
     return comment
@@ -1702,16 +1723,13 @@ def timeline(case_id: uuid.UUID, db: DB, user: Current) -> list[dict]:
         .where(AuditEvent.entity_type == "case", AuditEvent.entity_id == str(case_id))
         .order_by(AuditEvent.created_at.desc())
     )
-    return [
-        {
-            "action": e.action,
-            "actor_id": str(e.actor_id) if e.actor_id else None,
-            "before": e.before_json,
-            "after": e.after_json,
-            "created_at": e.created_at,
-        }
-        for e in events
-    ]
+    labels = {"created":"הקריאה נפתחה", "status_changed":"סטטוס הקריאה השתנה",
+              "commented":"נוספה תגובה", "attachment_uploaded":"נוסף קובץ",
+              "transferred":"הקריאה הועברה לסביבה אחרת", "approval_started":"תהליך אישור התחיל",
+              "closed":"הקריאה נסגרה", "participant_added":"נוסף משתתף"}
+    return [{"event_type": e.action, "label": labels[e.action],
+             "actor_name": e.actor_name_snapshot, "occurred_at": e.created_at}
+            for e in events if e.action in labels]
 
 
 @router.post("/cases/{case_id}/transitions", response_model=CaseOut)
@@ -1728,6 +1746,7 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
         raise HTTPException(409, "סטטוס היעד הגלובלי אינו פעיל")
     before = item.workflow_status_id
     semantics.write(item,"case.status",target.id)
+    SlaEngine(db).status_changed(item,target.semantic_category,user.id)
     item.version += 1
     if target.semantic_category == "closed" or target.is_final:
         item.closed_at = datetime.now(UTC)

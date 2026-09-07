@@ -13,7 +13,7 @@ describe('intentional mobile experience',()=>{
     expect(primitives).toContain('ResponsiveFormGrid');expect(layout).toContain('פתיחת קריאה חדשה');
   });
   it('uses cards and a filter drawer instead of compressed desktop tables',()=>{
-    expect(dashboard).toContain("display: { md: 'none' }");expect(reports).toContain('mobile-report-cards');
+    expect(dashboard).toMatch(/display\s*:\s*\{\s*md\s*:\s*'none'/);expect(reports).toContain('mobile-report-cards');
     expect(filters).toContain('<FilterDrawer');expect(filters).toContain('badgeContent={active}');
     expect(details).toContain('<MobileActionBar');
   });

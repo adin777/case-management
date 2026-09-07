@@ -15,6 +15,7 @@ from app.modules.models import (
 )
 from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import Notification
+from app.modules.sla.service import SlaEngine
 
 
 def start_matching_approvals(db: Session, item: Case) -> list[ApprovalInstance]:
@@ -43,6 +44,7 @@ def start_matching_approvals(db: Session, item: Case) -> list[ApprovalInstance]:
     item.approval_status = "pending"
     item.is_approved = False
     create_step_tasks(db, instance, 1)
+    SlaEngine(db).approval_changed(item,True)
     return [instance]
 
 
@@ -69,6 +71,7 @@ def resubmit_approval(db: Session, item: Case) -> ApprovalInstance:
     db.add(instance); db.flush()
     item.approval_status = "pending"; item.is_approved = False
     create_step_tasks(db, instance, 1)
+    SlaEngine(db).approval_changed(item,True)
     return instance
 
 

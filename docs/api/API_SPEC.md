@@ -20,6 +20,24 @@
 |---|---|---|
 | קיים | POST | `/api/auth/login` |
 | קיים | GET | `/api/auth/me` |
+| קיים | GET | `/api/workspace/views` |
+| קיים | POST | `/api/workspace/views` |
+| קיים | PUT | `/api/workspace/views/{view_id}` |
+| קיים | POST | `/api/workspace/views/{view_id}/duplicate` |
+| קיים | POST | `/api/workspace/views/{view_id}/default` |
+| קיים | DELETE | `/api/workspace/views/{view_id}` |
+| קיים | POST | `/api/workspace/bulk/preview` |
+| קיים | POST | `/api/workspace/bulk/apply` |
+| קיים | GET | `/api/cases/{case_id}/timeline` |
+| קיים | GET | `/api/environments/{environment_id}/business-calendars` |
+| קיים | POST | `/api/environments/{environment_id}/business-calendars` |
+| קיים | PUT | `/api/business-calendars/{calendar_id}` |
+| קיים | DELETE | `/api/business-calendars/{calendar_id}` |
+| קיים | GET | `/api/cases/{case_id}/sla` |
+| קיים | POST | `/api/sla/process-due` |
+| קיים | GET | `/api/reports/sla` |
+| קיים | GET | `/api/reports/sla/metrics` |
+| קיים | GET | `/api/reports/sla/export` |
 | קיים | POST | `/api/auth/register` |
 | קיים | GET | `/api/impersonation/status` |
 | קיים | POST | `/api/impersonation/start` |
@@ -355,8 +373,9 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 
 ### Subject access matrix
 
-`GET /api/auth/me` מחזיר גם `can_implement`. הערך נקבע בשרת לפי System Admin או הרשאת
-`implementer.configuration.read/manage` האפקטיבית, ומשמש להצגת סטודיו המיישם. תחום ההרשאה
+`GET /api/auth/me` מחזיר גם `can_implement` וגם `can_use_agent_workspace`. הראשון נקבע בשרת לפי System Admin או הרשאת
+`implementer.configuration.read/manage` האפקטיבית ומשמש להצגת סטודיו המיישם. השני נקבע לפי יכולות טיפול אפקטיביות
+(`case.read_environment`, `case.update`, `case.assign`, `case.change_status`) ומשמש לבחירת חוויית מרכז העבודה ללא הסקה משם תפקיד. תחום ההרשאה
 `implementer_studio` תומך ברמות `view` ו־`edit`; ברמת edit השרת מעניק את יכולות התצורה
 הקיימות בלי ליצור מודל תצורה מקביל.
 
