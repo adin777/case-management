@@ -34,7 +34,8 @@ DOMAIN_DEFINITIONS = [
     ("report_approvals", "דוח אישורים", "צפייה בדוח תהליכי אישור", "דוחות", "both", "report.approvals", "report.approvals"),
     ("report_users", "דוח משתמשים והרשאות", "צפייה בדוח זהויות והרשאות אפקטיביות", "דוחות", "global", "report.users", "report.users"),
     ("report_audit", "דוח Audit", "צפייה בדוח אירועי ביקורת", "דוחות", "both", "report.audit", "report.audit"),
-    ("report_sla", "דוח SLA", "צפייה בדוח יעדי השירות", "דוחות", "environment", "report.sla", "report.sla"),
+    ("sla_configuration", "הגדרת SLA", "צפייה וניהול של מדיניות ולוחות עבודה", "סביבות", "environment", "sla.view", "sla.configure"),
+    ("report_sla", "דוח SLA", "צפייה בדוח יעדי השירות", "דוחות", "environment", "sla.report", "sla.report"),
 ]
 
 

@@ -38,6 +38,13 @@
 | קיים | GET | `/api/reports/sla` |
 | קיים | GET | `/api/reports/sla/metrics` |
 | קיים | GET | `/api/reports/sla/export` |
+| קיים | GET | `/api/reports/sla/options` |
+
+חוזה SLA משתמש במרחב הרשאות יחיד: `sla.view` לצפייה במדיניות ובמצב Case,
+`sla.configure` לניהול מדיניות ולוחות עבודה, ו־`sla.report` לדוח, למדדים ולייצוא.
+מסנני הדוח והמדדים זהים: `created_from`, `created_to`, `environment_id`,
+`request_type_id`, `priority_option_id`, `assignee_id`, `state` ו־`policy_id`.
+ה־options endpoint מחזיר רק סביבות וערכי בחירה שהמשתמש רשאי לראות בדוח.
 | קיים | POST | `/api/auth/register` |
 | קיים | GET | `/api/impersonation/status` |
 | קיים | POST | `/api/impersonation/start` |

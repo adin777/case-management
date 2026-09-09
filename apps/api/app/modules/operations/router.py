@@ -311,13 +311,13 @@ def status_history(case_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, 
 
 @router.get("/environments/{environment_id}/sla-policies")
 def sla_policies(environment_id: uuid.UUID, db: DB, user: Current) -> list[dict[str, Any]]:
-    require(db, user, environment_id, "sla.read")
+    require(db, user, environment_id, "sla.view")
     return [row(item) for item in db.scalars(select(SlaPolicy).where(SlaPolicy.environment_id == environment_id).order_by(SlaPolicy.name_he))]
 
 
 @router.post("/environments/{environment_id}/sla-policies", status_code=201)
 def create_sla(environment_id: uuid.UUID, data: SlaIn, db: DB, user: Current) -> dict[str, Any]:
-    require(db, user, environment_id, "sla.manage")
+    require(db, user, environment_id, "sla.configure")
     validate_sla_policy(db,environment_id,data)
     item = SlaPolicy(id=uuid.uuid4(), system_number=f"SLA-{uuid.uuid4().hex[:8].upper()}", environment_id=environment_id, **data.model_dump())
     db.add(item)
@@ -331,7 +331,7 @@ def update_sla(policy_id: uuid.UUID, data: SlaIn, db: DB, user: Current) -> dict
     item = db.get(SlaPolicy, policy_id)
     if not item:
         raise HTTPException(404, "SLA policy not found")
-    require(db, user, item.environment_id, "sla.manage")
+    require(db, user, item.environment_id, "sla.configure")
     validate_sla_policy(db,item.environment_id,data,item.id)
     before = jsonable_encoder(row(item))
     for key, value in data.model_dump().items():
@@ -345,7 +345,7 @@ def update_sla(policy_id: uuid.UUID, data: SlaIn, db: DB, user: Current) -> dict
 def delete_sla(policy_id: uuid.UUID, db: DB, user: Current) -> None:
     item=db.get(SlaPolicy,policy_id)
     if not item:raise HTTPException(404,"מדיניות SLA לא נמצאה")
-    require(db,user,item.environment_id,"sla.manage")
+    require(db,user,item.environment_id,"sla.configure")
     if db.scalar(select(SlaInstance.id).where(SlaInstance.policy_id==item.id)):
         item.is_active=False;audit(db,user,"sla_policy",item.id,"deactivated_used")
     else:

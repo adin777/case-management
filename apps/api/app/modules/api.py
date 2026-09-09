@@ -84,11 +84,11 @@ ALL_PERMISSIONS = [
     "case.internal_comment",
     "case.manage_participants",
     "comment.public.read", "comment.public.create", "comment.manager.read", "comment.manager.create",
-    "workflow.read", "workflow.manage", "sla.read", "sla.manage",
+    "workflow.read", "workflow.manage", "sla.view", "sla.configure",
     "attachment.read", "attachment.upload", "attachment.delete",
     "notification.read_own", "notification.manage",
     "audit.read_system", "audit.read_environment", "case.read_status_history",
-    "report.cases", "report.approvals", "report.users", "report.audit", "report.sla",
+    "report.cases", "report.approvals", "report.users", "report.audit", "sla.report",
     "implementer.configuration.read", "implementer.configuration.manage",
 ]
 
