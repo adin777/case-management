@@ -10,6 +10,7 @@ DEFAULT_DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 class Settings(BaseSettings):
     database_url: str = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
     jwt_secret: str = "development-only-secret"
+    directory_encryption_key: str | None = None
     access_token_minutes: int = 15
     refresh_token_days: int = 7
     environment: str = "development"
@@ -24,14 +25,6 @@ class Settings(BaseSettings):
     ai_model: str = "local-extractive"
     embedding_model: str = "local-hash-96"
     openai_api_key: str | None = None
-    entra_tenant_id: str | None = None
-    entra_client_id: str | None = None
-    entra_client_secret: str | None = None
-    active_directory_server: str | None = None
-    active_directory_base_dn: str | None = None
-    active_directory_bind_user: str | None = None
-    active_directory_bind_password: str | None = None
-    active_directory_use_ssl: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

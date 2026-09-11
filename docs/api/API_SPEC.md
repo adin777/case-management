@@ -210,7 +210,7 @@ Excel: `GET /api/users/import/template` מוריד תבנית; `POST /api/users/
 
 ביצירת משתמש ידני `email` הוא מזהה הכניסה. `user_principal_name` אופציונלי; כאשר הוא ריק השרת שומר בו את כתובת ה-email המנורמלת. `display_name` ו-email תקין הם חובה, וסיסמה ידנית חייבת לכלול לפחות 8 תווים.
 
-Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה. `POST /api/directory/{name}/test` בודק ספק ומחזיר `ok`, הודעה ומערך `steps` של `{code,label,ok,message}` ללא Secrets; Entra בודק Configuration, Tenant, Client, קיום Secret, Token, Graph ו־Users endpoint, ו־AD מקומי בודק Server, Base DN, Bind, חיבור LDAP/LDAPS ושאילתת משתמש. `POST /api/directory/{name}/preview` מבצע קריאה ללא שינוי נתונים. `POST /api/directory/apply` מחיל snapshot שאושר ושומר `DirectorySyncRun`; `GET /api/directory/runs` מחזיר יומן ריצות. הספקים הם `fake`, `entra`, `active_directory`. Entra משתמש ב־Graph `/users/delta` ושומר deltaLink לריצה הבאה. `directory_enabled` נפרד ממצב מקומי, ולכן Sync אינו מפעיל מחדש משתמש שהושבת או הועבר לארכיון ידנית.
+Directory: `GET/PUT /api/directory/connections/{entra|active_directory}` קורא ושומר תצורת ספק בבסיס הנתונים. Secret נשמר מוצפן באמצעות `DIRECTORY_ENCRYPTION_KEY`, ולעולם אינו מוחזר ב־API או ב־Audit. `GET /api/directory/status` מחזיר מצב, ריצה אחרונה וסטטוסי חיבורים. `POST /api/directory/{name}/test` חסום עד שקיימת תצורה מלאה ומחזיר `ok` ומערך `steps` ללא Secrets. `POST /api/directory/{name}/preview` יוצר snapshot בלתי משתנה ומחזיר `preview_session_id`. `POST /api/directory/apply` מקבל רק `preview_session_id`, מחיל בדיוק את ה־snapshot שאושר פעם אחת ושומר `DirectorySyncRun`; `GET /api/directory/runs` מחזיר יומן ריצות. `fake` מיועד לפיתוח ולמנהל מערכת בלבד. סנכרון Directory אינו SSO; `auth_source` מזהה את מקור הזהות, והכניסה המקומית נשארת פעילה עד למימוש SSO נפרד. Entra דורש Application permission מסוג `User.Read.All` עם Admin Consent. `directory_enabled` נפרד ממצב מקומי, ולכן Sync אינו מפעיל מחדש משתמש שהושבת או הועבר לארכיון ידנית.
 
 ## כללי שיוך ואישור לפי תפקיד ארגוני
 
@@ -237,8 +237,8 @@ Directory: `GET /api/directory/status` מחזיר מצב וריצה אחרונה
 ## העברת קריאה בין סביבות
 
 - `GET /api/cases/{case_id}/transfer-preview?target_environment_id={id}` דורש `case.transfer_environment` הן במקור והן ביעד ומחזיר סוגי קריאה פעילים, משתתפים ומטפל שיוסרו ושדות המקור.
-- `GET /api/cases/{case_id}/transfer-requirements?request_type_id={id}` מחזיר סטטוס התחלתי, מיפויי שדות לפי `key` יציב וסוג תואם, שדות שיוסרו ושדות יעד נדרשים.
-- `POST /api/cases/{case_id}/transfer` מקבל `target_environment_id`, `target_request_type_id`, `priority_id`, `sub_priority_id`, `assignee_id`, `new_field_values` ו־`reason`.
+- `GET /api/cases/{case_id}/transfer-requirements?request_type_id={id}` מחזיר מיפויי שדות סביבתיים לפי `key` יציב וסוג תואם ושדות שיוסרו. שדות יעד הנדרשים ב־Create אינם חוסמים Transfer.
+- `POST /api/cases/{case_id}/transfer` מקבל `target_environment_id`, `target_request_type_id`, `assignee_id`, `new_field_values` ו־`reason`. Status, Priority, Sub-priority וכל Global Field נשמרים מהמקור ואינם מתקבלים מחדש ב־payload; אין lookup לסטטוס התחלתי בזמן Transfer.
 - השרת מאמת מחדש את כל מזהי היעד ואינו סומך על ה־Preview. הפעולה אטומית: כשל מבטל את כל השינויים.
 - מספר הקריאה, Reporter, Requester, תגובות וקבצים נשמרים. שיוכי שדות, משתתפים ומטפל שאינם תקפים ביעד מוסרים מן הקריאה הפעילה ונשמרים ב־`CaseTransferHistory` וב־Audit.
 - Approval פעיל מבוטל עם `environment_transfer`; תצורת אישור ו־SLA של היעד מאותחלות מחדש. נעילה נעקפת רק בידי מנהל מורשה.
@@ -287,8 +287,9 @@ Assignment rows. התחזות דורשת `system.impersonate_users`; עצירה 
 ### Transfer, reports and files
 
 `GET /api/cases/{case_id}/transfer-requirements?request_type_id=...` הוא מקור האמת המשותף
-ל־UI ולוולידציית ההעברה ומחזיר סטטוס התחלתי, שדות יעד, עדיפויות, תתי־עדיפויות ומטפלים
-פעילים השייכים לסביבת היעד. שינוי סביבת היעד ב־UI מנקה את כל הבחירות התלויות.
+ל־UI ולוולידציית ההעברה ומחזיר מיפויי שדות סביבתיים ומטפלים פעילים השייכים לסביבת היעד.
+העברה אינה Create ולכן אינה דורשת Status התחלתי או השלמת שדות יעד המסומנים כחובה ביצירה.
+שינוי סביבת היעד ב־UI מנקה את כל הבחירות התלויות.
 `GET /api/cases/{case_id}` מחזיר גם `environment_name`; הסביבה אינה נערכת ישירות.
 
 מסנן הסטטוס בדוח הקריאות שולח `workflow_status_id` יציב מתוך

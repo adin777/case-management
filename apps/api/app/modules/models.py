@@ -70,6 +70,7 @@ class User(TimestampMixin, Base):
     computer_identifier: Mapped[str | None] = mapped_column(String(200))
     directory_object_id: Mapped[str | None] = mapped_column(String(200), unique=True, index=True)
     source: Mapped[str] = mapped_column(String(30), default="manual", index=True)
+    auth_source: Mapped[str] = mapped_column(String(30), default="local", index=True)
     directory_enabled: Mapped[bool | None] = mapped_column(Boolean)
     status: Mapped[str] = mapped_column(String(30), default="active", index=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -642,6 +643,28 @@ class UserImportSession(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     snapshot_json: Mapped[list] = mapped_column(JSON, default=list)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DirectoryConnection(TimestampMixin, Base):
+    __tablename__ = "directory_connections"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    encrypted_secret: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="configured_not_tested")
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_result: Mapped[str | None] = mapped_column(String(40))
+
+
+class DirectoryPreviewSession(TimestampMixin, Base):
+    __tablename__ = "directory_preview_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    snapshot_json: Mapped[dict] = mapped_column(JSON)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

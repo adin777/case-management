@@ -72,6 +72,7 @@ class UserSyncService:
             if not user:
                 user = User(email=str(incoming.email).lower(), display_name=incoming.display_name,
                     password_hash=password_hash.hash(secrets.token_urlsafe(32)), source=self.source,
+                    auth_source=self.source if self.source in {"entra", "active_directory"} else "local",
                     status="active" if incoming.directory_enabled else "inactive", is_active=incoming.directory_enabled)
                 self.db.add(user)
             for field in PROFILE_FIELDS: setattr(user, field, getattr(incoming, field))

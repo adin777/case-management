@@ -5,7 +5,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 
 from app.core.config import settings
@@ -15,8 +15,11 @@ from app.modules.directory.entra import EntraDirectoryProvider
 from app.modules.directory.excel import EXPORT_HEADERS, HEADERS, parse, workbook
 from app.modules.directory.fake import FakeDirectoryProvider
 from app.modules.directory.provider import DirectoryBatch, DirectoryProvider, NormalizedDirectoryUser
+from app.modules.directory.secrets import decrypt, encrypt
 from app.modules.directory.sync_service import UserSyncService
 from app.modules.models import (
+    DirectoryConnection,
+    DirectoryPreviewSession,
     DirectorySyncRun,
     Environment,
     EnvironmentMembership,
@@ -30,9 +33,29 @@ router = APIRouter(prefix="/api", tags=["directory"])
 
 
 class ApplyIn(BaseModel):
-    provider: str
-    users: list[NormalizedDirectoryUser]
-    delta_link: str | None = None
+    preview_session_id: uuid.UUID
+
+
+class ConnectionIn(BaseModel):
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = Field(default=None,max_length=2000)
+    graph_base_url: str = "https://graph.microsoft.com/v1.0"
+    scope: str = "https://graph.microsoft.com/.default"
+    host: str | None = None
+    port: int | None = Field(default=None,ge=1,le=65535)
+    base_dn: str | None = None
+    domain: str | None = None
+    bind_username: str | None = None
+    bind_password: str | None = Field(default=None,max_length=2000)
+    use_ssl: bool = True
+    user_search_base: str | None = None
+    user_filter: str | None = None
+
+    @model_validator(mode="after")
+    def supported(self)->"ConnectionIn":
+        if self.client_secret and self.bind_password:raise ValueError("יש לספק Secret אחד בלבד")
+        return self
 
 
 class ImportApplyIn(BaseModel):
@@ -43,34 +66,76 @@ def admin(user: Current) -> None:
     if not user.is_system_admin: raise HTTPException(403, "נדרשת הרשאת מנהל מערכת")
 
 
-def provider(name: str) -> DirectoryProvider:
+def provider(db:DB,name: str) -> DirectoryProvider:
     if name == "fake": return FakeDirectoryProvider()
-    if name == "entra": return EntraDirectoryProvider()
-    if name == "active_directory": return ActiveDirectoryProvider()
+    connection=db.scalar(select(DirectoryConnection).where(DirectoryConnection.provider==name))
+    if not connection:raise HTTPException(409,"חיבור Directory טרם הוגדר")
+    try:secret=decrypt(connection.encrypted_secret) if connection.encrypted_secret else None
+    except ValueError as exc:raise HTTPException(503,str(exc)) from exc
+    if name == "entra": return EntraDirectoryProvider(connection.configuration_json,secret)
+    if name == "active_directory": return ActiveDirectoryProvider(connection.configuration_json,secret)
     raise HTTPException(422, "ספק Directory אינו נתמך")
+
+
+def connection_dict(item:DirectoryConnection|None,name:str)->dict[str,Any]:
+    return {"provider":name,"configured":bool(item and item.encrypted_secret),"secret_configured":bool(item and item.encrypted_secret),"configuration":item.configuration_json if item else {},"status":item.status if item else "not_configured","last_tested_at":item.last_tested_at if item else None,"last_successful_test_at":item.last_successful_test_at if item else None,"last_sync_at":item.last_sync_at if item else None,"last_sync_result":item.last_sync_result if item else None}
+
+
+@router.get("/directory/connections/{name}")
+def get_connection(name:str,db:DB,user:Current)->dict[str,Any]:
+    admin(user)
+    if name not in {"entra","active_directory"}:raise HTTPException(422,"ספק Directory אינו נתמך")
+    return connection_dict(db.scalar(select(DirectoryConnection).where(DirectoryConnection.provider==name)),name)
+
+
+@router.put("/directory/connections/{name}")
+def save_connection(name:str,data:ConnectionIn,db:DB,user:Current)->dict[str,Any]:
+    admin(user)
+    if name not in {"entra","active_directory"}:raise HTTPException(422,"ספק Directory אינו נתמך")
+    item=db.scalar(select(DirectoryConnection).where(DirectoryConnection.provider==name));secret=data.client_secret if name=="entra" else data.bind_password
+    config=({"tenant_id":data.tenant_id,"client_id":data.client_id,"graph_base_url":data.graph_base_url,"scope":data.scope} if name=="entra" else {"host":data.host,"port":data.port or (636 if data.use_ssl else 389),"base_dn":data.base_dn,"domain":data.domain,"bind_username":data.bind_username,"use_ssl":data.use_ssl,"user_search_base":data.user_search_base,"user_filter":data.user_filter})
+    required=(config.get("tenant_id"),config.get("client_id")) if name=="entra" else (config.get("host"),config.get("base_dn"),config.get("bind_username"))
+    if not all(required):raise HTTPException(422,"חסרים שדות חובה בתצורת Directory")
+    if not item:item=DirectoryConnection(provider=name,configuration_json=config,status="configured_not_tested");db.add(item)
+    else:item.configuration_json=config;item.status="configured_not_tested"
+    if secret:
+        try:item.encrypted_secret=encrypt(secret)
+        except ValueError as exc:raise HTTPException(503,str(exc)) from exc
+    if not item.encrypted_secret:raise HTTPException(422,"נדרש Secret או Bind Password")
+    db.flush();audit(db,user,"directory_connection",item.id,"configured",after={"provider":name,"configuration":config,"secret_configured":True});db.commit();return connection_dict(item,name)
 
 
 @router.get("/directory/status")
 def status(db: DB, user: Current) -> dict[str, Any]:
     admin(user); latest = db.scalar(select(DirectorySyncRun).order_by(DirectorySyncRun.started_at.desc()))
-    return {"mode": settings.directory_mode, "last_run": None if not latest else run_dict(latest)}
+    connections=[connection_dict(row,row.provider) for row in db.scalars(select(DirectoryConnection))]
+    return {"mode": settings.directory_mode, "last_run": None if not latest else run_dict(latest),"connections":connections}
 
 
 @router.post("/directory/{name}/test")
-def test_provider(name: str, user: Current) -> dict[str, Any]: admin(user); return provider(name).test_connection()
+def test_provider(name: str,db:DB,user: Current) -> dict[str, Any]:
+    admin(user);result=provider(db,name).test_connection();item=db.scalar(select(DirectoryConnection).where(DirectoryConnection.provider==name));now=datetime.now(UTC)
+    if item:item.status="healthy" if result.get("ok") else "test_failed";item.last_tested_at=now;item.last_successful_test_at=now if result.get("ok") else item.last_successful_test_at;db.commit()
+    return result
 
 
 @router.post("/directory/{name}/preview")
 def preview(name: str, db: DB, user: Current) -> dict[str, Any]:
-    admin(user); batch = provider(name).fetch_users(); return UserSyncService(db, name).preview(batch)
+    admin(user);batch=provider(db,name).fetch_users();result=UserSyncService(db,name).preview(batch);session=DirectoryPreviewSession(provider=name,created_by=user.id,snapshot_json={"users":result["users"],"delta_link":result.get("delta_link")});db.add(session);db.commit();return {**result,"preview_session_id":session.id}
 
 
 @router.post("/directory/apply")
 def apply(data: ApplyIn, db: DB, user: Current) -> dict[str, Any]:
     admin(user)
-    try: run = UserSyncService(db, data.provider).apply(DirectoryBatch(users=data.users, delta_link=data.delta_link), user.id)
+    session=db.get(DirectoryPreviewSession,data.preview_session_id)
+    if not session or session.created_by!=user.id:raise HTTPException(404,"תצוגת הסנכרון לא נמצאה")
+    if session.applied_at:raise HTTPException(409,"תצוגת הסנכרון כבר הוחלה")
+    snapshot=session.snapshot_json
+    try: run = UserSyncService(db,session.provider).apply(DirectoryBatch(users=[NormalizedDirectoryUser.model_validate(row) for row in snapshot["users"]],delta_link=snapshot.get("delta_link")), user.id)
     except ValueError as exc: raise HTTPException(422, str(exc)) from exc
-    audit(db, user, "directory_sync_run", run.id, "applied", after=run_dict(run)); db.commit(); return run_dict(run)
+    session.applied_at=datetime.now(UTC);connection=db.scalar(select(DirectoryConnection).where(DirectoryConnection.provider==session.provider))
+    if connection:connection.last_sync_at=session.applied_at;connection.last_sync_result=run.status
+    audit(db,user,"directory_sync_run",run.id,"applied",after={**run_dict(run),"preview_session_id":str(session.id)});db.commit();return run_dict(run)
 
 
 @router.get("/directory/runs")

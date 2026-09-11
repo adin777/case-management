@@ -2,30 +2,33 @@ import json
 import urllib.parse
 import urllib.request
 
-from app.core.config import settings
 from app.modules.directory.provider import DirectoryBatch, NormalizedDirectoryUser
 
 
 class EntraDirectoryProvider:
     name = "entra"
+    def __init__(self,configuration:dict|None=None,secret:str|None=None)->None:
+        self.configuration=configuration or {};self.secret=secret
 
     def _token(self) -> str:
-        if not all((settings.entra_tenant_id, settings.entra_client_id, settings.entra_client_secret)):
+        tenant=self.configuration.get("tenant_id");client=self.configuration.get("client_id")
+        if not all((tenant,client,self.secret)):
             raise ValueError("חסרה תצורת Microsoft Entra")
-        body = urllib.parse.urlencode({"client_id": settings.entra_client_id,
-            "client_secret": settings.entra_client_secret, "scope": "https://graph.microsoft.com/.default",
+        body = urllib.parse.urlencode({"client_id": client,
+            "client_secret": self.secret, "scope": self.configuration.get("scope","https://graph.microsoft.com/.default"),
             "grant_type": "client_credentials"}).encode()
-        request = urllib.request.Request(f"https://login.microsoftonline.com/{settings.entra_tenant_id}/oauth2/v2.0/token", data=body)
+        request = urllib.request.Request(f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token", data=body)
         with urllib.request.urlopen(request, timeout=15) as response:
             return str(json.load(response)["access_token"])
 
     def test_connection(self) -> dict:
-        configured = [("tenant", "Tenant ID מוגדר", bool(settings.entra_tenant_id)), ("client", "Client ID מוגדר", bool(settings.entra_client_id)), ("secret", "Client Secret מוגדר", bool(settings.entra_client_secret))]
+        configured = [("tenant", "Tenant ID מוגדר", bool(self.configuration.get("tenant_id"))), ("client", "Client ID מוגדר", bool(self.configuration.get("client_id"))), ("secret", "Client Secret מוגדר", bool(self.secret))]
         steps = [{"code": code, "label": label, "ok": ok, "message": "מוגדר" if ok else "חסר"} for code, label, ok in configured]
         if not all(ok for _, _, ok in configured): return {"ok": False, "message": "תצורת Microsoft Entra חסרה", "steps": steps}
         try:
             token = self._token(); steps.append({"code": "token", "label": "קבלת token", "ok": True, "message": "הצליחה"})
-            request = urllib.request.Request("https://graph.microsoft.com/v1.0/users?$top=1&$select=id", headers={"Authorization": f"Bearer {token}"})
+            graph=self.configuration.get("graph_base_url","https://graph.microsoft.com/v1.0").rstrip("/")
+            request = urllib.request.Request(f"{graph}/users?$top=1&$select=id", headers={"Authorization": f"Bearer {token}"})
             with urllib.request.urlopen(request, timeout=15) as response: json.load(response)
             steps.extend([{"code":"graph","label":"Microsoft Graph נגיש","ok":True,"message":"תקין"},{"code":"users","label":"Users endpoint נגיש","ok":True,"message":"תקין"}])
             return {"ok": True, "message": "החיבור ל־Microsoft Entra תקין", "steps": steps}
@@ -34,7 +37,8 @@ class EntraDirectoryProvider:
             return {"ok": False, "message": "בדיקת Microsoft Entra נכשלה", "steps": steps}
 
     def fetch_users(self, delta_link: str | None = None) -> DirectoryBatch:
-        url = delta_link or ("https://graph.microsoft.com/v1.0/users/delta?" + urllib.parse.urlencode({
+        graph=self.configuration.get("graph_base_url","https://graph.microsoft.com/v1.0").rstrip("/")
+        url = delta_link or (f"{graph}/users/delta?" + urllib.parse.urlencode({
             "$select": "id,userPrincipalName,mail,displayName,givenName,surname,department,jobTitle,mobilePhone,businessPhones,accountEnabled"}))
         users: list[NormalizedDirectoryUser] = []; token = self._token(); next_url: str | None = url; final_delta = None
         while next_url:

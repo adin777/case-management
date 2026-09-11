@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
 from app.modules.case_semantics.service import CaseSemanticFieldService
-from app.modules.global_case_values.service import active_values
 from app.modules.models import (
     ApprovalInstance,
     ApprovalTask,
@@ -142,10 +141,6 @@ def build_preview(db: Session, item: Case, target_environment_id: uuid.UUID) -> 
 
 def target_requirements(db: Session, item: Case, request_type: RequestType) -> dict[str, Any]:
     fields, old_fields = _fields(db, request_type.form_version_id), _fields(db, item.form_definition_id)
-    priorities = active_values(db, "priorities")
-    sub_priorities = active_values(db, "sub-priorities")
-    semantics = CaseSemanticFieldService(db)
-    current_status = semantics.option("case.status", semantics.value_id(item, "case.status"))
     assignees = list(
         db.scalars(
             select(User)
@@ -160,8 +155,6 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
         ).unique()
     )
     return {
-        "initial_status_id": str(current_status.id) if current_status else None,
-        "initial_status_label": current_status.label_he if current_status else "",
         "target_fields": [
             {
                 "id": str(row.id),
@@ -173,15 +166,6 @@ def target_requirements(db: Session, item: Case, request_type: RequestType) -> d
         ],
         "field_mappings": [],
         "required_fields": [],
-        "priorities": [{"id": str(row.id), "label_he": row.label_he} for row in priorities],
-        "sub_priorities": [
-            {
-                "id": str(row.id),
-                "priority_id": None,
-                "label_he": row.label_he,
-            }
-            for row in sub_priorities
-        ],
         "assignees": [
             {"id": str(row.id), "display_name": row.display_name, "email": row.email} for row in assignees
         ],
@@ -205,20 +189,17 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     ):
         raise HTTPException(422, "סוג הקריאה אינו פעיל בסביבת היעד")
     semantics = CaseSemanticFieldService(db)
-    priority_id = payload.priority_id or semantics.value_id(item, "case.priority")
-    priority = semantics.option("case.priority", priority_id)
-    if payload.priority_id and (not priority or not priority.is_active):
-        raise HTTPException(422, "העדיפות הגלובלית שנבחרה אינה פעילה")
-    if payload.sub_priority_id:
-        sub = semantics.option("case.sub_priority", payload.sub_priority_id)
-        if not sub or not sub.is_active:
-            raise HTTPException(422, "תת־העדיפות הגלובלית אינה פעילה")
     if payload.assignee_id and not _member(db, payload.target_environment_id, payload.assignee_id):
         raise HTTPException(422, "המטפל אינו פעיל או משויך לסביבת היעד")
     supplied = {str(row.field_definition_id): row.value for row in payload.new_field_values}
     conflicts = semantics.sync_case(item)
     if conflicts:
-        raise HTTPException(409, "קיימת סתירה בערכים הסמנטיים של הקריאה; יש לפתור אותה לפני העברה")
+        conflict = conflicts[0]
+        raise HTTPException(409, {"code":"UNRESOLVABLE_SEMANTIC_CONFLICT",
+            "binding":conflict.semantic_binding,
+            "current_canonical_option":conflict.global_value_json,
+            "conflicting_legacy_value":str(conflict.optimized_value_id) if conflict.optimized_value_id else None,
+            "remediation":"יש לבחור ערך גלובלי פעיל בשדה הסמנטי לפני ההעברה"})
     old_env, old_type = item.environment_id, item.request_type_id
     old_status = semantics.value_id(item, "case.status")
     old_sla = {
@@ -287,10 +268,6 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     item.environment_id = payload.target_environment_id
     item.request_type_id = target_type.id
     item.form_definition_id = target_type.form_version_id
-    if payload.priority_id:
-        semantics.write(item, "case.priority", payload.priority_id)
-    if payload.sub_priority_id is not None:
-        semantics.write(item, "case.sub_priority", payload.sub_priority_id)
     effective_assignee = payload.assignee_id
     if effective_assignee is None and _member(db, payload.target_environment_id, item.assignee_id):
         effective_assignee = item.assignee_id

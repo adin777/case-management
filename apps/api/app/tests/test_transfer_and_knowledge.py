@@ -13,6 +13,7 @@ from app.modules.models import (
     CaseParticipant,
     CaseTransferHistory,
     Environment,
+    EnvironmentMembership,
     FieldDefinition,
     FormDefinition,
     FormStatus,
@@ -237,13 +238,10 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity(
     assert requirements.json()["required_fields"] == []
     assert requirements.json()["field_mappings"] == []
     assert requirements.json()["global_fields_preserved"] == 4
-    assert requirements.json()["priorities"]
     global_priority_id = str(priority_id)
     payload: dict[str, object] = {
         "target_environment_id": str(target_id),
         "target_request_type_id": str(request_type_id),
-        "priority_id": None,
-        "sub_priority_id": None,
         "new_field_values": [],
     }
     moved = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json=payload)
@@ -265,6 +263,31 @@ def test_transfer_is_atomic_removes_invalid_links_and_preserves_identity(
         history = db.scalar(select(CaseTransferHistory).where(CaseTransferHistory.case_id == case_id))
         assert history and history.removed_participants and history.removed_assignee
         assert history.removed_fields_snapshot[0]["value"] == "ערך מקור"
+
+
+def test_transfer_preserves_an_eligible_assignee_without_workflow() -> None:
+    auth = headers()
+    case_id, target_id, request_type_id, *_ = transfer_fixture()
+    with SessionLocal() as db:
+        case = db.get(Case, case_id)
+        request_type = db.get(RequestType, request_type_id)
+        assert case and case.assignee_id and request_type
+        request_type.workflow_definition_id = None
+        db.add(EnvironmentMembership(
+            environment_id=target_id, user_id=case.assignee_id, role_id=None,
+            source="manual", is_active=True,
+        ))
+        expected_assignee = case.assignee_id
+        db.commit()
+    moved = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json={
+        "target_environment_id": str(target_id),
+        "target_request_type_id": str(request_type_id),
+        "new_field_values": [],
+    })
+    assert moved.status_code == 200
+    with SessionLocal() as db:
+        case = db.get(Case, case_id)
+        assert case and case.assignee_id == expected_assignee
 
 
 def test_knowledge_upload_query_versioning_and_environment_isolation() -> None:

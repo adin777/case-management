@@ -69,6 +69,24 @@ receives permanent automated coverage. A completed task is committed and pushed;
 `origin/main`, the working tree must be clean, and runtime databases, uploads, secrets, and generated
 local state must never be committed.
 
+## EXECUTION EFFICIENCY RULE
+
+- Inspect related files in grouped searches before editing.
+- Prefer one coherent patch per responsibility over repeated one-line edits.
+- Run focused tests for the changed responsibility while implementing.
+- Do not repeatedly run the full regression suite during development.
+- The canonical regression command is the single final validation gate.
+- Fix the first actionable failure before re-running a failing focused suite.
+- Do not change code merely to reduce or hide a diff.
+- Reuse existing services, components and test fixtures before adding abstractions.
+- Keep tool output scoped to the files and failures needed for the next decision.
+- Validate API contracts, permissions and persistence together for behavioral changes.
+- Validate responsive behavior through shared primitives rather than page-local patches.
+- Preserve user data and existing uncommitted work throughout diagnostics.
+- Do not commit generated state, secrets, runtime databases or test artifacts.
+- Before commit run `git diff --check` and the canonical regression command.
+- Completion requires a clean tree and `HEAD == origin/main` after push.
+
 A configurable field and its options have exactly one canonical source of truth. No consumer may
 maintain or query an independent catalog for the same business field. Dropdown options must come
 from the exact field definition being rendered; rendering a field while loading values from a
@@ -136,7 +154,7 @@ An option displayed to a user must be valid for submission. UI option sources an
 
 Permission to perform a business action includes read access to the configuration values required to complete that action.
 
-לכל Select יש מקור אמת מפורש: סביבה מתוך Environments; סוג קריאה מתוך RequestTypes של הסביבה שנבחרה; סטטוס מתוך ה־Workflow של הסביבה; עדיפות ותת־עדיפות מתוך ערכי הסביבה; משתמשים מתוך משתמשים פעילים ומורשים. אין לעשות reuse למערך אחר רק משום שהמבנה דומה.
+לכל Select יש מקור אמת מפורש: סביבה מתוך Environments; סוג קריאה מתוך RequestTypes של הסביבה שנבחרה; Status, Priority ו־Sub-priority מתוך אפשרויות ה־Global Field בעל ה־`semantic_binding` המתאים; משתמשים מתוך משתמשים פעילים ומורשים. Workflow רשאי להגדיר מעברים בין מזהי Status קנוניים אך אינו קטלוג ערכים עצמאי. אין לעשות reuse למערך אחר רק משום שהמבנה דומה.
 
 לפני השלמת UI שתלוי בבחירה אחרת יש לבדוק בפועל את ה־IDs ואת התוויות שה־API מחזיר. שינוי בתחום configurable חייב להיבדק בכל הצרכנים שלו: הגדרות, יצירה, פרטי קריאה, Workflow, Automation, דוחות, Dashboard ומסננים.
 

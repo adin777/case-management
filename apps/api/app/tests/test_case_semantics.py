@@ -113,15 +113,15 @@ def test_semantic_sync_backfills_missing_global_value_and_reports_conflict()->No
             value_json=str(status_rows[1].id)));db.flush()
         service=CaseSemanticFieldService(db)
         missing=service.sync_case(legacy)
-        assert len(missing)==1 and missing[0].reason=="missing_global_value"
+        assert missing == []
         stored = db.get(GlobalCaseFieldValue, (legacy.id, field.id))
-        assert stored is None
+        assert stored and stored.value_json == str(status_rows[0].id)
         found=service.sync_case(conflict)
         assert found==[]
         assert conflict.workflow_status_id==status_rows[1].id
         db.flush()
         assert db.scalar(select(CaseSemanticSyncConflict).where(
-            CaseSemanticSyncConflict.case_id==legacy.id)) is not None
+            CaseSemanticSyncConflict.case_id==legacy.id)) is None
 
 
 def test_every_select_value_references_an_option_of_its_field_with_canonical_shape()->None:

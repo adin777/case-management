@@ -17,12 +17,9 @@ type Preview = {
   warning: string;
 };
 export type TransferRequirements = {
-  initial_status_label: string;
   required_fields: { id: string; label: string; field_type: string }[];
   removed_fields: { id: string; label: string }[];
   field_mappings: { label: string }[];
-  priorities: { id: string; label_he: string }[];
-  sub_priorities: { id: string; priority_id?: string; label_he: string }[];
   assignees: { id: string; display_name: string; email: string }[];
 };
 
@@ -30,12 +27,9 @@ const list = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : 
 export function normalizeTransferRequirements(value: unknown): TransferRequirements {
   const raw = value && typeof value === 'object' ? value as Partial<TransferRequirements> : {};
   return {
-    initial_status_label: typeof raw.initial_status_label === 'string' ? raw.initial_status_label : '',
     required_fields: list(raw.required_fields),
     removed_fields: list(raw.removed_fields),
     field_mappings: list(raw.field_mappings),
-    priorities: list(raw.priorities),
-    sub_priorities: list(raw.sub_priorities),
     assignees: list(raw.assignees),
   };
 }
@@ -86,8 +80,7 @@ export function CaseTransferWizard({ caseId, currentEnvironmentId, open, onClose
     setLoading(true); setError('');
     try {
       await api(`/cases/${caseId}/transfer`, { method: 'POST', body: JSON.stringify({
-        target_environment_id: target, target_request_type_id: requestType, priority_id: null,
-        sub_priority_id: null, assignee_id: assignee || null,
+        target_environment_id: target, target_request_type_id: requestType, assignee_id: assignee || null,
         new_field_values: Object.entries(values).map(([field_definition_id, value]) => ({ field_definition_id, value })),
         reason: reason || null,
       }) });

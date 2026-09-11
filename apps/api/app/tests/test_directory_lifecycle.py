@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.database.session import SessionLocal
 from app.main import app
 from app.modules.api import password_hash, permissions
@@ -15,6 +16,7 @@ from app.modules.approvals.service import create_step_tasks
 from app.modules.directory.entra import EntraDirectoryProvider
 from app.modules.directory.excel import EXPORT_HEADERS, HEADERS, workbook
 from app.modules.directory.fake import FakeDirectoryProvider
+from app.modules.directory.secrets import decrypt, encrypt
 from app.modules.directory.sync_service import UserSyncService
 from app.modules.environment_assignments.service import apply_rule
 from app.modules.models import (
@@ -259,9 +261,27 @@ def test_directory_endpoints_contract() -> None:
     assert {step["code"] for step in diagnostics.json()["steps"]} == {"provider", "users"}
     preview = client.post("/api/directory/fake/preview", headers=headers)
     assert preview.status_code == 200 and "users" in preview.json()
-    applied = client.post("/api/directory/apply", headers=headers, json={"provider": "fake", "users": preview.json()["users"]})
+    applied = client.post("/api/directory/apply", headers=headers, json={"preview_session_id": preview.json()["preview_session_id"]})
     assert applied.status_code == 200
+    assert client.post("/api/directory/apply", headers=headers, json={"preview_session_id": preview.json()["preview_session_id"]}).status_code == 409
     assert client.get("/api/directory/runs", headers=headers).status_code == 200
+
+
+def test_directory_secret_is_encrypted_and_requires_server_key() -> None:
+    original = settings.directory_encryption_key
+    try:
+        settings.directory_encryption_key = "regression-master-key"
+        encrypted = encrypt("never-store-this-secret")
+        assert "never-store-this-secret" not in encrypted
+        assert decrypt(encrypted) == "never-store-this-secret"
+        settings.directory_encryption_key = None
+        try:
+            encrypt("blocked")
+            raise AssertionError("missing master key must block encryption")
+        except ValueError as exc:
+            assert "DIRECTORY_ENCRYPTION_KEY" in str(exc)
+    finally:
+        settings.directory_encryption_key = original
 
 
 def test_reports_are_real_and_permission_protected() -> None:
@@ -297,16 +317,16 @@ class _GraphResponse:
 
 def test_entra_provider_mocked_graph_delta_flow() -> None:
     pages = [_GraphResponse({"access_token": "token"}), _GraphResponse({"value": [{"id": "graph-1", "userPrincipalName": "graph@example.com", "displayName": "Graph User", "accountEnabled": True}], "@odata.nextLink": "https://graph/next"}), _GraphResponse({"value": [], "@odata.deltaLink": "https://graph/delta-token"})]
-    with patch("app.modules.directory.entra.settings.entra_tenant_id", "tenant"), patch("app.modules.directory.entra.settings.entra_client_id", "client"), patch("app.modules.directory.entra.settings.entra_client_secret", "secret"), patch("app.modules.directory.entra.urllib.request.urlopen", side_effect=pages):
-        batch = EntraDirectoryProvider().fetch_users()
+    with patch("app.modules.directory.entra.urllib.request.urlopen", side_effect=pages):
+        batch = EntraDirectoryProvider({"tenant_id":"tenant","client_id":"client","graph_base_url":"https://graph.microsoft.com/v1.0","scope":"https://graph.microsoft.com/.default"}, "secret").fetch_users()
     assert batch.delta_link == "https://graph/delta-token"
     assert batch.users[0].directory_object_id == "graph-1"
 
 
 def test_entra_provider_mocked_connection_diagnostics() -> None:
     responses = [_GraphResponse({"access_token": "token"}), _GraphResponse({"value": [{"id": "graph-1"}]})]
-    with patch("app.modules.directory.entra.settings.entra_tenant_id", "tenant"), patch("app.modules.directory.entra.settings.entra_client_id", "client"), patch("app.modules.directory.entra.settings.entra_client_secret", "secret"), patch("app.modules.directory.entra.urllib.request.urlopen", side_effect=responses):
-        result = EntraDirectoryProvider().test_connection()
+    with patch("app.modules.directory.entra.urllib.request.urlopen", side_effect=responses):
+        result = EntraDirectoryProvider({"tenant_id":"tenant","client_id":"client","graph_base_url":"https://graph.microsoft.com/v1.0","scope":"https://graph.microsoft.com/.default"}, "secret").test_connection()
     assert result["ok"] is True
     assert [step["code"] for step in result["steps"]] == ["tenant", "client", "secret", "token", "graph", "users"]
     assert all(step["ok"] for step in result["steps"])

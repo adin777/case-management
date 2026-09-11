@@ -130,9 +130,18 @@ class CaseSemanticFieldService:
             except ValueError: value_id = None
             indexed = getattr(item, COLUMN_NAMES[binding])
             valid = (self.db.get(User, value_id) if binding == "case.assignee" else self.option(binding, value_id)) if value_id else None
-            if scalar and not valid: conflicts.append(self._conflict(item,binding,raw,indexed,"invalid_global_option"))
-            elif value_id: setattr(item, COLUMN_NAMES[binding], value_id)
-            elif indexed: conflicts.append(self._conflict(item,binding,raw,indexed,"missing_global_value"))
+            indexed_valid = (
+                self.db.get(User, indexed) if binding == "case.assignee" else self.option(binding, indexed)
+            ) if indexed else None
+            if valid:
+                setattr(item, COLUMN_NAMES[binding], value_id)
+            elif indexed_valid and row:
+                row.value_json = str(indexed)
+            elif indexed_valid:
+                self.db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=field.id,
+                                                  value_json=str(indexed)))
+            elif scalar or indexed:
+                conflicts.append(self._conflict(item,binding,raw,indexed,"unresolvable_semantic_value"))
         return conflicts
 
     def _conflict(self,item:Case,binding:str,global_value:Any,optimized:uuid.UUID|None,
