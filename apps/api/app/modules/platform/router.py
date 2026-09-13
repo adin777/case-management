@@ -36,8 +36,8 @@ from app.modules.models import (
     User,
     UserPermissionAssignment,
 )
+from app.modules.notifications.service import NotificationService
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.models import Notification
 
 router = APIRouter(prefix="/api", tags=["configurable-platform"])
 FIELD_TYPES = {"short_text", "long_text", "number", "date", "datetime", "boolean",
@@ -482,10 +482,7 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
         from app.modules.sla.service import SlaEngine
         SlaEngine(db).approval_changed(case_item,False,user.id)
         case_item.approval_status = data.decision; case_item.is_approved = False
-        db.add(Notification(user_id=case_item.requester_id, notification_type=f"approval_{data.decision}",
-                            title_he="התקבלה החלטה בסבב האישורים",
-                            body_he=f"הקריאה {case_item.case_number} {('נדחתה' if data.decision == 'rejected' else 'הוחזרה לתיקון')}",
-                            entity_type="case", entity_id=str(case_item.id)))
+        NotificationService(db).notify_user(case_item.requester_id,f"approval_{data.decision}","התקבלה החלטה בסבב האישורים",f"הקריאה {case_item.case_number} {('נדחתה' if data.decision == 'rejected' else 'הוחזרה לתיקון')}",case_id=case_item.id,environment_id=case_item.environment_id,deduplication_key=f"approval_decision:{task.id}:{case_item.requester_id}")
     else:
         step = db.get(ApprovalStepDefinition, task.step_definition_id)
         if not step: raise HTTPException(409, "שלב האישור אינו זמין")
@@ -512,10 +509,7 @@ def decide(task_id: uuid.UUID, data: ApprovalDecisionIn, db: DB, user: Current) 
                 case_item.approval_status = "approved"; case_item.is_approved = True
                 case_item.approved_at = datetime.now(UTC)
                 case_item.approved_by_summary = f"{instance.system_number}: {approved} מאשרים"
-                db.add(Notification(user_id=case_item.requester_id, notification_type="approval_completed",
-                                    title_he="הקריאה אושרה",
-                                    body_he=f"סבב האישורים עבור {case_item.case_number} הושלם בהצלחה",
-                                    entity_type="case", entity_id=str(case_item.id)))
+                NotificationService(db).notify_user(case_item.requester_id,"approval_decided","הקריאה אושרה",f"סבב האישורים עבור {case_item.case_number} הושלם בהצלחה",case_id=case_item.id,environment_id=case_item.environment_id,deduplication_key=f"approval_completed:{instance.id}:{case_item.requester_id}")
     audit(db, user, "approval_instance", instance.id, data.decision); db.commit()
     return {"status": instance.status}
 

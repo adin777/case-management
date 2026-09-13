@@ -315,6 +315,8 @@ def test_unresolvable_legacy_semantic_conflict_and_null_status_do_not_block_tran
             CaseSemanticSyncConflict.case_id == case_id,
             CaseSemanticSyncConflict.semantic_binding == "case.status"))
         assert conflict and conflict.reason == "unresolvable_semantic_value"
+        history = db.scalar(select(CaseTransferHistory).where(CaseTransferHistory.case_id == case_id).order_by(CaseTransferHistory.transferred_at.desc()))
+        assert history and history.from_status_id is None and history.to_status_id is None
 
 
 def test_knowledge_upload_query_versioning_and_environment_isolation() -> None:

@@ -195,7 +195,8 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     supplied = {str(row.field_definition_id): row.value for row in payload.new_field_values}
     semantics.normalize_case_semantics(item)
     old_env, old_type = item.environment_id, item.request_type_id
-    old_status = semantics.value_id(item, "case.status")
+    status_value = semantics.value_id(item, "case.status")
+    old_status = status_value if status_value and semantics.option("case.status", status_value) else None
     old_sla = {
         "policy_id": str(item.sla_policy_id) if item.sla_policy_id else None,
         "response_due_at": item.response_due_at.isoformat() if item.response_due_at else None,

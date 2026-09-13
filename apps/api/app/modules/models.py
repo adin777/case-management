@@ -859,7 +859,7 @@ class CaseTransferHistory(Base):
     from_request_type_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("request_types.id"))
     to_request_type_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("request_types.id"))
     from_status_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    to_status_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    to_status_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     transferred_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     transferred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     removed_participants: Mapped[list] = mapped_column(JSON, default=list)

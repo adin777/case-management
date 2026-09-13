@@ -54,6 +54,7 @@ from app.modules.models import (
     User,
     Visibility,
 )
+from app.modules.notifications.service import NotificationService
 from app.modules.numbering.service import NumberingService
 from app.modules.operations.models import (
     CaseStatusHistory,
@@ -1601,7 +1602,10 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
             EnvironmentMembership.is_active.is_(True)))
         if not candidate or candidate.status != "active" or not candidate.is_active or not membership:
             raise HTTPException(422, "ניתן לשייך רק משתמש פעיל המשויך לסביבת הקריאה")
+    previous_assignee=item.assignee_id
     CaseSemanticFieldService(db).write(item,"case.assignee",data.assignee_id,actor=user,source="manual")
+    if data.assignee_id and data.assignee_id!=user.id and data.assignee_id!=previous_assignee:
+        NotificationService(db).notify_user(data.assignee_id,"case_assigned",f"הוקצתה לך קריאה {item.case_number.removeprefix('CASE-')}",item.title,case_id=item.id,environment_id=item.environment_id,deduplication_key=f"case_assignment:{item.id}:{data.assignee_id}:{item.version+1}")
     item.version += 1
     if item.status == CaseStatus.submitted:
         item.status = CaseStatus.assigned
@@ -1679,6 +1683,10 @@ def add_comment(case_id: uuid.UUID, data: CommentIn, db: DB, user: Current) -> C
     comment = Comment(case_id=item.id, author_id=user.id, **data.model_dump())
     db.add(comment)
     db.flush()
+    if data.visibility == Visibility.public:
+        recipients={value for value in (item.assignee_id,item.requester_id,item.reporter_id) if value}
+        recipients.update(db.scalars(select(CaseParticipant.user_id).where(CaseParticipant.case_id==item.id)))
+        NotificationService(db).notify_users(recipients,"case_comment",f"תגובה חדשה בקריאה {item.case_number.removeprefix('CASE-')}",data.body[:240],exclude=user.id,case_id=item.id,environment_id=item.environment_id,deduplication_key=f"case_comment:{comment.id}")
     if data.visibility == Visibility.public:
         SlaEngine(db).first_response(item)
     audit(db, user, "case", item.id, "commented", after={"visibility": data.visibility.value})

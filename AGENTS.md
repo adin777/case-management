@@ -102,6 +102,26 @@ local state must never be committed.
 - Legacy semantic inconsistencies must never block Case Transfer.
 - Transfer repairs canonical values where possible and records unresolved data-quality conflicts without preventing the business operation.
 
+## REPORT STATE RULE
+
+- Applied report state must be URL-addressable and restorable.
+- Returning from a drill-down must restore filters, sorting, pagination and executed state.
+- Users must never be forced to rebuild a report after viewing a result.
+
+## NULL-SAFE BUSINESS HISTORY RULE
+
+- History/audit schemas must represent every valid business state, including null semantic values.
+- A history table constraint must never make a valid business operation impossible.
+
+## NOTIFICATION RULE
+
+- Business services emit notification events through one shared NotificationService.
+- In-app persistence is independent of Email delivery success.
+- Notification delivery must be idempotent and deduplicated.
+- User preferences control channels, not whether the underlying business event occurs.
+- Email/notification failure must never roll back the business transaction.
+- Secrets are write-only, encrypted and never logged.
+
 A configurable field and its options have exactly one canonical source of truth. No consumer may
 maintain or query an independent catalog for the same business field. Dropdown options must come
 from the exact field definition being rendered; rendering a field while loading values from a

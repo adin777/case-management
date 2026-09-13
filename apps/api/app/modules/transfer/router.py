@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from app.modules.api import DB, Current, audit, case_access, require
 from app.modules.case_visibility.service import can_manage_locked_case
 from app.modules.models import Case, Environment, RequestType
+from app.modules.notifications.service import NotificationService
 from app.modules.transfer.service import build_preview, target_requirements, transfer
 
 router = APIRouter(prefix="/api")
@@ -71,6 +72,8 @@ def execute(case_id: uuid.UUID, data: TransferIn, db: DB, user: Current) -> dict
             {"environment_id": str(history.from_environment_id)},
             {"environment_id": str(history.to_environment_id), "transfer_id": str(history.id)},
         )
+        if item.assignee_id and item.assignee_id!=user.id:
+            NotificationService(db).notify_user(item.assignee_id,"case_transferred",f"קריאה {item.case_number.removeprefix('CASE-')} הועברה לסביבה שלך",item.title,case_id=item.id,environment_id=item.environment_id,deduplication_key=f"case_transfer:{history.id}:{item.assignee_id}")
         db.commit()
     except IntegrityError as exc:
         db.rollback()

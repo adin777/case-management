@@ -492,6 +492,22 @@ Workspace ודוח הקריאות מחזירים לצד התוויות גם `sta
 - `required_fields` ב־`GET /cases/{id}/transfer-requirements` ריק: חובת שדה סביבתי בזמן Create
   אינה חוסמת Transfer. `global_fields_preserved` מחזיר את מספר השדות הגלובליים שיישמרו.
 - מטפל קיים נשמר כאשר הוא פעיל ומשויך לסביבת היעד; אחרת הוא מוסר ונרשם ב־History.
+- `CaseTransferHistory.from_status_id` ו־`to_status_id` nullable במכוון. קריאה ללא Status היא
+  מצב עסקי חוקי להעברה; שני הערכים נשמרים כ־`null`, ללא Initial Status וללא תלות ב־Workflow.
+
+## Notifications
+
+`GET /api/notifications` מחזיר רק את התראות המשתמש המחובר, עם pagination, מונה unread
+ומסנני `unread_only`, ‏`notification_type`, `environment_id`, `date_from`, `date_to`.
+`PUT /api/notifications/{id}/read?is_read=` מסמן התראה של המשתמש בלבד, ו־`PUT
+/api/notifications/read-all` מסמן את כולן. `GET /api/notifications/preferences` ו־`PUT
+/api/notifications/preferences/{type}` מנהלים `in_app_enabled`, `email_enabled` ו־frequency
+מסוג `immediate|disabled`. כל יצירת התראה עוברת ב־`NotificationService`, משתמשת ב־stable
+type וב־deduplication key. Email נכתב ל־Outbox ונשלח מחוץ ל־transaction העסקית; כשל מתועד
+ב־Delivery Log ואינו מבטל Assignment, Comment, Approval, SLA, Transfer או Automation.
+
+מצב דוח שהורץ נשמר ב־URL: המסננים שהוחלו בלבד, `page`, `page_size`, `sort`, `direction`,
+עמודות ו־`run=1`. פתיחת קריאה שומרת את pathname+query ולכן חזרה טוענת מיד את אותו דוח.
 
 ## היררכיית קריאות ושינוי סטטוס מקובץ
 

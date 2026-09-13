@@ -18,6 +18,7 @@ from app.modules.global_case_values.router import router as global_case_values_r
 from app.modules.governance.router import router as governance_router
 from app.modules.knowledge.router import router as knowledge_router
 from app.modules.localization.router import router as localization_router
+from app.modules.notifications.router import router as notifications_router
 from app.modules.operations.router import router as operations_router
 from app.modules.permissions.router import router as permissions_router
 from app.modules.platform.router import router as platform_router
@@ -41,6 +42,7 @@ app.include_router(platform_router)
 app.include_router(permissions_router)
 app.include_router(access_router)
 app.include_router(system_fields_router)
+app.include_router(notifications_router)
 app.include_router(operations_router)
 app.include_router(attachments_router)
 app.include_router(case_relations_router)

@@ -189,6 +189,12 @@ class Notification(Base):
     body_he: Mapped[str] = mapped_column(Text)
     entity_type: Mapped[str] = mapped_column(String(80))
     entity_id: Mapped[str] = mapped_column(String(100))
+    case_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("environments.id"), index=True)
+    route: Mapped[str | None] = mapped_column(String(500))
+    source: Mapped[str] = mapped_column(String(50), default="business")
+    deduplication_key: Mapped[str | None] = mapped_column(String(300), unique=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -205,3 +211,24 @@ class NotificationOutbox(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    notification_type: Mapped[str] = mapped_column(String(80), primary_key=True)
+    in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    frequency: Mapped[str] = mapped_column(String(20), default="immediate")
+
+
+class NotificationDeliveryLog(Base):
+    __tablename__ = "notification_delivery_logs"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    notification_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("notifications.id", ondelete="CASCADE"), index=True)
+    channel: Mapped[str] = mapped_column(String(30))
+    recipient: Mapped[str] = mapped_column(String(320))
+    status: Mapped[str] = mapped_column(String(30))
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    error: Mapped[str | None] = mapped_column(Text)
+    provider_message_id: Mapped[str | None] = mapped_column(String(200))

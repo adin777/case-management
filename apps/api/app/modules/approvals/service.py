@@ -13,8 +13,8 @@ from app.modules.models import (
     RequestType,
     User,
 )
+from app.modules.notifications.service import NotificationService
 from app.modules.numbering.service import NumberingService
-from app.modules.operations.models import Notification
 from app.modules.sla.service import SlaEngine
 
 
@@ -106,11 +106,4 @@ def create_step_tasks(db: Session, instance: ApprovalInstance, step_order: int) 
                             approver_user_id=approver,
                             approver_name_snapshot=approver_user.display_name if approver_user else None,
                             status="pending"))
-        db.add(Notification(
-            user_id=approver,
-            notification_type="approval_requested",
-            title_he="ממתינה לך משימת אישור",
-            body_he=f"נדרש אישורך בשלב {step.name}",
-            entity_type="case",
-            entity_id=str(instance.case_id),
-        ))
+        NotificationService(db).notify_user(approver,"approval_requested","ממתינה לך משימת אישור",f"נדרש אישורך בשלב {step.name}",case_id=instance.case_id,deduplication_key=f"approval_requested:{instance.id}:{step.id}:{approver}")

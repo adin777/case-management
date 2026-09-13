@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from app.modules.api import DB, Current, audit, case_access, permissions, require
 from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import Case
+from app.modules.notifications.service import NotificationService
 from app.modules.operations.models import (
     CaseStatusHistory,
     Notification,
@@ -293,7 +294,7 @@ def run_transition(case_id: uuid.UUID, transition_id: uuid.UUID, data: Transitio
         item.sla_resolution_status = "met" if not item.resolution_due_at or item.resolved_at <= item.resolution_due_at else "breached"
     history = CaseStatusHistory(case_id=item.id, from_status_id=previous, to_status_id=target.id, transition_id=transition.id, changed_by=user.id, comment=data.comment, automation_summary=[])
     db.add(history)
-    db.add(Notification(user_id=item.requester_id, notification_type="status_changed", title_he="סטטוס הקריאה השתנה", body_he=f"הקריאה {item.case_number} עברה לסטטוס {target.label_he if target else ''}", entity_type="case", entity_id=str(item.id)))
+    NotificationService(db).notify_user(item.requester_id,"case_status_changed","סטטוס הקריאה השתנה",f"הקריאה {item.case_number} עברה לסטטוס {target.label_he if target else ''}",case_id=item.id,environment_id=item.environment_id,deduplication_key=f"status:{history.id}:{item.requester_id}")
     audit(db, user, "case", item.id, "status_changed", before={"workflow_status_id": str(previous)}, after={"workflow_status_id": str(item.workflow_status_id)})
     db.commit()
     return row(history)

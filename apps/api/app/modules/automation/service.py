@@ -14,6 +14,7 @@ from app.modules.models import (
     GlobalCaseFieldDefinition,
     GlobalCaseFieldValue,
 )
+from app.modules.notifications.service import NotificationService
 
 
 def is_field_empty(value: Any, field_type: str | None = None) -> bool:
@@ -107,6 +108,16 @@ class AutomationEngine:
     @staticmethod
     def _apply(db:Session,item:Case,action:dict[str,Any])->None:
         action_type, value = action.get("type"), action.get("value")
+        if action_type == "send_notification":
+            recipients=[]
+            for recipient in action.get("recipients",[]):
+                if recipient=="assignee" and item.assignee_id:recipients.append(item.assignee_id)
+                elif recipient=="requester":recipients.append(item.requester_id)
+                else:
+                    try:recipients.append(UUID(str(recipient)))
+                    except (TypeError,ValueError):continue
+            NotificationService(db).notify_users(recipients,"automation_notification",str(action.get("title") or "עדכון אוטומטי"),str(action.get("message") or ""),case_id=item.id,environment_id=item.environment_id,deduplication_key=f"automation:{item.id}:{action.get('id') or action.get('message')}:{item.version}")
+            return
         if action_type == "set_field":
             field_code = action.get("field_id") or action.get("field_code")
             value = action.get("value_id", action.get("value"))

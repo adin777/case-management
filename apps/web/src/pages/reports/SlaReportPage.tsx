@@ -2,6 +2,7 @@ import { Download } from '@mui/icons-material';
 import { Box, Button, Card, CardContent, Chip, Container, MenuItem, Pagination, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, apiDownload } from '../../api/client';
 import { ScreenHeader } from '../../components/ScreenHeader';
 import { displayCaseNumber } from '../cases/details/caseDisplay';
@@ -17,11 +18,11 @@ const queryString=(filters:Filters,page?:number)=>{const params=new URLSearchPar
 const minutes=(seconds:number)=>`${Math.round(seconds/60)} דק׳`;
 
 export function SlaReportPage(){
-  const[filters,setFilters]=useState(empty);const[page,setPage]=useState(1);const params=queryString(filters,page);const metricParams=queryString(filters);
+  const[search,setSearch]=useSearchParams();const restored={...empty,...Object.fromEntries(Object.keys(empty).map(key=>[key,search.get(key)||'']))} as Filters;const[filters,setFilters]=useState(restored);const[page,setPageState]=useState(Number(search.get('page')||1));const persist=(values:Filters,nextPage:number)=>{const next=new URLSearchParams(queryString(values,nextPage));next.set('run','1');setSearch(next)};const setPage=(value:number)=>{setPageState(value);persist(filters,value)};const params=queryString(filters,page);const metricParams=queryString(filters);
   const options=useQuery({queryKey:['sla-report-options'],queryFn:()=>api<Options>('/reports/sla/options')});
   const report=useQuery({queryKey:['sla-report',params],queryFn:()=>api<{items:Row[];total:number}>(`/reports/sla?${params}`)});
   const metrics=useQuery({queryKey:['sla-metrics',metricParams],queryFn:()=>api<Metrics>(`/reports/sla/metrics?${metricParams}`)});
-  const set=(key:keyof Filters,value:string)=>{setFilters(current=>({...current,[key]:value,...(key==='environment_id'?{request_type_id:'',policy_id:''}:{})}));setPage(1)};
+  const set=(key:keyof Filters,value:string)=>{const next={...filters,[key]:value,...(key==='environment_id'?{request_type_id:'',policy_id:''}:{})};setFilters(next);setPageState(1);persist(next,1)};
   const download=async()=>{const blob=await apiDownload(`/reports/sla/export?${metricParams}`);const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='sla-report.xlsx';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
   const scoped=(values:Option[])=>values.filter(item=>!filters.environment_id||!item.environment_id||item.environment_id===filters.environment_id);
   return <Container maxWidth="xl"><Stack spacing={2.5}>

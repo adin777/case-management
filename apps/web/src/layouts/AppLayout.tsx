@@ -1,7 +1,8 @@
 import { type ReactNode, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Add, Approval, Assessment, Dashboard, Logout, Menu, Notifications, PhoneIphone, SwitchAccount, Tune } from '@mui/icons-material';
+import { Add, Approval, Assessment, Dashboard, Logout, Menu, PhoneIphone, SwitchAccount, Tune } from '@mui/icons-material';
+import { NotificationBell as Notifications } from '../components/notifications/NotificationBell';
 import { Alert, AppBar, Avatar, Badge, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, TextField, Toolbar, Tooltip, Typography } from '@mui/material';
 import { api, token } from '../api/client';
 import type { User } from '../types';

@@ -1,8 +1,8 @@
 import { ArrowForward, PlayArrow } from '@mui/icons-material';
 import { Alert, Box, Button, Chip, CircularProgress, Container, MenuItem, Pagination, Paper, Stack, TextField, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../../api/client';
 import { ScreenHeader } from '../../../components/ScreenHeader';
 import type { CaseReportRow, Environment, RequestType, User } from '../../../types';
@@ -10,17 +10,20 @@ import { emptyFilters, type ReportFilters } from './reportFilters';
 import { CaseReportTable } from './CaseReportTable';
 import { CaseReportFilters } from './CaseReportFilters';
 import { ExportExcelButton } from './ExportExcelButton';
+import { readReportState, writeReportState } from '../reportUrlState';
 
 const visible: (keyof CaseReportRow)[] = ['case_number', 'title', 'environment', 'request_type', 'status', 'priority', 'requester', 'assignee', 'created_at', 'updated_at'];
 export function CaseReportPage() {
-  const [filters, setFilters] = useState<ReportFilters>({ ...emptyFilters }); const [applied, setApplied] = useState<ReportFilters | null>(null); const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(25);
+  const [search,setSearch]=useSearchParams();const restored=readReportState(search);const restoredFilters={...emptyFilters,...restored.filters} as ReportFilters;
+  const [filters, setFilters] = useState<ReportFilters>(restoredFilters); const [applied, setApplied] = useState<ReportFilters | null>(restored.run?restoredFilters:null); const [page, setPageState] = useState(restored.page); const [pageSize, setPageSizeState] = useState(restored.pageSize);
+  const sizeRef=useRef(pageSize);const persist=(value:ReportFilters,nextPage=page,nextSize=sizeRef.current)=>setSearch(writeReportState(value,nextPage,nextSize,value.sort,value.direction,visible));const setPage=(value:number)=>{setPageState(value);if(applied)persist(applied,value)};const setPageSize=(value:number)=>{sizeRef.current=value;setPageSizeState(value);setPageState(1);if(applied)persist(applied,1,value)};
   const { data: environments = [] } = useQuery({ queryKey: ['environments'], queryFn: () => api<Environment[]>('/environments') });
   const { data: types = [] } = useQuery({ queryKey: ['request-types', filters.environment_id], queryFn: () => api<RequestType[]>(`/request-types${filters.environment_id ? `?environment_id=${filters.environment_id}` : ''}`) });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users'), retry: false });
   const { data: sources = { statuses: [], priorities: [] } } = useQuery({ queryKey: ['report-value-sources', filters.environment_id], queryFn: () => api<{ statuses: { id: string; label_he: string; environment: string }[]; priorities: { id: string; label_he: string }[] }>(`/reports/cases/value-sources${filters.environment_id ? `?environment_id=${filters.environment_id}` : ''}`) });
   const query = new URLSearchParams([...(applied ? Object.entries(applied).filter(([, value]) => value) : []), ['page', String(page)], ['page_size', String(pageSize)]]);
   const report = useQuery({ queryKey: ['case-report', applied, page, pageSize], queryFn: () => api<{ items: CaseReportRow[]; total: number; page_size: number }>(`/reports/cases?${query}`), enabled: applied !== null });
-  const run = () => { setPage(1); setApplied({ ...filters }); }; const clear = () => { setFilters({ ...emptyFilters }); setApplied(null); setPage(1); };
+  const run = () => { const next={...filters};setPageState(1);setApplied(next);persist(next,1); }; const clear = () => { setFilters({ ...emptyFilters }); setApplied(null); setPageState(1);setSearch({}); };
   return <Box className="reports-page"><Container maxWidth="xl"><Stack spacing={2.5}>
     <Button component={Link} to="/reports" startIcon={<ArrowForward/>} sx={{ alignSelf: 'flex-start' }}>חזרה לכל הדוחות</Button>
     <ScreenHeader title="דוח קריאות שירות" subtitle="חיפוש, ניתוח וייצוא קריאות בהתאם להרשאות שלך" action={applied ? <ExportExcelButton filters={applied}/> : undefined}/>

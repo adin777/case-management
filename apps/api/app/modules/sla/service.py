@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.modules.case_semantics.service import CaseSemanticFieldService
 from app.modules.models import Case, EnvironmentMembership, GlobalCaseFieldValue
+from app.modules.notifications.service import NotificationService
 from app.modules.operations.models import (
     BusinessCalendar,
-    Notification,
     SlaEvent,
     SlaInstance,
     SlaPause,
@@ -379,16 +379,7 @@ class SlaEngine:
 
     def notify(self, item: Case, policy: SlaPolicy, event_type: str) -> None:
         for user_id in self.recipients(item, policy):
-            self.db.add(
-                Notification(
-                    user_id=user_id,
-                    notification_type=f"sla_{event_type}",
-                    title_he="עדכון SLA",
-                    body_he=f"קריאה {item.case_number}: {event_type}",
-                    entity_type="case",
-                    entity_id=str(item.id),
-                )
-            )
+            NotificationService(self.db).notify_user(user_id,f"sla_{event_type}","עדכון SLA",f"קריאה {item.case_number}: {event_type}",case_id=item.id,environment_id=item.environment_id,deduplication_key=f"sla_{event_type}:{item.id}:{policy.id}:{user_id}")
 
     def tick(self, now: datetime | None = None) -> dict[str, int]:
         now = aware(now or datetime.now(UTC))
