@@ -2,10 +2,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 
 from app.modules.api import DB, Current, audit, case_access, permissions, require
 from app.modules.case_semantics.service import CaseSemanticFieldService
@@ -13,7 +13,6 @@ from app.modules.models import Case
 from app.modules.notifications.service import NotificationService
 from app.modules.operations.models import (
     CaseStatusHistory,
-    Notification,
     SlaInstance,
     SlaPolicy,
     WorkflowDefinition,
@@ -351,31 +350,4 @@ def delete_sla(policy_id: uuid.UUID, db: DB, user: Current) -> None:
         item.is_active=False;audit(db,user,"sla_policy",item.id,"deactivated_used")
     else:
         audit(db,user,"sla_policy",item.id,"deleted",before=jsonable_encoder(row(item)));db.delete(item)
-    db.commit()
-
-
-@router.get("/notifications")
-def notifications(db: DB, user: Current, unread_only: bool = False, offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100)) -> dict[str, Any]:
-    query = select(Notification).where(Notification.user_id == user.id)
-    if unread_only:
-        query = query.where(Notification.is_read.is_(False))
-    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    items = db.scalars(query.order_by(Notification.created_at.desc()).offset(offset).limit(limit))
-    unread = db.scalar(select(func.count()).select_from(Notification).where(Notification.user_id == user.id, Notification.is_read.is_(False))) or 0
-    return {"items": [row(item) for item in items], "total": total, "unread": unread}
-
-
-@router.post("/notifications/{notification_id}/read")
-def read_notification(notification_id: uuid.UUID, db: DB, user: Current) -> dict[str, Any]:
-    item = db.get(Notification, notification_id)
-    if not item or item.user_id != user.id:
-        raise HTTPException(404, "Notification not found")
-    item.is_read, item.read_at = True, datetime.now(UTC)
-    db.commit()
-    return row(item)
-
-
-@router.post("/notifications/read-all", status_code=204)
-def read_all_notifications(db: DB, user: Current) -> None:
-    db.execute(update(Notification).where(Notification.user_id == user.id, Notification.is_read.is_(False)).values(is_read=True, read_at=datetime.now(UTC)))
     db.commit()

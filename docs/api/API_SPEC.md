@@ -506,6 +506,10 @@ Workspace ודוח הקריאות מחזירים לצד התוויות גם `sta
 type וב־deduplication key. Email נכתב ל־Outbox ונשלח מחוץ ל־transaction העסקית; כשל מתועד
 ב־Delivery Log ואינו מבטל Assignment, Comment, Approval, SLA, Transfer או Automation.
 
+`GET /api/notifications/settings/email` ו־`PUT /api/notifications/settings/email` זמינים
+למנהל מערכת בלבד. הסיסמה היא write-only: היא נשמרת מוצפנת ואינה מוחזרת מה־API; התגובה
+מחזירה רק `password_configured`. שליחת הגדרה ללא סיסמה חדשה משמרת את הסיסמה הקיימת.
+
 מצב דוח שהורץ נשמר ב־URL: המסננים שהוחלו בלבד, `page`, `page_size`, `sort`, `direction`,
 עמודות ו־`run=1`. פתיחת קריאה שומרת את pathname+query ולכן חזרה טוענת מיד את אותו דוח.
 
