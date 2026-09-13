@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ContentCopy, EditOutlined, Lock, LockOpen, MoreHoriz, SwapHoriz } from '@mui/icons-material';
+import { ArrowForward, ContentCopy, EditOutlined, Lock, LockOpen, MoreHoriz, SwapHoriz } from '@mui/icons-material';
 import { Button, Chip, Divider, IconButton, Menu, MenuItem, Paper, Stack, Typography } from '@mui/material';
 import type { Case } from '../../../types';
 import { displayCaseNumber, formatCaseDate } from './caseDisplay';
@@ -7,10 +7,11 @@ import { MobileActionBar } from '../../../components/responsive/ResponsivePrimit
 
 type HeaderCase = Case & { environment_name?: string };
 
-export function CaseDetailsHeader({ item, status, priority, onEdit, onLock, onTransfer }: { item: HeaderCase; status: string; priority?: string; onEdit: () => void; onLock: () => void; onTransfer: () => void }) {
+export function CaseDetailsHeader({ item, status, priority, backLabel, onBack, onEdit, onLock, onTransfer }: { item: HeaderCase; status: string; priority?: string; backLabel:string; onBack:()=>void; onEdit: () => void; onLock: () => void; onTransfer: () => void }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const number = displayCaseNumber(item.case_number);
   return <Paper className="case-details-hero" elevation={0}>
+    <Button size="small" startIcon={<ArrowForward/>} onClick={onBack} sx={{display:{xs:'inline-flex',md:'none'},mb:1}}>{backLabel}</Button>
     <Stack direction={{ xs: 'column', lg: 'row' }} justifyContent="space-between" gap={3}>
       <Stack spacing={1.5} minWidth={0}>
         <Stack direction="row" alignItems="center" gap={1.25} flexWrap="wrap">

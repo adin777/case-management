@@ -10,7 +10,7 @@ describe('case report experience', () => {
     expect(tableSource).toContain('displayCaseNumber');
     expect(tableSource).toContain('<BusinessPill');
     expect(tableSource).toContain('<CardActionArea');
-    expect(tableSource).toContain('navigate(`/cases/${row.id}`)');
+    expect(tableSource).toContain("openCase(navigate,location,id,'חזרה לדוח')");
   });
   it('keeps filters, export, sorting and pagination connected to backend state', () => {
     expect(pageSource).toContain("['page_size', String(pageSize)]");

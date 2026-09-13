@@ -1,8 +1,10 @@
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.api import DB, Current, audit, case_access, require
 from app.modules.case_visibility.service import can_manage_locked_case
@@ -10,6 +12,7 @@ from app.modules.models import Case, Environment, RequestType
 from app.modules.transfer.service import build_preview, target_requirements, transfer
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 
 class TransferValue(BaseModel):
@@ -69,6 +72,10 @@ def execute(case_id: uuid.UUID, data: TransferIn, db: DB, user: Current) -> dict
             {"environment_id": str(history.to_environment_id), "transfer_id": str(history.id)},
         )
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Case transfer integrity failure case=%s target_environment=%s",case_id,data.target_environment_id)
+        raise HTTPException(409,{"code":"TRANSFER_DATA_INTEGRITY_ERROR","message":"לא ניתן להשלים את ההעברה עקב מגבלת נתונים. פרטי התקלה נשמרו לבדיקה."}) from exc
     except Exception:
         db.rollback()
         raise

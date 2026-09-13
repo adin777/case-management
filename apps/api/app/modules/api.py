@@ -26,11 +26,13 @@ from app.modules.case_visibility.service import CaseVisibilityService, can_manag
 from app.modules.employees.service import sync_employee_for_user
 from app.modules.environment_clone.service import clone_configuration
 from app.modules.environment_manager.service import EnvironmentManagerService
+from app.modules.field_history.service import FieldHistoryService
 from app.modules.global_case_values.service import active_values, initial_status
 from app.modules.localization.service import LocalizationService
 from app.modules.models import (
     AuditEvent,
     Case,
+    CaseFieldChangeHistory,
     CaseFieldValue,
     CaseParticipant,
     CaseStatus,
@@ -47,6 +49,8 @@ from app.modules.models import (
     Group,
     RefreshToken,
     RequestType,
+    SystemFieldSetting,
+    SystemSetting,
     User,
     Visibility,
 )
@@ -191,6 +195,7 @@ class FieldIn(BaseModel):
     is_required: bool = False
     is_read_only: bool = False
     is_active: bool = True
+    track_history: bool = False
     sort_order: int = 0
     configuration_json: dict[str, Any] = Field(default_factory=dict)
 
@@ -212,6 +217,14 @@ class FormOut(BaseModel):
     status: FormStatus
     fields: list[FieldOut]
     model_config = {"from_attributes": True}
+
+
+class FieldHistorySettingsIn(BaseModel):
+    field_history_enabled: bool
+
+
+class CoreFieldHistoryIn(BaseModel):
+    track_history: bool
 
 
 class ValueIn(BaseModel):
@@ -1100,6 +1113,15 @@ def typed_value(case_id: uuid.UUID, field: FieldDefinition, value: Any) -> CaseF
     return row
 
 
+def case_field_raw_value(row: CaseFieldValue | None) -> Any:
+    if not row: return None
+    for key in ("value_text", "value_number", "value_boolean", "value_date",
+                "value_datetime", "value_user_id", "value_json"):
+        value = getattr(row, key)
+        if value is not None: return value
+    return None
+
+
 def visible_on_create(config: EnvironmentGlobalCaseField | None) -> bool:
     return config is None or (config.is_visible and config.show_on_create)
 
@@ -1455,19 +1477,22 @@ def update_global_field_values(
     if missing:
         raise HTTPException(422, {"missing_required_fields": missing})
     semantics=CaseSemanticFieldService(db)
+    history = FieldHistoryService(db)
     for field_id, value in values.items():
         binding=fields[field_id].semantic_binding
         if binding:
             eligible = {str(candidate["id"]) for candidate in eligible_assignee_rows(db,item.environment_id)}
             if binding == "case.assignee" and value and str(value) not in eligible:
                 raise HTTPException(422,"המטפל שנבחר אינו פעיל או אינו משויך לסביבה")
-            semantics.write(item,binding,value)
+            semantics.write(item,binding,value,actor=user,source="manual")
         else:
             row = db.get(GlobalCaseFieldValue, (case_id, field_id))
+            old_value = row.value_json if row else None
             if row:
                 row.value_json = value
             else:
                 db.add(GlobalCaseFieldValue(case_id=case_id,global_field_id=field_id,value_json=value))
+            history.global_field(item, fields[field_id], old_value, value, user, "manual")
     audit(db, user, "case", item.id, "global_fields_updated", after={str(key): value for key, value in values.items()})
     db.commit()
     return global_field_values(case_id, db, user)
@@ -1497,14 +1522,20 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
         if current_type and target_type.requires_approval != current_type.requires_approval:
             raise HTTPException(409, "לא ניתן לשנות לסוג קריאה עם מדיניות אישורים שונה")
     semantics=CaseSemanticFieldService(db)
+    history = FieldHistoryService(db)
     if data.priority_id:
         semantics.validate_value("case.priority",data.priority_id)
     if data.sub_priority_id:
         semantics.validate_value("case.sub_priority",data.sub_priority_id)
     for key, value in changes.items():
         binding={"priority_id":"case.priority","sub_priority_id":"case.sub_priority"}.get(key)
-        if binding: semantics.write(item,binding,value)
-        else: setattr(item,key,value)
+        if binding: semantics.write(item,binding,value,actor=user,source="manual")
+        else:
+            old_value = getattr(item, key)
+            setattr(item,key,value)
+            history.core(item, "request_type" if key == "request_type_id" else key,
+                         {"title":"נושא", "description":"תיאור", "request_type_id":"סוג קריאה"}.get(key,key),
+                         old_value, value, user, "manual")
     if data.values is not None:
         fields = {field.id: field for field in db.scalars(select(FieldDefinition).where(
             FieldDefinition.form_definition_id == item.form_definition_id))}
@@ -1514,11 +1545,16 @@ def update_case(case_id: uuid.UUID, data: CasePatch, db: DB, user: Current) -> C
                 raise HTTPException(422, "השדה הדינמי אינו שייך לטופס הקריאה")
             if not field.is_active or field.is_read_only:
                 raise HTTPException(422, "השדה הדינמי אינו זמין לעריכה")
+            existing = db.scalar(select(CaseFieldValue).where(
+                CaseFieldValue.case_id == item.id,
+                CaseFieldValue.field_definition_id == supplied.field_definition_id))
+            old_value = case_field_raw_value(existing)
             db.execute(delete(CaseFieldValue).where(
                 CaseFieldValue.case_id == item.id,
                 CaseFieldValue.field_definition_id == supplied.field_definition_id,
             ))
             db.add(typed_value(item.id, field, supplied.value))
+            history.environment_field(item, field, old_value, supplied.value, user, "manual")
     item.version += 1
     audit(db, user, "case", item.id, "updated")
     db.commit()
@@ -1565,7 +1601,7 @@ def assign_case(case_id: uuid.UUID, data: AssignIn, db: DB, user: Current) -> Ca
             EnvironmentMembership.is_active.is_(True)))
         if not candidate or candidate.status != "active" or not candidate.is_active or not membership:
             raise HTTPException(422, "ניתן לשייך רק משתמש פעיל המשויך לסביבת הקריאה")
-    CaseSemanticFieldService(db).write(item,"case.assignee",data.assignee_id)
+    CaseSemanticFieldService(db).write(item,"case.assignee",data.assignee_id,actor=user,source="manual")
     item.version += 1
     if item.status == CaseStatus.submitted:
         item.status = CaseStatus.assigned
@@ -1745,7 +1781,7 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     if not target or not target.is_active:
         raise HTTPException(409, "סטטוס היעד הגלובלי אינו פעיל")
     before = item.workflow_status_id
-    semantics.write(item,"case.status",target.id)
+    semantics.write(item,"case.status",target.id,actor=user,source="manual")
     SlaEngine(db).status_changed(item,target.semantic_category,user.id)
     item.version += 1
     if target.semantic_category == "closed" or target.is_final:
@@ -1764,6 +1800,57 @@ def transition(case_id: uuid.UUID, data: TransitionIn, db: DB, user: Current) ->
     )
     db.commit()
     return item
+
+
+@router.get("/system/field-history-settings")
+def field_history_settings(db: DB, user: Current) -> dict[str, Any]:
+    if not user.is_system_admin: raise HTTPException(403, "System administrator required")
+    master = db.get(SystemSetting, "field_history_enabled")
+    core = list(db.scalars(select(SystemFieldSetting).order_by(SystemFieldSetting.field_key)))
+    return {"field_history_enabled": True if master is None else bool(master.value_json),
+            "core_fields": [{"field_key": row.field_key, "track_history": row.track_history} for row in core]}
+
+
+@router.put("/system/field-history-settings")
+def update_field_history_settings(data: FieldHistorySettingsIn, db: DB, user: Current) -> dict[str, Any]:
+    if not user.is_system_admin: raise HTTPException(403, "System administrator required")
+    row = db.get(SystemSetting, "field_history_enabled")
+    if row: row.value_json = data.field_history_enabled
+    else: db.add(SystemSetting(key="field_history_enabled", value_json=data.field_history_enabled))
+    audit(db, user, "system_setting", uuid.uuid5(uuid.NAMESPACE_URL, "system:field_history_enabled"), "updated",
+          after={"enabled": data.field_history_enabled}); db.commit()
+    return field_history_settings(db, user)
+
+
+@router.put("/system/core-field-history/{field_key}")
+def update_core_field_history(field_key: str, data: CoreFieldHistoryIn, db: DB, user: Current) -> dict[str, Any]:
+    if not user.is_system_admin: raise HTTPException(403, "System administrator required")
+    allowed = {"title", "description", "request_type", "environment", "assignee", "lock_state"}
+    if field_key not in allowed: raise HTTPException(422, "שדה מערכת אינו נתמך")
+    row = db.get(SystemFieldSetting, field_key)
+    if row: row.track_history = data.track_history
+    else: db.add(SystemFieldSetting(field_key=field_key, track_history=data.track_history))
+    db.commit(); return {"field_key": field_key, "track_history": data.track_history}
+
+
+@router.get("/cases/{case_id}/history")
+def case_field_history(case_id: uuid.UUID, db: DB, user: Current, page: int = Query(1, ge=1),
+                       page_size: int = Query(25, ge=1, le=100),
+                       kind: str = Query("all", pattern="^(all|fields|system)$")) -> dict[str, Any]:
+    item = db.get(Case, case_id)
+    if not item: raise HTTPException(404, "Case not found")
+    case_access(db, user, item)
+    query = select(CaseFieldChangeHistory).where(CaseFieldChangeHistory.case_id == case_id)
+    if kind == "system": query = query.where(CaseFieldChangeHistory.field_scope == "core")
+    elif kind == "fields": query = query.where(CaseFieldChangeHistory.field_scope != "core")
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.scalars(query.order_by(CaseFieldChangeHistory.changed_at.desc()).offset((page-1)*page_size).limit(page_size))
+    return {"items": [jsonable_history(row) for row in rows], "total": total,
+            "page": page, "page_size": page_size}
+
+
+def jsonable_history(row: CaseFieldChangeHistory) -> dict[str, Any]:
+    return {column.name: getattr(row, column.name) for column in row.__table__.columns}
 
 
 @router.get("/audit")

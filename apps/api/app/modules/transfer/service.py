@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.modules.approvals.service import start_matching_approvals
 from app.modules.automation.service import AutomationEngine
 from app.modules.case_semantics.service import CaseSemanticFieldService
+from app.modules.field_history.service import FieldHistoryService
 from app.modules.models import (
     ApprovalInstance,
     ApprovalTask,
@@ -192,14 +193,7 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
     if payload.assignee_id and not _member(db, payload.target_environment_id, payload.assignee_id):
         raise HTTPException(422, "המטפל אינו פעיל או משויך לסביבת היעד")
     supplied = {str(row.field_definition_id): row.value for row in payload.new_field_values}
-    conflicts = semantics.sync_case(item)
-    if conflicts:
-        conflict = conflicts[0]
-        raise HTTPException(409, {"code":"UNRESOLVABLE_SEMANTIC_CONFLICT",
-            "binding":conflict.semantic_binding,
-            "current_canonical_option":conflict.global_value_json,
-            "conflicting_legacy_value":str(conflict.optimized_value_id) if conflict.optimized_value_id else None,
-            "remediation":"יש לבחור ערך גלובלי פעיל בשדה הסמנטי לפני ההעברה"})
+    semantics.normalize_case_semantics(item)
     old_env, old_type = item.environment_id, item.request_type_id
     old_status = semantics.value_id(item, "case.status")
     old_sla = {
@@ -265,13 +259,16 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
             )
         )
         db.add(typed_value(item.id, field, value))
+    field_history = FieldHistoryService(db)
+    field_history.core(item,"environment","סביבה",old_env,payload.target_environment_id,actor,"transfer")
+    field_history.core(item,"request_type","סוג קריאה",old_type,target_type.id,actor,"transfer")
     item.environment_id = payload.target_environment_id
     item.request_type_id = target_type.id
     item.form_definition_id = target_type.form_version_id
     effective_assignee = payload.assignee_id
     if effective_assignee is None and _member(db, payload.target_environment_id, item.assignee_id):
         effective_assignee = item.assignee_id
-    semantics.write(item,"case.assignee",effective_assignee)
+    semantics.write(item,"case.assignee",effective_assignee,actor=actor,source="transfer")
     preserved_semantics = {
         binding: semantics.value_id(item, binding)
         for binding in ("case.status", "case.priority", "case.sub_priority", "case.assignee")
@@ -297,7 +294,10 @@ def transfer(db: Session, item: Case, actor: User, payload: Any) -> CaseTransfer
         },
     )
     for binding, value_id in preserved_semantics.items():
-        semantics.write(item, binding, value_id, require_active=False)
+        valid_value = (db.get(User, value_id) if binding == "case.assignee"
+                       else semantics.option(binding, value_id)) if value_id else None
+        if valid_value:
+            semantics.write(item, binding, value_id, require_active=False, actor=actor, source="transfer")
     SlaEngine(db).start(item,supersede=True)
     history = CaseTransferHistory(
         case_id=item.id,

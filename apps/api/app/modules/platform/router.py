@@ -65,6 +65,7 @@ class CaseFieldIn(BaseModel):
     field_type: str
     is_required: bool = False
     is_active: bool = True
+    track_history: bool = False
     options_json: list[OptionIn] = Field(default_factory=list)
     default_value_json: Any = None
     validation_json: dict[str, Any] = Field(default_factory=dict)

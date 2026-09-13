@@ -116,20 +116,20 @@ class AutomationEngine:
                 target_id = None
             target = db.get(GlobalCaseFieldDefinition, target_id) if target_id else None
             if target and target.semantic_binding:
-                CaseSemanticFieldService(db).write(item, target.semantic_binding, UUID(str(value)))
+                CaseSemanticFieldService(db).write(item, target.semantic_binding, UUID(str(value)),source="automation")
                 return
             binding={"status":"case.status","priority":"case.priority",
                      "sub_priority":"case.sub_priority","assignee":"case.assignee"}.get(
                          field_code if isinstance(field_code, str) else ""
                      )
             if binding:
-                CaseSemanticFieldService(db).write(item, binding, UUID(str(value)))
+                CaseSemanticFieldService(db).write(item, binding, UUID(str(value)),source="automation")
             elif field_code == "assignee_group": item.assigned_group_id = UUID(value)
             else: raise ValueError(f"Unsupported automation target field: {field_code}")
             return
-        if action_type == "assign_user": CaseSemanticFieldService(db).write(item,"case.assignee",UUID(value))
+        if action_type == "assign_user": CaseSemanticFieldService(db).write(item,"case.assignee",UUID(value),source="automation")
         elif action_type == "assign_group": item.assigned_group_id = UUID(value)
-        elif action_type == "set_status": CaseSemanticFieldService(db).write(item,"case.status",UUID(value))
-        elif action_type == "set_priority": CaseSemanticFieldService(db).write(item,"case.priority",UUID(value))
-        elif action_type == "set_sub_priority": CaseSemanticFieldService(db).write(item,"case.sub_priority",UUID(value))
+        elif action_type == "set_status": CaseSemanticFieldService(db).write(item,"case.status",UUID(value),source="automation")
+        elif action_type == "set_priority": CaseSemanticFieldService(db).write(item,"case.priority",UUID(value),source="automation")
+        elif action_type == "set_sub_priority": CaseSemanticFieldService(db).write(item,"case.sub_priority",UUID(value),source="automation")
         else: raise ValueError(f"Unsupported automation action: {action_type}")

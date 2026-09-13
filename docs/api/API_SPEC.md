@@ -29,6 +29,9 @@
 | קיים | POST | `/api/workspace/bulk/preview` |
 | קיים | POST | `/api/workspace/bulk/apply` |
 | קיים | GET | `/api/cases/{case_id}/timeline` |
+| קיים | GET | `/api/cases/{case_id}/history` |
+| קיים | GET/PUT | `/api/system/field-history-settings` |
+| קיים | PUT | `/api/system/core-field-history/{field_key}` |
 | קיים | GET | `/api/environments/{environment_id}/business-calendars` |
 | קיים | POST | `/api/environments/{environment_id}/business-calendars` |
 | קיים | PUT | `/api/business-calendars/{calendar_id}` |
@@ -424,6 +427,19 @@ Definitions דינמיים. סוגי השדות הם `text`, `textarea`, `number
 משתמשים תומך במסננים נפרדים `name`, `email`, `username`, וב־`search` התואם לאחור,
 וכן במצב, מקור, מחלקה, תפקיד, `group_ids` וסביבה. דוח Audit
 תומך במשתמש, משתמש אפקטיבי בהתחזות, פעולה, ישות, Entity ID, סביבה, תאריכים וחיפוש.
+שינויי שדות נשלפים דרך אותו דוח עם `event_type=field_change`, וניתן לסנן אותם גם לפי
+`field_key` ומספר קריאה (`case_number`). התוצאה כוללת snapshots בלתי־משתנים של התווית,
+הערך הקודם והערך החדש וכן את מקור השינוי.
+
+### היסטוריית שדות
+
+`GET /api/cases/{case_id}/history` מחזיר היסטוריה מסוננת ומדופדפת (`page`, `page_size`,
+`kind=all|fields|system`) ורק למשתמש שמורשה לצפות בקריאה. `GET/PUT
+/api/system/field-history-settings` מנהלים את מתג המערכת הראשי, ו־`PUT
+/api/system/core-field-history/{field_key}` מנהל מעקב בשדות הליבה הנתמכים. שדות גלובליים
+ושדות סביבה מקבלים `track_history` בחוזי היצירה והעריכה; ברירת המחדל היא `false`, בעוד
+מתג המערכת הראשי נוצר כ־`true`. רשומה נוצרת רק כאשר שני המתגים פעילים והערך המנורמל השתנה.
+היא שומרת raw stable values, display snapshots, משתמש אמיתי ואפקטיבי, מקור ומועד.
 
 ### Semantic global fields and import snapshots
 

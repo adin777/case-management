@@ -11,6 +11,7 @@ from app.modules.models import (
     Case,
     CaseFieldValue,
     CaseParticipant,
+    CaseSemanticSyncConflict,
     CaseTransferHistory,
     Environment,
     EnvironmentMembership,
@@ -288,6 +289,32 @@ def test_transfer_preserves_an_eligible_assignee_without_workflow() -> None:
     with SessionLocal() as db:
         case = db.get(Case, case_id)
         assert case and case.assignee_id == expected_assignee
+
+
+def test_unresolvable_legacy_semantic_conflict_and_null_status_do_not_block_transfer() -> None:
+    auth = headers()
+    case_id, target_id, request_type_id, *_ = transfer_fixture()
+    invalid = uuid.uuid4()
+    with SessionLocal() as db:
+        case = db.get(Case, case_id); assert case
+        status_field = db.scalar(select(GlobalCaseFieldDefinition).where(
+            GlobalCaseFieldDefinition.semantic_binding == "case.status")); assert status_field
+        status_value = db.get(GlobalCaseFieldValue, (case_id, status_field.id)); assert status_value
+        status_value.value_json = str(invalid)
+        case.workflow_status_id = uuid.uuid4()
+        db.commit()
+    moved = client.post(f"/api/cases/{case_id}/transfer", headers=auth, json={
+        "target_environment_id": str(target_id), "target_request_type_id": str(request_type_id),
+        "new_field_values": [],
+    })
+    assert moved.status_code == 200
+    with SessionLocal() as db:
+        case = db.get(Case, case_id); assert case
+        assert case.environment_id == target_id and case.workflow_status_id is None
+        conflict = db.scalar(select(CaseSemanticSyncConflict).where(
+            CaseSemanticSyncConflict.case_id == case_id,
+            CaseSemanticSyncConflict.semantic_binding == "case.status"))
+        assert conflict and conflict.reason == "unresolvable_semantic_value"
 
 
 def test_knowledge_upload_query_versioning_and_environment_isolation() -> None:

@@ -13,6 +13,7 @@ from app.modules.models import (
     ApprovalTask,
     AuditEvent,
     Case,
+    CaseFieldChangeHistory,
     Environment,
     EnvironmentMembership,
     Group,
@@ -293,8 +294,25 @@ def audit_report(
     direction: str = "desc",
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
+    event_type: str | None = None,
+    field_key: str | None = None,
+    case_number: str | None = None,
 ) -> dict[str, Any]:
     guard(db, user, "report.audit", environment_id)
+    if event_type == "field_change" or field_key or case_number:
+        history = select(CaseFieldChangeHistory, Case.case_number).join(Case, Case.id == CaseFieldChangeHistory.case_id)
+        if environment_id: history = history.where(CaseFieldChangeHistory.environment_id == environment_id)
+        if user_id: history = history.where(CaseFieldChangeHistory.changed_by == user_id)
+        if effective_user_id: history = history.where(CaseFieldChangeHistory.effective_user_id == effective_user_id)
+        if field_key: history = history.where(CaseFieldChangeHistory.field_key == field_key)
+        if case_number: history = history.where(Case.case_number.ilike(f"%{case_number}%"))
+        if date_from: history = history.where(CaseFieldChangeHistory.changed_at >= date_from)
+        if date_to: history = history.where(CaseFieldChangeHistory.changed_at <= date_to)
+        if search: history = history.where(or_(CaseFieldChangeHistory.field_label_snapshot.ilike(f"%{search}%"),CaseFieldChangeHistory.old_display_value.ilike(f"%{search}%"),CaseFieldChangeHistory.new_display_value.ilike(f"%{search}%")))
+        total = db.scalar(select(func.count()).select_from(history.subquery())) or 0
+        order = CaseFieldChangeHistory.changed_at.asc() if direction == "asc" else CaseFieldChangeHistory.changed_at.desc()
+        history_rows = db.execute(history.order_by(order).offset((page-1)*page_size).limit(page_size)).all()
+        return {"items":[{"user":row.changed_by_name_snapshot,"action":"field_change","entity":"case_field","entity_id":str(row.case_id),"case_number":number,"environment_id":str(row.environment_id),"field":row.field_label_snapshot,"old_value":row.old_display_value,"new_value":row.new_display_value,"source":row.source,"created_at":row.changed_at} for row,number in history_rows],"total":total,"page":page,"page_size":page_size}
     query = select(AuditEvent)
     if user_id:
         query = query.where(AuditEvent.actor_id == user_id)

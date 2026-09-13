@@ -87,6 +87,21 @@ local state must never be committed.
 - Before commit run `git diff --check` and the canonical regression command.
 - Completion requires a clean tree and `HEAD == origin/main` after push.
 
+## FIELD HISTORY RULE
+
+- Field history is controlled by a system-wide master switch and a per-field tracking setting.
+- A field change is recorded only when both are enabled and the normalized value actually changes.
+- Field history stores stable raw values and immutable display snapshots.
+- All field mutation consumers use one shared FieldHistoryService.
+- Bulk, automation, transfer and impersonation changes follow the same history rules.
+- Disabling field history stops future field-change records only; it never changes normal business behavior.
+- Audit reporting and case history must use server-side filtering and pagination.
+
+## TRANSFER NON-BLOCKING LEGACY RULE
+
+- Legacy semantic inconsistencies must never block Case Transfer.
+- Transfer repairs canonical values where possible and records unresolved data-quality conflicts without preventing the business operation.
+
 A configurable field and its options have exactly one canonical source of truth. No consumer may
 maintain or query an independent catalog for the same business field. Dropdown options must come
 from the exact field definition being rendered; rendering a field while loading values from a

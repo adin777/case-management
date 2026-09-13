@@ -93,10 +93,12 @@ class CaseSemanticFieldService:
                  "metadata":row.metadata_json or {}} for row in rows]
 
     def write(self, item: Case, binding: str, value: uuid.UUID | str | None,
-              *, require_active: bool = True) -> None:
+              *, require_active: bool = True, actor: User | None = None,
+              source: str = "api") -> None:
         parsed = uuid.UUID(str(value)) if value not in (None, "") else None
         self.validate_value(binding, parsed, require_active=require_active)
         field = self.definition(binding)
+        old = self.value_id(item, binding)
         if field:
             row = self.db.get(GlobalCaseFieldValue, (item.id, field.id))
             if parsed is None:
@@ -108,6 +110,23 @@ class CaseSemanticFieldService:
                 self.db.add(GlobalCaseFieldValue(case_id=item.id, global_field_id=field.id,
                     value_json=str(parsed)))
         setattr(item, COLUMN_NAMES[binding], parsed)
+        if field:
+            from app.modules.field_history.service import FieldHistoryService
+            FieldHistoryService(self.db).semantic(item, field, old, parsed, actor, source)
+
+    def normalize_case_semantics(self, item: Case) -> list[CaseSemanticSyncConflict]:
+        """Repair usable indexes and record unusable legacy data without blocking business work."""
+        conflicts = self.sync_case(item)
+        for conflict in conflicts:
+            field = self.definition(conflict.semantic_binding)
+            row = self.db.get(GlobalCaseFieldValue, (item.id, field.id)) if field else None
+            scalar = self.scalar_value(row.value_json) if row else None
+            try: canonical_id = uuid.UUID(str(scalar)) if scalar not in (None, "") else None
+            except (ValueError, TypeError): canonical_id = None
+            valid = (self.db.get(User, canonical_id) if conflict.semantic_binding == "case.assignee"
+                     else self.option(conflict.semantic_binding, canonical_id)) if canonical_id else None
+            setattr(item, COLUMN_NAMES[conflict.semantic_binding], canonical_id if valid else None)
+        return conflicts
 
     def label(self, item: Case, binding: str, *, language: str = "he") -> str:
         value_id = self.value_id(item, binding)

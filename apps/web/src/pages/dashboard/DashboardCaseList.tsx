@@ -2,14 +2,15 @@ import { MoreHoriz, OpenInNew, Visibility } from '@mui/icons-material';
 import { Card, CardContent, Checkbox, IconButton, Menu, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { BusinessPill } from '../../components/BusinessPill';
 import { displayCaseNumber } from '../cases/details/caseDisplay';
 import type { WorkspaceCase } from './types';
+import { openCase } from '../../navigation/caseNavigation';
 
 const sortable=new Set(['case_number','title','created_at','updated_at']);
 export function DashboardCaseList({items,sort,onSort,visibleColumns,selectedIds=[],onToggle,onPreview}:{items:WorkspaceCase[];sort:string;onSort:(key:string)=>void;visibleColumns?:string[];selectedIds?:string[];onToggle?:(id:string)=>void;onPreview?:(id:string)=>void}){
-  const {t,i18n}=useTranslation();const locale=i18n.language==='en'?'en-US':'he-IL';const navigate=useNavigate();const[menu,setMenu]=useState<{anchor:HTMLElement;id:string}>();
+  const {t,i18n}=useTranslation();const locale=i18n.language==='en'?'en-US':'he-IL';const rawNavigate=useNavigate();const location=useLocation();const navigate=(path:string)=>openCase(rawNavigate,location,path.replace('/cases/',''),'חזרה למרכז העבודה');const[menu,setMenu]=useState<{anchor:HTMLElement;id:string}>();
   if(!items.length)return <Paper className="empty-state" variant="outlined"><Typography variant="h6">{t('dashboard.empty')}</Typography><Typography color="text.secondary">{t('dashboard.emptyHelp')}</Typography></Paper>;
   const all=[['case_number',t('dashboard.caseNumber')],['title',t('cases.subject')],['environment',t('cases.environment')],['request_type',t('cases.requestType')],['status',t('dashboard.status')],['priority',t('dashboard.priority')],['sla_state','SLA'],['sla_due_at','יעד SLA'],['created_at',t('dashboard.created')],['updated_at',t('dashboard.updated')]];
   const columns=all.filter(([key])=>!visibleColumns||visibleColumns.includes(key));

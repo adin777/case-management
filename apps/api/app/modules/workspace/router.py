@@ -152,9 +152,9 @@ def apply_bulk(data: BulkApplyIn, db: DB, user: Current) -> dict[str, Any]:
             results.append({**snapshot,"result":"failed","reason":current.get("reason") or "הקריאה השתנתה מאז התצוגה"});continue
         binding={"assign":"case.assignee","status":"case.status","priority":"case.priority"}.get(preview.action)
         before=semantics.value_id(item,binding) if binding else None
-        if preview.action in {"assign","priority"}: semantics.write(item,f"case.{preview.action if preview.action!='assign' else 'assignee'}",target_id)
+        if preview.action in {"assign","priority"}: semantics.write(item,f"case.{preview.action if preview.action!='assign' else 'assignee'}",target_id,actor=user,source="bulk")
         elif preview.action=="status":
-            semantics.write(item,"case.status",target_id);target=semantics.option("case.status",target_id);SlaEngine(db).status_changed(item,target.semantic_category if target else "open",user.id);db.add(CaseStatusHistory(case_id=item.id,from_status_id=before,to_status_id=target_id,transition_id=None,changed_by=user.id,comment="bulk workspace action"))
+            semantics.write(item,"case.status",target_id,actor=user,source="bulk");target=semantics.option("case.status",target_id);SlaEngine(db).status_changed(item,target.semantic_category if target else "open",user.id);db.add(CaseStatusHistory(case_id=item.id,from_status_id=before,to_status_id=target_id,transition_id=None,changed_by=user.id,comment="bulk workspace action"))
         else:
             existing=db.get(CaseParticipant,(item.id,target_id,"participant"))
             if not existing: db.add(CaseParticipant(case_id=item.id,user_id=target_id,participant_type="participant",added_by=user.id))

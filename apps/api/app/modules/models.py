@@ -264,6 +264,7 @@ class FieldDefinition(Base):
     is_required: Mapped[bool] = mapped_column(Boolean, default=False)
     is_read_only: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    track_history: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer)
     configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("form_definition_id", "key"),)
@@ -552,6 +553,7 @@ class CaseFieldDefinition(TimestampMixin, Base):
     field_type: Mapped[str] = mapped_column(String(40))
     is_required: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    track_history: Mapped[bool] = mapped_column(Boolean, default=False)
     options_json: Mapped[list] = mapped_column(JSON, default=list)
     default_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
     validation_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -569,6 +571,7 @@ class GlobalCaseFieldDefinition(TimestampMixin, Base):
     field_type: Mapped[str] = mapped_column(String(40))
     is_required: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    track_history: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     configuration_json: Mapped[dict] = mapped_column(JSON, default=dict)
     semantic_binding: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
@@ -636,6 +639,40 @@ class CaseSemanticSyncConflict(TimestampMixin, Base):
     optimized_value_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     reason: Mapped[str] = mapped_column(String(120))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+
+
+class SystemFieldSetting(Base):
+    __tablename__ = "system_field_settings"
+    field_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    track_history: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class CaseFieldChangeHistory(Base):
+    __tablename__ = "case_field_change_history"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    environment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("environments.id"), index=True)
+    field_scope: Mapped[str] = mapped_column(String(30))
+    field_definition_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    semantic_binding: Mapped[str | None] = mapped_column(String(80))
+    field_key: Mapped[str] = mapped_column(String(100))
+    field_label_snapshot: Mapped[str] = mapped_column(String(200))
+    old_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+    new_value_json: Mapped[dict | list | str | int | bool | None] = mapped_column(JSON)
+    old_display_value: Mapped[str | None] = mapped_column(Text)
+    new_display_value: Mapped[str | None] = mapped_column(Text)
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    changed_by_name_snapshot: Mapped[str | None] = mapped_column(String(200))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source: Mapped[str] = mapped_column(String(30))
+    real_actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    effective_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
 
 
 class UserImportSession(TimestampMixin, Base):

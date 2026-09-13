@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DescriptionOutlined, InfoOutlined } from '@mui/icons-material';
 import { Alert, Box, Card, CardContent, CircularProgress, Container, Grid, MenuItem, Stack, TextField, Typography } from '@mui/material';
@@ -16,11 +16,13 @@ import { CaseDetailsHeader } from './details/CaseDetailsHeader';
 import { CaseSection } from './details/CaseSection';
 import { GlobalFieldsPanel } from './details/GlobalFieldsPanel';
 import { ParticipantsPanel } from './details/ParticipantsPanel';
+import { CaseHistoryPanel } from './details/CaseHistoryPanel';
 
 type CaseWithEnvironment = Case & { environment_name?: string };
 type CaseFields = { global_fields: Field[]; environment_fields: Field[] };
 
 export function CaseDetailsPage() {
+  const navigate=useNavigate(); const location=useLocation();
   const { id } = useParams(); const qc = useQueryClient(); const detailsRef = useRef<HTMLDivElement>(null);
   const [participantId, setParticipantId] = useState(''); const [error, setError] = useState(''); const [success, setSuccess] = useState('');
   const [lockOpen, setLockOpen] = useState(false); const [transferOpen, setTransferOpen] = useState(false); const [savingFields, setSavingFields] = useState(false);
@@ -38,6 +40,7 @@ export function CaseDetailsPage() {
   const candidates = useMemo(() => users.filter((user) => user.is_active !== false && !participants.some((row) => row.user_id === user.id)), [users, participants]);
   const refresh = () => qc.invalidateQueries({ queryKey: ['case', id] });
   const editable = Boolean(item?.permissions.can_edit);
+  const goBack=()=>{const state=location.state as {returnTo?:string}|null;if(state?.returnTo)navigate(state.returnTo);else navigate(-1)};
 
   async function patch(payload: object) { try { await api(`/cases/${id}`, { method: 'PATCH', body: JSON.stringify({ ...payload, version: item!.version }) }); setSuccess('השינוי נשמר'); await refresh(); } catch (caught) { setError((caught as Error).message); throw caught; } }
   async function addParticipant() { try { await api(`/cases/${id}/participants`, { method: 'POST', body: JSON.stringify({ user_id: participantId, participant_type: 'participant' }) }); setParticipantId(''); await qc.invalidateQueries({ queryKey: ['participants', id] }); } catch (caught) { setError((caught as Error).message); } }
@@ -48,7 +51,7 @@ export function CaseDetailsPage() {
 
   return <Box className="case-details-page"><Container maxWidth="xl"><Stack spacing={2.5}>
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}{success && <Alert severity="success" onClose={() => setSuccess('')}>{success}</Alert>}
-    <CaseDetailsHeader item={item} status={item.status_label || 'ללא סטטוס'} priority={item.priority_label} onEdit={() => detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} onLock={() => setLockOpen(true)} onTransfer={() => setTransferOpen(true)}/>
+    <CaseDetailsHeader item={item} status={item.status_label || 'ללא סטטוס'} priority={item.priority_label} onBack={goBack} backLabel={(location.state as {returnLabel?:string}|null)?.returnLabel||'חזרה'} onEdit={() => detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} onLock={() => setLockOpen(true)} onTransfer={() => setTransferOpen(true)}/>
     {item.is_locked && <Alert severity="warning" variant="filled">הקריאה נעולה לשינויים{item.lock_reason ? `: ${item.lock_reason}` : ''}. משתמש רגיל יכול להמשיך להגיב בלבד.</Alert>}
     <Grid container spacing={2.5} alignItems="flex-start">
       <Grid size={{ xs: 12, lg: 8 }}><Stack spacing={2.5}>
@@ -64,6 +67,7 @@ export function CaseDetailsPage() {
         <GlobalFieldsPanel fields={caseFields.global_fields} values={globalValues} users={users} assignees={assignees} editable={editable} saving={savingFields} onChange={(fieldId, value) => setGlobalValues((current) => ({ ...current, [fieldId]: value }))} onSave={saveGlobalFields}/>
         <ParticipantsPanel participants={participants} candidates={candidates} selected={participantId} canManage={item.permissions.can_manage_participants} onSelected={setParticipantId} onAdd={addParticipant} onRemove={removeParticipant}/>
         <CaseApprovalsPanel caseId={item.id}/>
+        <CaseHistoryPanel caseId={item.id}/>
       </Stack></Grid>
       <Grid size={{ xs: 12, lg: 4 }}><Stack spacing={2.5} sx={{ position: { lg: 'sticky' }, top: 88 }}>
         <ConversationPanel caseId={item.id} permissions={item.permissions} me={me} onError={setError}/><RelatedCasesPanel caseId={item.id} canEdit={editable}/><CaseAttachments caseId={item.id}/>

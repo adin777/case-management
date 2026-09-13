@@ -27,6 +27,7 @@ class FieldIn(BaseModel):
     field_type: str
     is_required: bool = False
     is_active: bool = True
+    track_history: bool = False
     semantic_binding: str | None = None
 
 
@@ -53,6 +54,7 @@ def output(row: GlobalCaseFieldDefinition, db: DB | None = None) -> dict[str, An
             GlobalCaseFieldOption.sort_order))) if db else []
     return {"id": row.id, "key": row.key, "label_he": row.label_he, "label_en": row.label_en,
             "field_type": row.field_type, "is_required": row.is_required, "is_active": row.is_active,
+            "track_history": row.track_history,
             "semantic_binding": row.semantic_binding,
             "sort_order": row.sort_order, "configuration": row.configuration_json or {},
             "options": [option_output(option) for option in options]}
