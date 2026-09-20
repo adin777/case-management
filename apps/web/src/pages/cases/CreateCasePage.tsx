@@ -53,7 +53,7 @@ export function CreateCasePage() {
   }
 
   return <Container maxWidth="md"><Stack spacing={3}>
-    <div><Typography variant="h4" fontWeight={800}>{parentCaseId?t('relations.createChild'):t('cases.createTitle')}</Typography><Typography color="text.secondary">{t('cases.createSubtitle')}</Typography></div>
+    <div><Typography variant="h4" fontWeight={650}>{parentCaseId?t('relations.createChild'):t('cases.createTitle')}</Typography><Typography color="text.secondary">{t('cases.createSubtitle')}</Typography></div>
     {error && <Alert severity="error">{error}</Alert>}
     {environmentsError && <Alert severity="error">{t('cases.loadEnvironmentsFailed')}</Alert>}
     <Card variant="outlined"><CardContent><Stack component="form" noValidate onSubmit={submit} spacing={2.5}>

@@ -1,7 +1,7 @@
 import { Notifications } from '@mui/icons-material';
 import {
   Badge,
-  Box,
+  IconButton,
   Button,
   List,
   ListItemButton,
@@ -9,11 +9,13 @@ import {
   Popover,
   Stack,
   Typography,
+  Tooltip,
 } from '@mui/material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
+import { useTranslation } from 'react-i18next';
 
 type Item = {
   id: string;
@@ -27,6 +29,7 @@ type Item = {
 type Result = { items: Item[]; unread: number };
 
 export function NotificationBell() {
+  const { t } = useTranslation();
   const [anchor, setAnchor] = useState<HTMLElement>();
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -46,9 +49,9 @@ export function NotificationBell() {
   };
 
   return <>
-    <Box component="span" onClick={(event) => setAnchor(event.currentTarget)} sx={{ display: 'inline-flex' }}>
+    <Tooltip title={t('header.notifications')}><IconButton aria-label={t('header.notifications')} aria-haspopup="dialog" aria-expanded={Boolean(anchor)} onClick={(event) => setAnchor(event.currentTarget)}>
       <Badge color="error" badgeContent={query.data?.unread || 0}><Notifications /></Badge>
-    </Box>
+    </IconButton></Tooltip>
     <Popover
       open={Boolean(anchor)}
       anchorEl={anchor}
@@ -57,7 +60,7 @@ export function NotificationBell() {
     >
       <Stack sx={{ width: { xs: 'calc(100vw - 24px)', sm: 390 }, maxHeight: '70vh' }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" p={2}>
-          <Typography fontWeight={900}>התראות</Typography>
+          <Typography fontWeight={650}>התראות</Typography>
           <Button size="small" onClick={async () => {
             await api('/notifications/read-all', { method: 'PUT' });
             await refresh();

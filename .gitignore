@@ -24,3 +24,16 @@ data/mypy-cache/
 coverage/
 .coverage
 *.log
+output/playwright/
+.impeccable/review/
+.impeccable/mocks/
+.impeccable/config.local.json
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal
+*.db-shm
+*.db-wal
+*.bak

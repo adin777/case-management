@@ -11,9 +11,9 @@ type ApprovalPayload = { current_approval:Attempt|null; approval_history:Attempt
 const statusLabel:Record<string,string> = { pending:'ממתין', approved:'אושר', rejected:'נדחה', returned:'הוחזר לתיקון', cancelled:'בוטל' };
 
 function AttemptView({ attempt, current, onDecision }:{attempt:Attempt;current?:boolean;onDecision?:(task:Task)=>void}) {
-  return <Stack spacing={1}>{attempt.tasks.map(task => <Box key={task.id} sx={{p:1.75,border:'1px solid',borderColor:'divider',borderRadius:2.5,bgcolor:'#fbfcff'}}>
+  return <Stack spacing={1}>{attempt.tasks.map(task => <Box key={task.id} sx={{p:1.75,border:'1px solid',borderColor:'divider',borderRadius: '8px',bgcolor:'background.default'}}>
     <Stack direction={{xs:'column',md:'row'}} gap={1.5} alignItems={{md:'center'}}>
-      <Box minWidth={150}><Typography variant="caption" color="text.secondary">שלב {task.step_order}</Typography><Typography fontWeight={800}>{task.step_name}</Typography></Box>
+      <Box minWidth={150}><Typography variant="caption" color="text.secondary">שלב {task.step_order}</Typography><Typography fontWeight={650}>{task.step_name}</Typography></Box>
       <Box sx={{flex:1}}><Typography variant="caption" color="text.secondary">מאשר</Typography><Typography>{task.approver_name || 'מאשר'}</Typography></Box>
       <Chip label={statusLabel[task.status] || task.status} color={task.status === 'rejected' ? 'error' : task.status === 'approved' ? 'success' : 'default'}/>
       {current && task.can_decide && <Button variant="contained" onClick={() => onDecision?.(task)}>החלטה</Button>}
@@ -32,10 +32,10 @@ export function CaseApprovalsPanel({caseId}:{caseId:string}) {
   const current=data?.current_approval;
   return <CaseSection title="אישורים" icon={<FactCheckOutlined/>}>{error&&<Alert severity="error">{error}</Alert>}
     {!current ? <Typography color="text.secondary">לא נדרש תהליך אישור</Typography> : <Stack spacing={2}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center"><Typography fontWeight={800}>ניסיון אישור {current.attempt_number}</Typography><Chip label={statusLabel[current.status] || current.status}/></Stack>
+      <Stack direction="row" justifyContent="space-between" alignItems="center"><Typography fontWeight={650}>ניסיון אישור {current.attempt_number}</Typography><Chip label={statusLabel[current.status] || current.status}/></Stack>
       <AttemptView attempt={current} current onDecision={setSelected}/>
       {data?.can_resubmit && <Button variant="contained" onClick={()=>resubmit.mutate()} disabled={resubmit.isPending}>שליחה מחדש לאישור</Button>}
-      {!!data?.approval_history.length && <><Button startIcon={<History/>} variant="text" onClick={()=>setHistoryOpen(value=>!value)}>{historyOpen?'הסתרת היסטוריית אישורים':'צפייה בהיסטוריה'}</Button><Collapse in={historyOpen}><Stack spacing={3}>{data.approval_history.map(attempt=><Stack key={attempt.id} spacing={1}><Typography fontWeight={800}>ניסיון {attempt.attempt_number} · {statusLabel[attempt.status] || attempt.status}</Typography><AttemptView attempt={attempt}/></Stack>)}</Stack></Collapse></>}
+      {!!data?.approval_history.length && <><Button startIcon={<History/>} variant="text" onClick={()=>setHistoryOpen(value=>!value)}>{historyOpen?'הסתרת היסטוריית אישורים':'צפייה בהיסטוריה'}</Button><Collapse in={historyOpen}><Stack spacing={3}>{data.approval_history.map(attempt=><Stack key={attempt.id} spacing={1}><Typography fontWeight={650}>ניסיון {attempt.attempt_number} · {statusLabel[attempt.status] || attempt.status}</Typography><AttemptView attempt={attempt}/></Stack>)}</Stack></Collapse></>}
     </Stack>}
     <Dialog open={!!selected} onClose={()=>setSelected(undefined)} fullWidth><DialogTitle>החלטה בשלב {selected?.step_order}</DialogTitle><DialogContent><TextField sx={{mt:1}} fullWidth multiline label="הערה (חובה בדחייה)" value={comment} onChange={e=>setComment(e.target.value)}/></DialogContent><DialogActions><Button onClick={()=>setSelected(undefined)}>ביטול</Button><Button color="error" disabled={!comment.trim()||decision.isPending} onClick={()=>decision.mutate('rejected')}>דחייה</Button><Button variant="contained" disabled={decision.isPending} onClick={()=>decision.mutate('approved')}>אישור</Button></DialogActions></Dialog>
   </CaseSection>;

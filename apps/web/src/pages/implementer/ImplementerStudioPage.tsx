@@ -1,18 +1,35 @@
-import { Groups, Hub, Public, Schema } from '@mui/icons-material';
-import { Alert, Box, Card, CardActionArea, CardContent, Chip, Container, LinearProgress, Stack, Typography } from '@mui/material';
+import { GroupsOutlined, HubOutlined, Public, SchemaOutlined } from '@mui/icons-material';
+import { Alert, Box, Chip, Container, LinearProgress, Stack } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { ScreenHeader } from '../../components/ScreenHeader';
+import { ModuleDirectory } from '../../components/ModuleDirectory';
 import type { Environment, Group, User } from '../../types';
 import type { GlobalField } from '../admin/global-fields/types';
 import { FieldHistorySettings } from './FieldHistorySettings';
 
-type Module={title:string;description:string;url:string;icon:ReactNode;count:number;warning?:string};
-export function ImplementerStudioPage(){
-  const navigate=useNavigate();const environments=useQuery({queryKey:['environments'],queryFn:()=>api<Environment[]>('/environments')});const fields=useQuery({queryKey:['global-case-fields'],queryFn:()=>api<GlobalField[]>('/global-case-fields?include_inactive=true')});const users=useQuery({queryKey:['users'],queryFn:()=>api<User[]>('/users?active_only=false')});const groups=useQuery({queryKey:['groups'],queryFn:()=>api<Group[]>('/groups')});
-  const loading=environments.isLoading||fields.isLoading||users.isLoading||groups.isLoading;const selectWarnings=(fields.data||[]).filter(field=>field.is_active&&['single_select','multi_select'].includes(field.field_type)&&!field.options.some(option=>option.is_active)).length;
-  const modules:Module[]=[{title:'סביבות',description:'הקמה והגדרת סוגי קריאות, שדות, אוטומציות ואישורים',url:'/admin/environments',icon:<Public/>,count:environments.data?.length||0},{title:'שדות גלובליים',description:'שדות, אפשרויות, תרגומים וסדר תצוגה',url:'/admin/case-values',icon:<Schema/>,count:fields.data?.length||0,warning:selectWarnings?`${selectWarnings} שדות דורשים אפשרויות`:undefined},{title:'משתמשים',description:'זהויות, קבוצות ושיוכים ארגוניים',url:'/admin/users',icon:<Groups/>,count:(users.data?.length||0)+(groups.data?.length||0)},{title:'הרשאות',description:'הרשאות ישירות, ירושה ותחולה סביבתית',url:'/admin/permissions',icon:<Hub/>,count:0}];
-  return <Box className="admin-page"><Container maxWidth="xl"><Stack spacing={2.5}><ScreenHeader title="סטודיו להגדרת מערכת" subtitle="כל הגדרות התהליך העסקי, התקינות וההרשאות במקום אחד"/><FieldHistorySettings/>{loading&&<LinearProgress/>}{selectWarnings>0&&<Alert severity="warning">נמצאו {selectWarnings} שדות בחירה פעילים ללא אפשרויות פעילות.</Alert>}<Box sx={{display:'grid',gridTemplateColumns:{xs:'1fr',sm:'repeat(2,minmax(0,1fr))',lg:'repeat(3,minmax(0,1fr))'},gap:2}}>{modules.map(module=><Card key={module.title} variant="outlined" className="report-card"><CardActionArea onClick={()=>navigate(module.url)} sx={{height:'100%'}}><CardContent><Stack direction="row" justifyContent="space-between" alignItems="flex-start"><Box className="permission-module-icon">{module.icon}</Box><Chip label={module.count} size="small"/></Stack><Typography variant="h6" mt={2}>{module.title}</Typography><Typography color="text.secondary">{module.description}</Typography>{module.warning&&<Chip color="warning" label={module.warning} sx={{mt:2}}/>}</CardContent></CardActionArea></Card>)}</Box></Stack></Container></Box>;
+export function ImplementerStudioPage() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const environments = useQuery({ queryKey: ['environments'], queryFn: () => api<Environment[]>('/environments') });
+  const fields = useQuery({ queryKey: ['global-case-fields'], queryFn: () => api<GlobalField[]>('/global-case-fields?include_inactive=true') });
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users?active_only=false') });
+  const groups = useQuery({ queryKey: ['groups'], queryFn: () => api<Group[]>('/groups') });
+  const loading = environments.isLoading || fields.isLoading || users.isLoading || groups.isLoading;
+  const selectWarnings = (fields.data || []).filter(field => field.is_active && ['single_select', 'multi_select'].includes(field.field_type) && !field.options.some(option => option.is_active)).length;
+  const modules = [
+    { id: 'environments', title: t('studio.environments'), description: t('studio.environmentsDescription'), url: '/admin/environments', icon: <Public />, count: environments.data?.length || 0 },
+    { id: 'fields', title: t('nav.globalFields'), description: t('studio.fieldsDescription'), url: '/admin/case-values', icon: <SchemaOutlined />, count: fields.data?.length || 0 },
+    { id: 'users', title: t('permissions.users'), description: t('studio.usersDescription'), url: '/admin/users', icon: <GroupsOutlined />, count: (users.data?.length || 0) + (groups.data?.length || 0) },
+    { id: 'permissions', title: t('permissions.title'), description: t('studio.permissionsDescription'), url: '/admin/permissions', icon: <HubOutlined />, count: undefined },
+  ];
+  return <Box className="admin-page"><Container maxWidth="xl"><Stack spacing={3}>
+    <ScreenHeader title={t('studio.title')} subtitle={t('studio.subtitle')} />
+    {loading && <LinearProgress />}
+    {selectWarnings > 0 && <Alert severity="warning">{t('studio.optionWarnings', { count: selectWarnings })}</Alert>}
+    <ModuleDirectory items={modules.map(module => ({ ...module, detail: module.count === undefined ? undefined : <Chip label={module.count} size="small" />, onOpen: () => navigate(module.url) }))} />
+    <FieldHistorySettings />
+  </Stack></Container></Box>;
 }

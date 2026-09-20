@@ -13,8 +13,8 @@ function Feed({ rows, me, channel }: { rows: Comment[]; me?: User; channel: Conv
   </Box>;
   return <Stack spacing={1.5}>{rows.map((row) => <Box key={row.id} sx={{ display: 'flex', gap: 1, flexDirection: row.author_id === me?.id ? 'row-reverse' : 'row' }}>
     <Avatar sx={{ bgcolor: channel === 'manager' ? 'secondary.main' : 'primary.main' }}>{row.author_name?.[0] || 'מ'}</Avatar>
-    <Paper variant="outlined" sx={{ p: 1.5, maxWidth: '84%', bgcolor: channel === 'manager' ? '#f0fdfa' : '#fff' }}>
-      <Typography variant="caption" fontWeight={800}>{row.author_name || 'משתמש'}</Typography>
+    <Paper variant="outlined" sx={{ p: 1.5, maxWidth: '84%', bgcolor: channel === 'manager' ? '#f0fdfa' : 'background.paper' }}>
+      <Typography variant="caption" fontWeight={650}>{row.author_name || 'משתמש'}</Typography>
       <Typography sx={{ whiteSpace: 'pre-wrap' }}>{row.body}</Typography>
       <Typography variant="caption" color="text.secondary">{new Date(row.created_at).toLocaleString('he-IL')}</Typography>
     </Paper>
@@ -48,7 +48,7 @@ export function ConversationPanel({ caseId, permissions, me, onError }: { caseId
     <Box aria-live="polite" sx={{ minHeight: 280, maxHeight: 540, overflowY: 'auto', px: .5 }}>
       {isLoading ? <Typography color="text.secondary" textAlign="center" py={7}>טוען הודעות…</Typography> : isError ? <Alert severity="error">לא ניתן לטעון את ההודעות</Alert> : <Feed rows={rows} me={me} channel={channel}/>} 
     </Box>
-    {canWrite && <Stack spacing={1.25} mt={2} pt={2} sx={{ borderTop: '1px solid #e5eaf2' }}>
+    {canWrite && <Stack spacing={1.25} mt={2} pt={2} sx={{ borderTop: '1px solid var(--app-border)' }}>
       <TextField fullWidth multiline minRows={3} label={channel === 'manager' ? 'כתיבת הערת מנהל' : 'כתיבת תגובה'} value={body} onChange={(event) => setBody(event.target.value)}/>
       <Stack direction="row" gap={1} justifyContent="space-between"><Button component="label" size="small" startIcon={<AttachFile/>} disabled={uploading}>{uploading ? 'מעלה…' : 'צירוף קובץ'}<input hidden type="file" onChange={(event) => upload(event.target.files?.[0])}/></Button><Button variant="contained" endIcon={<Send/>} disabled={!body.trim() || send.isPending} onClick={() => send.mutate()}>{send.isPending ? 'שולח…' : 'שליחה'}</Button></Stack>
     </Stack>}

@@ -20,7 +20,7 @@ export function UsersPage() {
   async function refresh() { await client.invalidateQueries(); }
   async function createUser(values: UserForm) { setSaving(true); try { await api('/users', { method: 'POST', body: JSON.stringify(values) }); await refresh(); setUserOpen(false); } catch (caught) { setError((caught as Error).message); throw caught; } finally { setSaving(false); } }
   return <Container maxWidth="xl"><Stack spacing={3}>
-    <Box><Typography variant="h4" fontWeight={800}>משתמשים והרשאות</Typography><Typography color="text.secondary">ניהול זהויות, קבוצות, סנכרון ושדות משתמש</Typography></Box>
+    <Box><Typography variant="h4" fontWeight={650}>משתמשים והרשאות</Typography><Typography color="text.secondary">ניהול זהויות, קבוצות, סנכרון ושדות משתמש</Typography></Box>
     {error && <Alert severity="error">{error}</Alert>}
     <Paper variant="outlined"><Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable"><Tab label="משתמשים"/><Tab label="קבוצות משתמשים"/><Tab label="משתמשים וסנכרון"/></Tabs></Paper>
     {tab === 0 && <UsersTab users={users} onCreate={() => setUserOpen(true)} onEdit={setSelectedUser} onChanged={refresh}/>}

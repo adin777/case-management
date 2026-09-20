@@ -32,7 +32,7 @@ export function CaseDetailsHeader({ item, status, priority, backLabel, onBack, o
         {item.permissions.can_edit && <Button variant="contained" startIcon={<EditOutlined/>} onClick={onEdit}>עריכה</Button>}
         {item.permissions.can_lock && <Button variant="outlined" color={item.is_locked ? 'success' : 'warning'} startIcon={item.is_locked ? <LockOpen/> : <Lock/>} onClick={onLock}>{item.is_locked ? 'שחרור נעילה' : 'נעילה'}</Button>}
         {item.permissions.can_transfer && <Button variant="outlined" startIcon={<SwapHoriz/>} onClick={onTransfer}>העברה</Button>}
-        <IconButton aria-label="פעולות נוספות" onClick={(event) => setAnchor(event.currentTarget)} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}><MoreHoriz/></IconButton>
+        <IconButton aria-label="פעולות נוספות" onClick={(event) => setAnchor(event.currentTarget)} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '8px' }}><MoreHoriz/></IconButton>
         <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
           <MenuItem onClick={async () => { await navigator.clipboard.writeText(number); setAnchor(null); }}><ContentCopy fontSize="small" sx={{ ml: 1 }}/>העתקת מספר קריאה</MenuItem>
         </Menu>

@@ -10,7 +10,7 @@ describe('intentional mobile experience',()=>{
   it('provides reusable mobile primitives and reachable primary actions',()=>{
     expect(primitives).toContain('MobileCardList');expect(primitives).toContain('FilterDrawer');
     expect(primitives).toContain('MobileActionBar');expect(primitives).toContain('ResponsiveTable');
-    expect(primitives).toContain('ResponsiveFormGrid');expect(layout).toContain('פתיחת קריאה חדשה');
+    expect(primitives).toContain('ResponsiveFormGrid');expect(layout).toContain("t('cases.createTitle')");
   });
   it('uses cards and a filter drawer instead of compressed desktop tables',()=>{
     expect(dashboard).toMatch(/display\s*:\s*\{\s*md\s*:\s*'none'/);expect(reports).toContain('mobile-report-cards');

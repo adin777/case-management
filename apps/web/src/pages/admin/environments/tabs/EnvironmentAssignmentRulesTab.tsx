@@ -46,7 +46,7 @@ export function EnvironmentAssignmentRulesTab({ environment }: { environment: En
   return <Stack spacing={2}>
     <Typography variant="h6">שיוך לפי מאפיין ארגוני</Typography>
     {(error || optionsQuery.error || rulesQuery.error) && <Alert severity="error">{error || (optionsQuery.error as Error)?.message || (rulesQuery.error as Error)?.message}</Alert>}
-    {(rulesQuery.data ?? []).map(rule => <Paper key={rule.id} variant="outlined" sx={{ p: 2 }}><Typography fontWeight={800}>{rule.name}</Typography><Typography>{rule.conditions.map(condition => `${condition.field} = ${Array.isArray(condition.value) ? condition.value.join(', ') : condition.value}`).join(' וגם ')}</Typography></Paper>)}
+    {(rulesQuery.data ?? []).map(rule => <Paper key={rule.id} variant="outlined" sx={{ p: 2 }}><Typography fontWeight={650}>{rule.name}</Typography><Typography>{rule.conditions.map(condition => `${condition.field} = ${Array.isArray(condition.value) ? condition.value.join(', ') : condition.value}`).join(' וגם ')}</Typography></Paper>)}
     <Paper variant="outlined" sx={{ p: 2 }}><Stack spacing={2}>
       <TextField label="שם הכלל" value={name} onChange={event => setName(event.target.value)}/>
       <TextField select label="מקור השיוך" value={field} onChange={event => { setField(event.target.value as AssignmentKind); setValues([]); setPreview(undefined); }}>
@@ -56,7 +56,7 @@ export function EnvironmentAssignmentRulesTab({ environment }: { environment: En
         {choices.map(option => <MenuItem key={option.id} value={option.id}><Checkbox checked={values.includes(option.id)}/><ListItemText primary={option.label} secondary={option.email}/></MenuItem>)}
       </TextField>
       <Button disabled={!name.trim() || !values.length} onClick={show}>תצוגה מקדימה</Button>
-      {preview && <Alert severity="info"><Typography fontWeight={800}>נמצאו {preview.matched} עובדים</Typography>{preview.users.map(user => <Typography key={user.id} variant="body2">{user.display_name} · {user.email} · {user.department || 'ללא מחלקה'} · {user.job_title || 'ללא תפקיד'}</Typography>)}</Alert>}
+      {preview && <Alert severity="info"><Typography fontWeight={650}>נמצאו {preview.matched} עובדים</Typography>{preview.users.map(user => <Typography key={user.id} variant="body2">{user.display_name} · {user.email} · {user.department || 'ללא מחלקה'} · {user.job_title || 'ללא תפקיד'}</Typography>)}</Alert>}
       <Button variant="contained" disabled={!preview} onClick={save}>אישור והחלת השיוך</Button>
     </Stack></Paper>
   </Stack>;

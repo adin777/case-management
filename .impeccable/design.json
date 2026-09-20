@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-20T11:39:51.876561+00:00",
+  "title": "Design System: Case Management",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "overlay",
+        "value": "0 12px 36px rgba(23, 42, 63, .16)",
+        "purpose": "Menus and dialogs"
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Shared state transitions"
+      },
+      {
+        "name": "state-duration",
+        "value": "150ms",
+        "purpose": "Control state feedback"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "600px"
+      },
+      {
+        "name": "md",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary button from the shared application theme.",
+      "html": "<button class=\"ds-button-primary\">Save changes</button>",
+      "css": ".ds-button-primary {font-family:\"Noto Sans Hebrew\",\"Segoe UI\",sans-serif;border-radius:8px;min-height:44px;padding:8px 16px;font-weight:600;cursor:pointer;background:var(--app-ink, #203e5b);color:var(--app-paper, #ffffff);border:1px solid var(--app-border,#dce3eb);transition:background-color 150ms cubic-bezier(.23,1,.32,1);} .ds-button-primary:hover {filter:brightness(.94)} .ds-button-primary:focus-visible {outline:2px solid #203e5b;outline-offset:3px} .ds-button-primary:active {transform:translateY(1px)} @media(prefers-reduced-motion:reduce){.ds-button-primary{transition:none}}"
+    },
+    {
+      "name": "Outlined button",
+      "kind": "button",
+      "refersTo": "button-outlined",
+      "description": "Outlined button from the shared application theme.",
+      "html": "<button class=\"ds-button-outlined\">Save changes</button>",
+      "css": ".ds-button-outlined {font-family:\"Noto Sans Hebrew\",\"Segoe UI\",sans-serif;border-radius:8px;min-height:44px;padding:8px 16px;font-weight:600;cursor:pointer;background:var(--app-paper, #ffffff);color:var(--app-ink, #203e5b);border:1px solid var(--app-border,#dce3eb);transition:background-color 150ms cubic-bezier(.23,1,.32,1);} .ds-button-outlined:hover {filter:brightness(.94)} .ds-button-outlined:focus-visible {outline:2px solid #203e5b;outline-offset:3px} .ds-button-outlined:active {transform:translateY(1px)} @media(prefers-reduced-motion:reduce){.ds-button-outlined{transition:none}}"
+    },
+    {
+      "name": "Text input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text input from the shared application theme.",
+      "html": "<label class=\"ds-label\">Subject<input class=\"ds-input\" placeholder=\"Case subject\"></label>",
+      "css": ".ds-label{font:14px \"Noto Sans Hebrew\",sans-serif;color:var(--app-muted,#59697a)}.ds-input{display:block;margin-top:8px;padding:10px 12px;min-height:22px;border:1px solid #bcc8d4;border-radius:8px;background:var(--app-paper,#fff);color:var(--app-text,#202d3a);font:15px \"Noto Sans Hebrew\",sans-serif}.ds-input:hover{border-color:#899aab}.ds-input:focus-visible{outline:2px solid #203e5b;outline-offset:3px}"
+    },
+    {
+      "name": "Navigation selection",
+      "kind": "nav",
+      "refersTo": "navigation-item",
+      "description": "Navigation selection from the shared application theme.",
+      "html": "<nav><button class=\"ds-nav\" aria-current=\"page\">Workspace</button></nav>",
+      "css": ".ds-nav{border:0;border-radius:8px;padding:14px 16px;font:600 14px \"Noto Sans Hebrew\",sans-serif;background:var(--app-tint,#e9eff5);color:var(--app-ink,#203e5b)}.ds-nav:hover{background:#dce6f0}.ds-nav:focus-visible{outline:2px solid #203e5b;outline-offset:3px}"
+    },
+    {
+      "name": "Status chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Status chip from the shared application theme.",
+      "html": "<span class=\"ds-chip\">Active</span>",
+      "css": ".ds-chip{display:inline-block;padding:3px 10px;border:1px solid #24634b;border-radius:6px;font:550 12px \"Noto Sans Hebrew\",sans-serif;background:var(--app-paper,#fff);color:#24634b}"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Panel from the shared application theme.",
+      "html": "<section class=\"ds-panel\"><h2>Case details</h2><p>Fields and actions for the current case.</p></section>",
+      "css": ".ds-panel{padding:24px;border:1px solid var(--app-border,#dce3eb);border-radius:12px;background:var(--app-paper,#fff);color:var(--app-text,#202d3a);font:15px \"Noto Sans Hebrew\",sans-serif}.ds-panel h2{margin:0 0 8px;font-size:17px;font-weight:650}.ds-panel p{margin:0;color:var(--app-muted,#59697a)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Ordered working files",
+    "overview": "Ordered working files: a stable navigation column, quiet reading surfaces and precise actions support repeated daily work. The light, ink-blue direction was selected by the user. Shared MUI components carry the same identity across the portal, workspace, reports, case details and configuration.",
+    "keyCharacteristics": [
+      "Blue ink for actions and selection.",
+      "Continuous lists for case and module directories.",
+      "Self-hosted Hebrew typography and explicit reading direction.",
+      "Restrained interaction feedback with reduced-motion support."
+    ],
+    "rules": [],
+    "dos": [
+      "Do reuse shared tokens, headers and responsive primitives.",
+      "Do keep business actions and database-backed labels visible.",
+      "Do use labeled stacked records for narrow configuration tables."
+    ],
+    "donts": [
+      "Don't restore decorative gradients or hovering cards.",
+      "Don't use generated identifiers as the default description of a business field.",
+      "Don't hide an existing action to make a screen simpler."
+    ]
+  }
+}

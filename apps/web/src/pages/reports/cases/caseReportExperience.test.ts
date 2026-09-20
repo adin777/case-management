@@ -4,6 +4,7 @@ import pageSource from './CaseReportPage.tsx?raw';
 import filtersSource from './CaseReportFilters.tsx?raw';
 import operationalSource from '../OperationalReportPage.tsx?raw';
 import compactFilters from '../../../components/filters/CompactFilterPanel.tsx?raw';
+import responsivePrimitives from '../../../components/responsive/ResponsivePrimitives.tsx?raw';
 
 describe('case report experience', () => {
   it('uses the shared numeric case formatter and business pills', () => {
@@ -21,7 +22,8 @@ describe('case report experience', () => {
     expect(filtersSource).toContain('<CompactFilterPanel');
     expect(operationalSource).toContain('<CompactFilterPanel');
     expect(operationalSource).toContain('<CardActionArea');
-    expect(compactFilters).toContain('anchor="bottom"');
+    expect(compactFilters).toContain('<FilterDrawer');
+    expect(responsivePrimitives).toContain('anchor="bottom"');
     expect(compactFilters).toContain('<Collapse');
     expect(compactFilters).toContain('badgeContent={activeCount}');
   });

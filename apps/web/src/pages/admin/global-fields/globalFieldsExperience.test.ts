@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import pageSource from '../GlobalFieldsPage.tsx?raw';
 import optionsSource from './GlobalOptionsDialog.tsx?raw';
+import rowSource from './SortableFieldRow.tsx?raw';
 
 describe('global fields administration experience', () => {
   it('keeps CRUD, safe activation and database-backed option management connected', () => {
     expect(pageSource).toContain("'/global-case-fields?include_inactive=true'");
     expect(pageSource).toContain("method:'DELETE'");
     expect(pageSource).toContain('<GlobalOptionsDialog');
-    expect(pageSource).toContain('ניהול ערכים ({row.options.length})');
+    expect(pageSource).toContain('onManageOptions={setOptionsField}');
+    expect(rowSource).toContain("t('globalFieldsList.manage', { count: row.options.length })");
     expect(optionsSource).toContain('שם בעברית');
     expect(optionsSource).toContain('תרגום באנגלית');
     expect(optionsSource).toContain("'aria-label':'פעיל'");
